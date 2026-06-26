@@ -13,7 +13,9 @@ namespace WinHarness.Tools;
 public sealed class ToolAIFunctionAdapter : AIFunction
 {
     private static readonly IDiagnosticSink NoDiagnostics = new NullDiagnosticSink();
+    private static readonly IToolActivitySink NoActivity = new NullToolActivitySink();
 
+    private readonly IToolActivitySink _activitySink;
     private readonly IDiagnosticSink _diagnosticSink;
     private readonly ITool _tool;
 
@@ -21,7 +23,7 @@ public sealed class ToolAIFunctionAdapter : AIFunction
     /// Creates a tool function adapter.
     /// </summary>
     public ToolAIFunctionAdapter(ITool tool)
-        : this(tool, NoDiagnostics)
+        : this(tool, NoDiagnostics, NoActivity)
     {
     }
 
@@ -29,9 +31,21 @@ public sealed class ToolAIFunctionAdapter : AIFunction
     /// Creates a tool function adapter.
     /// </summary>
     public ToolAIFunctionAdapter(ITool tool, IDiagnosticSink diagnosticSink)
+        : this(tool, diagnosticSink, NoActivity)
+    {
+    }
+
+    /// <summary>
+    /// Creates a tool function adapter.
+    /// </summary>
+    public ToolAIFunctionAdapter(
+        ITool tool,
+        IDiagnosticSink diagnosticSink,
+        IToolActivitySink activitySink)
     {
         _tool = tool;
         _diagnosticSink = diagnosticSink;
+        _activitySink = activitySink;
     }
 
     /// <inheritdoc />
@@ -50,6 +64,7 @@ public sealed class ToolAIFunctionAdapter : AIFunction
     {
         JsonElement jsonArguments = ConvertArguments(arguments);
         Stopwatch stopwatch = Stopwatch.StartNew();
+        _activitySink.ToolStarted(_tool.Name);
 
         try
         {
@@ -72,10 +87,14 @@ public sealed class ToolAIFunctionAdapter : AIFunction
                     }),
                 cancellationToken).ConfigureAwait(false);
 
+            _activitySink.ToolCompleted(_tool.Name, result, stopwatch.Elapsed);
+
             return result.Succeeded ? result.Content : $"Tool failed ({result.ErrorCode}): {result.Content}";
         }
         catch (Exception ex)
         {
+            _activitySink.ToolFailed(_tool.Name, ex, stopwatch.Elapsed);
+
             await _diagnosticSink.WriteAsync(
                 new DiagnosticRecord(
                     DateTimeOffset.UtcNow,
@@ -154,6 +173,21 @@ public sealed class ToolAIFunctionAdapter : AIFunction
         public ValueTask WriteAsync(DiagnosticRecord record, CancellationToken cancellationToken)
         {
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class NullToolActivitySink : IToolActivitySink
+    {
+        public void ToolStarted(string toolName)
+        {
+        }
+
+        public void ToolCompleted(string toolName, ToolResult result, TimeSpan duration)
+        {
+        }
+
+        public void ToolFailed(string toolName, Exception exception, TimeSpan duration)
+        {
         }
     }
 }

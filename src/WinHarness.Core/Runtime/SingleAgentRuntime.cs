@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using System.Globalization;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using WinHarness.Diagnostics;
@@ -71,7 +72,8 @@ public sealed class SingleAgentRuntime : IAgentRuntime
             stopwatch,
             cancellationToken).ConfigureAwait(false);
 
-        ChatOptions? options = await CreateChatOptionsAsync(cancellationToken).ConfigureAwait(false);
+        RuntimeToolActivitySink toolActivitySink = new();
+        ChatOptions? options = await CreateChatOptionsAsync(toolActivitySink, cancellationToken).ConfigureAwait(false);
 
         await using IAsyncEnumerator<ChatResponseUpdate> updates = client.GetStreamingResponseAsync(
                 request.Prompt,
@@ -102,11 +104,21 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                 throw;
             }
 
+            foreach (AgentEvent toolEvent in toolActivitySink.Drain())
+            {
+                yield return toolEvent;
+            }
+
             string text = update.ToString();
             if (text.Length > 0)
             {
                 yield return new AgentEvent(AgentEventKind.AssistantDelta, text);
             }
+        }
+
+        foreach (AgentEvent toolEvent in toolActivitySink.Drain())
+        {
+            yield return toolEvent;
         }
 
         _logger.ProviderRequestCompleted(provider.ProviderId, provider.ModelId);
@@ -118,7 +130,9 @@ public sealed class SingleAgentRuntime : IAgentRuntime
         yield return new AgentEvent(AgentEventKind.Completed, "completed");
     }
 
-    private async ValueTask<ChatOptions?> CreateChatOptionsAsync(CancellationToken cancellationToken)
+    private async ValueTask<ChatOptions?> CreateChatOptionsAsync(
+        IToolActivitySink activitySink,
+        CancellationToken cancellationToken)
     {
         List<AITool> tools = [];
         HashSet<string> names = new(StringComparer.Ordinal);
@@ -133,7 +147,7 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                     throw new InvalidOperationException($"Duplicate tool name '{tool.Name}'.");
                 }
 
-                tools.Add(new ToolAIFunctionAdapter(tool, _diagnosticSink));
+                tools.Add(new ToolAIFunctionAdapter(tool, _diagnosticSink, activitySink));
             }
         }
 
@@ -167,6 +181,38 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                 $"{provider.ProviderId}/{provider.ModelId}",
                 properties),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed class RuntimeToolActivitySink : IToolActivitySink
+    {
+        private readonly ConcurrentQueue<AgentEvent> _events = new();
+
+        public void ToolStarted(string toolName)
+        {
+            _events.Enqueue(new AgentEvent(AgentEventKind.ToolActivity, $"tool started: {toolName}"));
+        }
+
+        public void ToolCompleted(string toolName, ToolResult result, TimeSpan duration)
+        {
+            string status = result.Succeeded ? "completed" : "failed";
+            _events.Enqueue(new AgentEvent(AgentEventKind.ToolActivity, $"tool {status}: {toolName} ({duration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)} ms)"));
+        }
+
+        public void ToolFailed(string toolName, Exception exception, TimeSpan duration)
+        {
+            _events.Enqueue(new AgentEvent(AgentEventKind.ToolActivity, $"tool exception: {toolName} ({duration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)} ms) {exception.GetType().Name}"));
+        }
+
+        public IReadOnlyList<AgentEvent> Drain()
+        {
+            List<AgentEvent> drained = [];
+            while (_events.TryDequeue(out AgentEvent? agentEvent))
+            {
+                drained.Add(agentEvent);
+            }
+
+            return drained;
+        }
     }
 
     private sealed class NullDiagnosticSink : IDiagnosticSink

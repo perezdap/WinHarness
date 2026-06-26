@@ -441,6 +441,12 @@ internal static class ChatRepl
                            new AgentRunRequest(providerId, modelId, prompt),
                            cancellationToken).ConfigureAwait(false))
         {
+            if (agentEvent.Kind == AgentEventKind.ToolActivity)
+            {
+                AnsiConsole.MarkupLine("[dim]" + Markup.Escape(agentEvent.Message) + "[/]");
+                continue;
+            }
+
             if (agentEvent.Kind != AgentEventKind.AssistantDelta)
             {
                 continue;

@@ -85,7 +85,15 @@ public sealed class SingleAgentRuntimeTests
             events.Add(agentEvent);
         }
 
-        Assert.AreEqual("tool says pong", events[0].Message);
+        Assert.IsTrue(events.Any(static agentEvent =>
+            agentEvent.Kind == AgentEventKind.ToolActivity &&
+            agentEvent.Message.Contains("tool started", StringComparison.Ordinal)));
+        Assert.IsTrue(events.Any(static agentEvent =>
+            agentEvent.Kind == AgentEventKind.ToolActivity &&
+            agentEvent.Message.Contains("tool completed", StringComparison.Ordinal)));
+        Assert.IsTrue(events.Any(static agentEvent =>
+            agentEvent.Kind == AgentEventKind.AssistantDelta &&
+            agentEvent.Message == "tool says pong"));
         Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "provider.completed"));
         Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "tool.completed"));
     }
