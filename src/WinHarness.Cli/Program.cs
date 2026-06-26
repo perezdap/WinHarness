@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Text.Json;
 using ConsoleAppFramework;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -147,14 +149,32 @@ app.Add("chat", async (string prompt, string? providerId = null, string? modelId
 
 app.Add("tools list", async (CancellationToken cancellationToken) =>
 {
-    IEnumerable<IToolProvider> providers = host.Services.GetServices<IToolProvider>();
-    foreach (IToolProvider provider in providers)
+    ToolRegistry registry = host.Services.GetRequiredService<ToolRegistry>();
+    IReadOnlyDictionary<string, ITool> tools = await registry.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+    foreach (ITool tool in tools.Values)
     {
-        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(cancellationToken).ConfigureAwait(false);
-        foreach (ITool tool in tools)
-        {
-            Console.WriteLine($"{tool.Name}\t{tool.Description}");
-        }
+        Console.WriteLine($"{tool.Name}\t{tool.Description}");
+    }
+});
+
+app.Add("tools call", async (string name, string argumentsJson = "{}", CancellationToken cancellationToken = default) =>
+{
+    ToolRegistry registry = host.Services.GetRequiredService<ToolRegistry>();
+    IReadOnlyDictionary<string, ITool> tools = await registry.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+    if (!tools.TryGetValue(name, out ITool? tool))
+    {
+        throw new InvalidOperationException($"Tool '{name}' is not available.");
+    }
+
+    using JsonDocument arguments = JsonDocument.Parse(argumentsJson);
+    ToolResult result = await tool.ExecuteAsync(
+        new ToolInvocation(name, arguments.RootElement.Clone()),
+        cancellationToken).ConfigureAwait(false);
+
+    Console.WriteLine(result.Content);
+    if (!result.Succeeded)
+    {
+        Environment.ExitCode = 1;
     }
 });
 
@@ -165,6 +185,12 @@ app.Add("providers list", () =>
     {
         Console.WriteLine($"{provider.Id}\t{provider.Kind}\t{provider.BaseUrl}");
     }
+});
+
+app.Add("providers use", async (string providerId, CancellationToken cancellationToken) =>
+{
+    await ConfigFileUpdater.SetRootStringPropertyAsync("defaultProvider", providerId, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"Default provider set to {providerId}.");
 });
 
 app.Add("models list", (string providerId) =>
@@ -184,11 +210,50 @@ app.Add("models list", (string providerId) =>
     }
 });
 
+app.Add("models use", async (string modelId, CancellationToken cancellationToken) =>
+{
+    await ConfigFileUpdater.SetRootStringPropertyAsync("defaultModel", modelId, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"Default model set to {modelId}.");
+});
+
+app.Add("mcp list", () =>
+{
+    WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    foreach (McpServerOptions server in options.McpServers)
+    {
+        Console.WriteLine($"{server.Id}\t{server.Command}\t{server.Enabled}");
+    }
+});
+
+app.Add("mcp tools", async (CancellationToken cancellationToken) =>
+{
+    McpToolProvider provider = host.Services.GetRequiredService<McpToolProvider>();
+    IReadOnlyList<ITool> tools = await provider.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+    foreach (ITool tool in tools)
+    {
+        Console.WriteLine($"{tool.Name}\t{tool.Description}");
+    }
+});
+
 app.Add("credentials set", async (string targetName, string secret, CancellationToken cancellationToken) =>
 {
     ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
     await store.SetSecretAsync(targetName, secret, cancellationToken).ConfigureAwait(false);
     Console.WriteLine("Credential stored.");
+});
+
+app.Add("credentials get", async (string targetName, CancellationToken cancellationToken) =>
+{
+    ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
+    string? secret = await store.GetSecretAsync(targetName, cancellationToken).ConfigureAwait(false);
+    if (secret is null)
+    {
+        Environment.ExitCode = 1;
+        Console.WriteLine("Credential not found.");
+        return;
+    }
+
+    Console.WriteLine(secret);
 });
 
 app.Add("credentials delete", async (string targetName, CancellationToken cancellationToken) =>
@@ -199,3 +264,60 @@ app.Add("credentials delete", async (string targetName, CancellationToken cancel
 });
 
 await app.RunAsync(args).ConfigureAwait(false);
+
+internal static class ConfigFileUpdater
+{
+    public static async ValueTask SetRootStringPropertyAsync(
+        string propertyName,
+        string value,
+        CancellationToken cancellationToken)
+    {
+        string directory = WinHarnessConfiguration.GetConfigurationDirectory();
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "config.json");
+
+        JsonDocument? document = File.Exists(path)
+            ? JsonDocument.Parse(await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false))
+            : null;
+
+        ArrayBufferWriter<byte> buffer = new();
+        try
+        {
+            using (Utf8JsonWriter writer = new(buffer, new JsonWriterOptions { Indented = true }))
+            {
+                writer.WriteStartObject();
+                bool wroteProperty = false;
+
+                if (document is not null && document.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (JsonProperty property in document.RootElement.EnumerateObject())
+                    {
+                        if (property.NameEquals(propertyName))
+                        {
+                            writer.WriteString(propertyName, value);
+                            wroteProperty = true;
+                        }
+                        else
+                        {
+                            writer.WritePropertyName(property.Name);
+                            property.Value.WriteTo(writer);
+                        }
+                    }
+                }
+
+                if (!wroteProperty)
+                {
+                    writer.WriteString(propertyName, value);
+                }
+
+                writer.WriteEndObject();
+            }
+        }
+        finally
+        {
+            document?.Dispose();
+        }
+
+        await File.WriteAllBytesAsync(path, buffer.WrittenMemory.ToArray(), cancellationToken).ConfigureAwait(false);
+    }
+}
