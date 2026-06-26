@@ -52,7 +52,12 @@ jobs:
           if (-not $exe) {
             throw "Published WinHarness executable was not found."
           }
+          $env:APPDATA = Join-Path $PWD "artifacts/appdata"
           & $exe.FullName diagnostics aot
+          & $exe.FullName diagnostics write --message "ci smoke"
+          & $exe.FullName config init
+          & $exe.FullName providers list
+          & $exe.FullName models list --provider-id local-ollama
           & $exe.FullName --version
           & $exe.FullName version
           & $exe.FullName tools list
