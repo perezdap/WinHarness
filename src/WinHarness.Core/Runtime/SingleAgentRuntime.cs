@@ -102,7 +102,14 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                     stopwatch,
                     CancellationToken.None,
                     ex).ConfigureAwait(false);
-                throw;
+
+                if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                yield return new AgentEvent(AgentEventKind.Failed, ex.Message);
+                yield break;
             }
 
             usage = update.Contents.OfType<UsageContent>().LastOrDefault()?.Details ?? usage;

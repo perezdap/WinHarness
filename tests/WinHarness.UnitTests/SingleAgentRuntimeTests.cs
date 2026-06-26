@@ -121,30 +121,58 @@ public sealed class SingleAgentRuntimeTests
         Assert.AreEqual("0", completed.Properties["retry.count"]);
     }
 
+    [TestMethod]
+    public async Task EmitsFailedEventWhenProviderFails()
+    {
+        RecordingDiagnosticSink diagnostics = new();
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory(["boom"], failOnStream: true),
+            [],
+            diagnostics,
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        List<AgentEvent> events = [];
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           new AgentRunRequest("test-provider", "test-model", "prompt"),
+                           CancellationToken.None))
+        {
+            events.Add(agentEvent);
+        }
+
+        Assert.AreEqual(1, events.Count);
+        Assert.AreEqual(AgentEventKind.Failed, events[0].Kind);
+        Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "provider.failed"));
+    }
+
+
     private sealed class FakeProviderFactory : IProviderFactory
     {
         private readonly IReadOnlyList<string> _updates;
+        private readonly bool _failOnStream;
 
-        public FakeProviderFactory(IReadOnlyList<string> updates)
+        public FakeProviderFactory(IReadOnlyList<string> updates, bool failOnStream = false)
         {
             _updates = updates;
+            _failOnStream = failOnStream;
         }
 
         public IChatProvider Create(string providerId, string modelId)
         {
-            return new FakeProvider(providerId, modelId, _updates);
+            return new FakeProvider(providerId, modelId, _updates, _failOnStream);
         }
     }
 
     private sealed class FakeProvider : IChatProvider
     {
         private readonly IReadOnlyList<string> _updates;
+        private readonly bool _failOnStream;
 
-        public FakeProvider(string providerId, string modelId, IReadOnlyList<string> updates)
+        public FakeProvider(string providerId, string modelId, IReadOnlyList<string> updates, bool failOnStream)
         {
             ProviderId = providerId;
             ModelId = modelId;
             _updates = updates;
+            _failOnStream = failOnStream;
         }
 
         public string ProviderId { get; }
@@ -155,17 +183,19 @@ public sealed class SingleAgentRuntimeTests
 
         public IChatClient CreateChatClient()
         {
-            return new FakeChatClient(_updates);
+            return new FakeChatClient(_updates, _failOnStream);
         }
     }
 
     private sealed class FakeChatClient : IChatClient
     {
         private readonly IReadOnlyList<string> _updates;
+        private readonly bool _failOnStream;
 
-        public FakeChatClient(IReadOnlyList<string> updates)
+        public FakeChatClient(IReadOnlyList<string> updates, bool failOnStream)
         {
             _updates = updates;
+            _failOnStream = failOnStream;
         }
 
         public Task<ChatResponse> GetResponseAsync(
@@ -181,6 +211,12 @@ public sealed class SingleAgentRuntimeTests
             ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            if (_failOnStream)
+            {
+                await Task.Yield();
+                throw new InvalidOperationException("provider exploded");
+            }
+
             AIFunction? function = options?.Tools?.OfType<AIFunction>().FirstOrDefault();
             if (function is not null)
             {
