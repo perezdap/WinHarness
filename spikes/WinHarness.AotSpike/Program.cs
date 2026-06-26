@@ -264,13 +264,13 @@ internal static class FakeMcpServer
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            string? request = await ReadMessageAsync(input, cancellationToken).ConfigureAwait(false);
+            McpMessage? request = await ReadMessageAsync(input, cancellationToken).ConfigureAwait(false);
             if (request is null)
             {
                 return;
             }
 
-            using JsonDocument document = JsonDocument.Parse(request);
+            using JsonDocument document = JsonDocument.Parse(request.Body);
             JsonElement root = document.RootElement;
 
             if (!root.TryGetProperty("method", out JsonElement methodElement))
@@ -293,7 +293,8 @@ internal static class FakeMcpServer
                 _ => CreateEmptyResultResponse(id.Value)
             };
 
-            await WriteMessageAsync(output, response, cancellationToken).ConfigureAwait(false);
+            await WriteMessageAsync(output, response, request.UseContentLengthHeaders, cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
@@ -318,7 +319,7 @@ internal static class FakeMcpServer
         return string.Concat("{\"jsonrpc\":\"2.0\",\"id\":", id.GetRawText(), ",\"result\":{}}");
     }
 
-    private static async Task<string?> ReadMessageAsync(Stream input, CancellationToken cancellationToken)
+    private static async Task<McpMessage?> ReadMessageAsync(Stream input, CancellationToken cancellationToken)
     {
         string? firstLine = await ReadAsciiLineAsync(input, cancellationToken).ConfigureAwait(false);
         if (firstLine is null)
@@ -328,7 +329,7 @@ internal static class FakeMcpServer
 
         if (!firstLine.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
         {
-            return firstLine;
+            return new McpMessage(firstLine, UseContentLengthHeaders: false);
         }
 
         int contentLength = int.Parse(firstLine["Content-Length:".Length..].Trim(), provider: null);
@@ -362,16 +363,29 @@ internal static class FakeMcpServer
             offset += bytesRead;
         }
 
-        return Encoding.UTF8.GetString(body);
+        return new McpMessage(Encoding.UTF8.GetString(body), UseContentLengthHeaders: true);
     }
 
-    private static async Task WriteMessageAsync(Stream output, string body, CancellationToken cancellationToken)
+    private static async Task WriteMessageAsync(
+        Stream output,
+        string body,
+        bool useContentLengthHeaders,
+        CancellationToken cancellationToken)
     {
         byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
-        byte[] headerBytes = Encoding.ASCII.GetBytes($"Content-Length: {bodyBytes.Length}\r\n\r\n");
 
-        await output.WriteAsync(headerBytes, cancellationToken).ConfigureAwait(false);
+        if (useContentLengthHeaders)
+        {
+            byte[] headerBytes = Encoding.ASCII.GetBytes($"Content-Length: {bodyBytes.Length}\r\n\r\n");
+            await output.WriteAsync(headerBytes, cancellationToken).ConfigureAwait(false);
+        }
+
         await output.WriteAsync(bodyBytes, cancellationToken).ConfigureAwait(false);
+        if (!useContentLengthHeaders)
+        {
+            await output.WriteAsync("\n"u8.ToArray(), cancellationToken).ConfigureAwait(false);
+        }
+
         await output.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -405,6 +419,8 @@ internal static class FakeMcpServer
 
         throw new InvalidOperationException("MCP header line exceeded the supported spike length.");
     }
+
+    private sealed record McpMessage(string Body, bool UseContentLengthHeaders);
 }
 
 internal sealed class SpikeOptions
