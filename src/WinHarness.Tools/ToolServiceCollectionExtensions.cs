@@ -14,6 +14,7 @@ public static class ToolServiceCollectionExtensions
     {
         services.AddSingleton<BuiltinToolProvider>();
         services.AddSingleton<IToolProvider>(static provider => provider.GetRequiredService<BuiltinToolProvider>());
+        services.AddSingleton<ToolRegistry>();
         return services;
     }
 }
