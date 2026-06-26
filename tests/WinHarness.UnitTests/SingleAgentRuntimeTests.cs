@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WinHarness.Diagnostics;
 using WinHarness.Providers;
 using WinHarness.Runtime;
 using WinHarness.Tools;
@@ -69,9 +70,11 @@ public sealed class SingleAgentRuntimeTests
     [TestMethod]
     public async Task PassesToolsToChatClient()
     {
+        RecordingDiagnosticSink diagnostics = new();
         SingleAgentRuntime runtime = new(
             new FakeProviderFactory([]),
             [new FakeToolProvider()],
+            diagnostics,
             NullLogger<SingleAgentRuntime>.Instance);
 
         List<AgentEvent> events = [];
@@ -83,6 +86,8 @@ public sealed class SingleAgentRuntimeTests
         }
 
         Assert.AreEqual("tool says pong", events[0].Message);
+        Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "provider.completed"));
+        Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "tool.completed"));
     }
 
     private sealed class FakeProviderFactory : IProviderFactory
@@ -197,6 +202,17 @@ public sealed class SingleAgentRuntimeTests
         {
             Assert.AreEqual("ping", invocation.Arguments.GetProperty("message").GetString());
             return ValueTask.FromResult(new ToolResult(true, "pong"));
+        }
+    }
+
+    private sealed class RecordingDiagnosticSink : IDiagnosticSink
+    {
+        public List<DiagnosticRecord> Records { get; } = [];
+
+        public ValueTask WriteAsync(DiagnosticRecord record, CancellationToken cancellationToken)
+        {
+            Records.Add(record);
+            return ValueTask.CompletedTask;
         }
     }
 }

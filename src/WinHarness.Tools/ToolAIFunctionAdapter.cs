@@ -1,6 +1,9 @@
 using System.Buffers;
+using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using WinHarness.Diagnostics;
 
 namespace WinHarness.Tools;
 
@@ -9,14 +12,26 @@ namespace WinHarness.Tools;
 /// </summary>
 public sealed class ToolAIFunctionAdapter : AIFunction
 {
+    private static readonly IDiagnosticSink NoDiagnostics = new NullDiagnosticSink();
+
+    private readonly IDiagnosticSink _diagnosticSink;
     private readonly ITool _tool;
 
     /// <summary>
     /// Creates a tool function adapter.
     /// </summary>
     public ToolAIFunctionAdapter(ITool tool)
+        : this(tool, NoDiagnostics)
+    {
+    }
+
+    /// <summary>
+    /// Creates a tool function adapter.
+    /// </summary>
+    public ToolAIFunctionAdapter(ITool tool, IDiagnosticSink diagnosticSink)
     {
         _tool = tool;
+        _diagnosticSink = diagnosticSink;
     }
 
     /// <inheritdoc />
@@ -34,11 +49,48 @@ public sealed class ToolAIFunctionAdapter : AIFunction
         CancellationToken cancellationToken)
     {
         JsonElement jsonArguments = ConvertArguments(arguments);
-        ToolResult result = await _tool.ExecuteAsync(
-            new ToolInvocation(_tool.Name, jsonArguments),
-            cancellationToken).ConfigureAwait(false);
+        Stopwatch stopwatch = Stopwatch.StartNew();
 
-        return result.Succeeded ? result.Content : $"Tool failed ({result.ErrorCode}): {result.Content}";
+        try
+        {
+            ToolResult result = await _tool.ExecuteAsync(
+                new ToolInvocation(_tool.Name, jsonArguments),
+                cancellationToken).ConfigureAwait(false);
+
+            await _diagnosticSink.WriteAsync(
+                new DiagnosticRecord(
+                    DateTimeOffset.UtcNow,
+                    "tool",
+                    result.Succeeded ? "tool.completed" : "tool.failed",
+                    _tool.Name,
+                    new Dictionary<string, string>
+                    {
+                        ["tool.name"] = _tool.Name,
+                        ["tool.duration_ms"] = stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture),
+                        ["tool.succeeded"] = result.Succeeded.ToString(CultureInfo.InvariantCulture),
+                        ["tool.error_code"] = result.ErrorCode ?? string.Empty
+                    }),
+                cancellationToken).ConfigureAwait(false);
+
+            return result.Succeeded ? result.Content : $"Tool failed ({result.ErrorCode}): {result.Content}";
+        }
+        catch (Exception ex)
+        {
+            await _diagnosticSink.WriteAsync(
+                new DiagnosticRecord(
+                    DateTimeOffset.UtcNow,
+                    "tool",
+                    "tool.exception",
+                    _tool.Name,
+                    new Dictionary<string, string>
+                    {
+                        ["tool.name"] = _tool.Name,
+                        ["tool.duration_ms"] = stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture),
+                        ["exception.type"] = ex.GetType().FullName ?? ex.GetType().Name
+                    }),
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 
     private static JsonElement ConvertArguments(AIFunctionArguments arguments)
@@ -94,6 +146,14 @@ public sealed class ToolAIFunctionAdapter : AIFunction
             default:
                 writer.WriteStringValue(value.ToString());
                 break;
+        }
+    }
+
+    private sealed class NullDiagnosticSink : IDiagnosticSink
+    {
+        public ValueTask WriteAsync(DiagnosticRecord record, CancellationToken cancellationToken)
+        {
+            return ValueTask.CompletedTask;
         }
     }
 }
