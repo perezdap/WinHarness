@@ -12,6 +12,7 @@ public static class ProviderServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddWinHarnessProviders(this IServiceCollection services)
     {
+        services.AddSingleton<IModelCapabilityRegistry, ConfigurationModelCapabilityRegistry>();
         services.AddSingleton<IProviderFactory, OpenAiCompatibleProviderFactory>();
         return services;
     }
