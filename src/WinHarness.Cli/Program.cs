@@ -10,6 +10,7 @@ using Spectre.Console;
 using WinHarness;
 using WinHarness.Cli.Rendering;
 using WinHarness.Configuration;
+using WinHarness.Conversation;
 using WinHarness.Diagnostics;
 using WinHarness.Infrastructure;
 using WinHarness.Infrastructure.Configuration;
@@ -457,6 +458,7 @@ internal static class ChatRepl
     {
         string currentProviderId = providerId;
         string currentModelId = modelId;
+        Conversation conversation = new();
 
         AnsiConsole.MarkupLine("[dim]Enter /exit to quit, /provider <id> to switch provider, /model <id> to switch model.[/]");
         while (!cancellationToken.IsCancellationRequested)
@@ -491,6 +493,7 @@ internal static class ChatRepl
                 services,
                 currentProviderId,
                 currentModelId,
+                conversation,
                 input,
                 renderMarkdown,
                 cancellationToken).ConfigureAwait(false);
@@ -505,11 +508,32 @@ internal static class ChatRepl
         bool renderMarkdown,
         CancellationToken cancellationToken)
     {
+        await RunTurnAsync(
+            services,
+            providerId,
+            modelId,
+            new Conversation(),
+            prompt,
+            renderMarkdown,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask RunTurnAsync(
+        IServiceProvider services,
+        string providerId,
+        string modelId,
+        Conversation conversation,
+        string prompt,
+        bool renderMarkdown,
+        CancellationToken cancellationToken)
+    {
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
         StringBuilder? markdownBuffer = renderMarkdown ? new StringBuilder() : null;
 
+        conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
+
         await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                           new AgentRunRequest(providerId, modelId, prompt),
+                           new AgentRunRequest(providerId, modelId, conversation),
                            cancellationToken).ConfigureAwait(false))
         {
             if (agentEvent.Kind == AgentEventKind.ToolActivity)
@@ -521,6 +545,16 @@ internal static class ChatRepl
             if (agentEvent.Kind == AgentEventKind.Failed)
             {
                 AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
+                continue;
+            }
+
+            if (agentEvent.Kind == AgentEventKind.Completed)
+            {
+                if (agentEvent.AssistantMessage is not null)
+                {
+                    conversation.Add(agentEvent.AssistantMessage);
+                }
+
                 continue;
             }
 

@@ -1,9 +1,12 @@
 using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using WinHarness.Conversation;
+using ConversationState = WinHarness.Conversation.Conversation;
 using WinHarness.Diagnostics;
 using WinHarness.Providers;
 using WinHarness.Tools;
@@ -61,6 +64,7 @@ public sealed class SingleAgentRuntime : IAgentRuntime
         AgentRunRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        IReadOnlyList<ChatMessage> messages = ProjectConversation(request.Conversation);
         IChatProvider provider = _providerFactory.Create(request.ProviderId, request.ModelId);
         using IChatClient client = provider.CreateChatClient();
 
@@ -74,9 +78,10 @@ public sealed class SingleAgentRuntime : IAgentRuntime
 
         RuntimeToolActivitySink toolActivitySink = new();
         ChatOptions? options = await CreateChatOptionsAsync(toolActivitySink, cancellationToken).ConfigureAwait(false);
+        StringBuilder assistantText = new();
 
         await using IAsyncEnumerator<ChatResponseUpdate> updates = client.GetStreamingResponseAsync(
-                request.Prompt,
+                messages,
                 options,
                 cancellationToken: cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
@@ -128,6 +133,7 @@ public sealed class SingleAgentRuntime : IAgentRuntime
             string text = update.ToString();
             if (text.Length > 0)
             {
+                assistantText.Append(text);
                 yield return new AgentEvent(AgentEventKind.AssistantDelta, text);
             }
         }
@@ -144,7 +150,44 @@ public sealed class SingleAgentRuntime : IAgentRuntime
             stopwatch,
             cancellationToken,
             usage: usage).ConfigureAwait(false);
-        yield return new AgentEvent(AgentEventKind.Completed, "completed");
+        yield return new AgentEvent(
+            AgentEventKind.Completed,
+            "completed",
+            new ConversationMessage(ConversationRole.Assistant, assistantText.ToString()));
+    }
+
+    private static IReadOnlyList<ChatMessage> ProjectConversation(ConversationState conversation)
+    {
+        if (conversation.Messages.Count == 0)
+        {
+            throw new InvalidOperationException("Conversation must contain at least one user message.");
+        }
+
+        ConversationMessage last = conversation.Messages[^1];
+        if (last.Role != ConversationRole.User)
+        {
+            throw new InvalidOperationException("Conversation must end with a user message before running a turn.");
+        }
+
+        List<ChatMessage> messages = new(conversation.Messages.Count);
+        foreach (ConversationMessage message in conversation.Messages)
+        {
+            messages.Add(new ChatMessage(ProjectRole(message.Role), message.Content));
+        }
+
+        return messages;
+    }
+
+    private static ChatRole ProjectRole(ConversationRole role)
+    {
+        return role switch
+        {
+            ConversationRole.System => ChatRole.System,
+            ConversationRole.User => ChatRole.User,
+            ConversationRole.Assistant => ChatRole.Assistant,
+            ConversationRole.Tool => ChatRole.Tool,
+            _ => throw new InvalidOperationException($"Unsupported conversation role '{role}'.")
+        };
     }
 
     private async ValueTask<ChatOptions?> CreateChatOptionsAsync(
