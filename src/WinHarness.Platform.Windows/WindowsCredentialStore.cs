@@ -11,6 +11,7 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
     private const uint CredentialTypeGeneric = 1;
     private const uint CredentialPersistLocalMachine = 2;
     private const int ErrorNotFound = 1168;
+    private const int ErrorNoCredentials = 1168;
 
     /// <inheritdoc />
     public ValueTask<string?> GetSecretAsync(string targetName, CancellationToken cancellationToken)
@@ -105,6 +106,44 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
         return ValueTask.CompletedTask;
     }
 
+    /// <inheritdoc />
+    public ValueTask<IReadOnlyList<string>> ListTargetNamesAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureWindows();
+
+        if (!CredEnumerate("WinHarness:*", 0, out uint count, out IntPtr credentialsPtr))
+        {
+            int error = Marshal.GetLastPInvokeError();
+            if (error == ErrorNoCredentials)
+            {
+                return ValueTask.FromResult<IReadOnlyList<string>>([]);
+            }
+
+            throw new InvalidOperationException($"CredEnumerate failed with error {error}.");
+        }
+
+        try
+        {
+            List<string> targetNames = new(checked((int)count));
+            for (int index = 0; index < count; index++)
+            {
+                IntPtr credentialPtr = Marshal.ReadIntPtr(credentialsPtr, index * IntPtr.Size);
+                NativeCredential credential = Marshal.PtrToStructure<NativeCredential>(credentialPtr);
+                if (!string.IsNullOrWhiteSpace(credential.TargetName))
+                {
+                    targetNames.Add(credential.TargetName);
+                }
+            }
+
+            return ValueTask.FromResult<IReadOnlyList<string>>(targetNames);
+        }
+        finally
+        {
+            CredFree(credentialsPtr);
+        }
+    }
+
     private static void EnsureWindows()
     {
         if (!OperatingSystem.IsWindows())
@@ -124,6 +163,10 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
     [LibraryImport("advapi32.dll", EntryPoint = "CredDeleteW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CredDelete(string targetName, uint type, uint flags);
+
+    [LibraryImport("advapi32.dll", EntryPoint = "CredEnumerateW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CredEnumerate(string filter, uint flags, out uint count, out IntPtr credentials);
 
     [LibraryImport("advapi32.dll", SetLastError = false)]
     private static partial void CredFree(IntPtr buffer);

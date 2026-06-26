@@ -90,5 +90,10 @@ public sealed class OpenAiCompatibleProviderFactoryTests
         {
             return ValueTask.CompletedTask;
         }
+
+        public ValueTask<IReadOnlyList<string>> ListTargetNamesAsync(CancellationToken cancellationToken)
+        {
+            return ValueTask.FromResult<IReadOnlyList<string>>(["test-key"]);
+        }
     }
 }

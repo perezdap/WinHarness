@@ -19,4 +19,9 @@ public interface ICredentialStore
     /// Deletes a credential secret by target name.
     /// </summary>
     ValueTask DeleteSecretAsync(string targetName, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lists known WinHarness credential target names.
+    /// </summary>
+    ValueTask<IReadOnlyList<string>> ListTargetNamesAsync(CancellationToken cancellationToken);
 }

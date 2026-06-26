@@ -19,10 +19,12 @@ public sealed class WindowsCredentialStoreTests
 
         await store.SetSecretAsync(target, "secret-value", CancellationToken.None);
         string? secret = await store.GetSecretAsync(target, CancellationToken.None);
+        IReadOnlyList<string> targetNames = await store.ListTargetNamesAsync(CancellationToken.None);
         await store.DeleteSecretAsync(target, CancellationToken.None);
         string? deleted = await store.GetSecretAsync(target, CancellationToken.None);
 
         Assert.AreEqual("secret-value", secret);
+        CollectionAssert.Contains(targetNames.ToList(), target);
         Assert.IsNull(deleted);
     }
 }

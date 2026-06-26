@@ -262,6 +262,16 @@ app.Add("credentials get", async (string targetName, CancellationToken cancellat
     Console.WriteLine(secret);
 });
 
+app.Add("credentials list", async (CancellationToken cancellationToken) =>
+{
+    ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
+    IReadOnlyList<string> targetNames = await store.ListTargetNamesAsync(cancellationToken).ConfigureAwait(false);
+    foreach (string targetName in targetNames)
+    {
+        Console.WriteLine(targetName);
+    }
+});
+
 app.Add("credentials delete", async (string targetName, CancellationToken cancellationToken) =>
 {
     ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
