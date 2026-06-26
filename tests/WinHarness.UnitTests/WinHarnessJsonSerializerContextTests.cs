@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WinHarness.Configuration;
+using WinHarness.Platform;
 using WinHarness.Providers;
 using WinHarness.Serialization;
+using WinHarness.Tools;
 
 namespace WinHarness.UnitTests;
 
@@ -41,5 +43,28 @@ public sealed class WinHarnessJsonSerializerContextTests
 
         StringAssert.Contains(json, "\"defaultProvider\":\"local\"");
         StringAssert.Contains(json, "\"providerModelId\":\"qwen\"");
+    }
+
+    [TestMethod]
+    public void SerializesToolAndCommandDtosWithSourceGeneratedContext()
+    {
+        ToolResult toolResult = new(
+            Succeeded: true,
+            Content: "ok",
+            Metadata: new Dictionary<string, string>
+            {
+                ["command.mode"] = "Captured"
+            });
+        CommandResult commandResult = new(
+            ExitCode: 0,
+            StandardOutput: "stdout",
+            StandardError: string.Empty,
+            Mode: CommandExecutionMode.Captured);
+
+        string toolJson = JsonSerializer.Serialize(toolResult, WinHarnessJsonSerializerContext.Default.ToolResult);
+        string commandJson = JsonSerializer.Serialize(commandResult, WinHarnessJsonSerializerContext.Default.CommandResult);
+
+        StringAssert.Contains(toolJson, "\"command.mode\":\"Captured\"");
+        StringAssert.Contains(commandJson, "\"mode\":0");
     }
 }

@@ -3,8 +3,10 @@ using System.Text.Json.Serialization;
 using WinHarness.Configuration;
 using WinHarness.Conversation;
 using WinHarness.Diagnostics;
+using WinHarness.Platform;
 using WinHarness.Providers;
 using WinHarness.Runtime;
+using WinHarness.Tools;
 
 namespace WinHarness.Serialization;
 
@@ -22,4 +24,9 @@ namespace WinHarness.Serialization;
 [JsonSerializable(typeof(DiagnosticRecord))]
 [JsonSerializable(typeof(AgentRunRequest))]
 [JsonSerializable(typeof(AgentEvent))]
+[JsonSerializable(typeof(ToolInvocation))]
+[JsonSerializable(typeof(ToolResult))]
+[JsonSerializable(typeof(CommandRequest))]
+[JsonSerializable(typeof(CommandResult))]
+[JsonSerializable(typeof(Dictionary<string, string>))]
 public sealed partial class WinHarnessJsonSerializerContext : JsonSerializerContext;
