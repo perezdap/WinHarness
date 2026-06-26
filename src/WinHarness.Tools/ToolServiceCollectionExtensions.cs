@@ -15,7 +15,8 @@ public static class ToolServiceCollectionExtensions
     {
         services.AddSingleton(static provider => new BuiltinToolProvider(
             Environment.CurrentDirectory,
-            provider.GetRequiredService<ICommandExecutor>()));
+            provider.GetRequiredService<ICommandExecutor>(),
+            provider.GetRequiredService<ILongPathService>()));
         services.AddSingleton<IToolProvider>(static provider => provider.GetRequiredService<BuiltinToolProvider>());
         services.AddSingleton<ToolRegistry>();
         return services;

@@ -15,13 +15,14 @@ public sealed class BuiltinToolProvider : IToolProvider
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly ICommandExecutor _commandExecutor;
+    private readonly ILongPathService _longPathService;
     private readonly string _workspaceRoot;
 
     /// <summary>
     /// Creates a built-in tool provider rooted at the current directory.
     /// </summary>
     public BuiltinToolProvider()
-        : this(Environment.CurrentDirectory, new LocalCapturedCommandExecutor())
+        : this(Environment.CurrentDirectory, new LocalCapturedCommandExecutor(), new PassThroughLongPathService())
     {
     }
 
@@ -29,7 +30,7 @@ public sealed class BuiltinToolProvider : IToolProvider
     /// Creates a built-in tool provider rooted at the current directory.
     /// </summary>
     public BuiltinToolProvider(ICommandExecutor commandExecutor)
-        : this(Environment.CurrentDirectory, commandExecutor)
+        : this(Environment.CurrentDirectory, commandExecutor, new PassThroughLongPathService())
     {
     }
 
@@ -37,7 +38,7 @@ public sealed class BuiltinToolProvider : IToolProvider
     /// Creates a built-in tool provider.
     /// </summary>
     public BuiltinToolProvider(string workspaceRoot)
-        : this(workspaceRoot, new LocalCapturedCommandExecutor())
+        : this(workspaceRoot, new LocalCapturedCommandExecutor(), new PassThroughLongPathService())
     {
     }
 
@@ -45,9 +46,21 @@ public sealed class BuiltinToolProvider : IToolProvider
     /// Creates a built-in tool provider.
     /// </summary>
     public BuiltinToolProvider(string workspaceRoot, ICommandExecutor commandExecutor)
+        : this(workspaceRoot, commandExecutor, new PassThroughLongPathService())
+    {
+    }
+
+    /// <summary>
+    /// Creates a built-in tool provider.
+    /// </summary>
+    public BuiltinToolProvider(
+        string workspaceRoot,
+        ICommandExecutor commandExecutor,
+        ILongPathService longPathService)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _commandExecutor = commandExecutor;
+        _longPathService = longPathService;
     }
 
     /// <inheritdoc />
@@ -55,12 +68,12 @@ public sealed class BuiltinToolProvider : IToolProvider
     {
         IReadOnlyList<ITool> tools =
         [
-            new ReadFileTool(_workspaceRoot),
-            new WriteFileTool(_workspaceRoot),
-            new EditFileTool(_workspaceRoot),
-            new RunCommandTool(_workspaceRoot, _commandExecutor),
-            new GlobTool(_workspaceRoot),
-            new GrepTool(_workspaceRoot)
+            new ReadFileTool(_workspaceRoot, _longPathService),
+            new WriteFileTool(_workspaceRoot, _longPathService),
+            new EditFileTool(_workspaceRoot, _longPathService),
+            new RunCommandTool(_workspaceRoot, _commandExecutor, _longPathService),
+            new GlobTool(_workspaceRoot, _longPathService),
+            new GrepTool(_workspaceRoot, _longPathService)
         ];
 
         return ValueTask.FromResult(tools);
@@ -68,9 +81,17 @@ public sealed class BuiltinToolProvider : IToolProvider
 
     private abstract class BuiltinTool : ITool
     {
-        protected BuiltinTool(string workspaceRoot, string name, string description, string schema)
+        private readonly ILongPathService _longPathService;
+
+        protected BuiltinTool(
+            string workspaceRoot,
+            ILongPathService longPathService,
+            string name,
+            string description,
+            string schema)
         {
             WorkspaceRoot = workspaceRoot;
+            _longPathService = longPathService;
             Name = name;
             Description = description;
             InputSchema = JsonDocument.Parse(schema).RootElement.Clone();
@@ -101,6 +122,11 @@ public sealed class BuiltinToolProvider : IToolProvider
             }
 
             return fullPath;
+        }
+
+        protected string NormalizeForIo(string path)
+        {
+            return _longPathService.Normalize(path);
         }
 
         protected static string RequireString(JsonElement arguments, string propertyName)
@@ -163,8 +189,8 @@ public sealed class BuiltinToolProvider : IToolProvider
 
     private sealed class ReadFileTool : BuiltinTool
     {
-        public ReadFileTool(string workspaceRoot)
-            : base(workspaceRoot, "read_file", "Read a UTF-8 text file.", """{"type":"object","properties":{"path":{"type":"string"},"maxBytes":{"type":"integer"}},"required":["path"]}""")
+        public ReadFileTool(string workspaceRoot, ILongPathService longPathService)
+            : base(workspaceRoot, longPathService, "read_file", "Read a UTF-8 text file.", """{"type":"object","properties":{"path":{"type":"string"},"maxBytes":{"type":"integer"}},"required":["path"]}""")
         {
         }
 
@@ -173,7 +199,7 @@ public sealed class BuiltinToolProvider : IToolProvider
             string path = ResolveWorkspacePath(invocation.Arguments);
             int maxBytes = OptionalInt32(invocation.Arguments, "maxBytes", 256 * 1024);
 
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            byte[] bytes = await File.ReadAllBytesAsync(NormalizeForIo(path), cancellationToken).ConfigureAwait(false);
             if (bytes.Length > maxBytes)
             {
                 return new ToolResult(false, $"File exceeds maxBytes ({bytes.Length} > {maxBytes}).", "file_too_large");
@@ -185,8 +211,8 @@ public sealed class BuiltinToolProvider : IToolProvider
 
     private sealed class WriteFileTool : BuiltinTool
     {
-        public WriteFileTool(string workspaceRoot)
-            : base(workspaceRoot, "write_file", "Write a UTF-8 text file.", """{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"},"createDirectories":{"type":"boolean"}},"required":["path","content"]}""")
+        public WriteFileTool(string workspaceRoot, ILongPathService longPathService)
+            : base(workspaceRoot, longPathService, "write_file", "Write a UTF-8 text file.", """{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"},"createDirectories":{"type":"boolean"}},"required":["path","content"]}""")
         {
         }
 
@@ -198,30 +224,31 @@ public sealed class BuiltinToolProvider : IToolProvider
             bool createDirectories = OptionalBoolean(invocation.Arguments, "createDirectories", false);
 
             string? parent = Path.GetDirectoryName(path);
-            if (parent is not null && !Directory.Exists(parent))
+            if (parent is not null && !Directory.Exists(NormalizeForIo(parent)))
             {
                 if (!createDirectories)
                 {
                     return new ToolResult(false, "Parent directory does not exist.", "parent_missing");
                 }
 
-                Directory.CreateDirectory(parent);
+                Directory.CreateDirectory(NormalizeForIo(parent));
             }
 
-            if (File.Exists(path) && !overwrite)
+            string normalizedPath = NormalizeForIo(path);
+            if (File.Exists(normalizedPath) && !overwrite)
             {
                 return new ToolResult(false, "File exists and overwrite is false.", "file_exists");
             }
 
-            await AtomicWriteAllTextAsync(path, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            await AtomicWriteAllTextAsync(normalizedPath, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
             return new ToolResult(true, $"Wrote {content.Length} characters.");
         }
     }
 
     private sealed class EditFileTool : BuiltinTool
     {
-        public EditFileTool(string workspaceRoot)
-            : base(workspaceRoot, "edit_file", "Replace exact text in a file.", """{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"expectedOccurrences":{"type":"integer"},"dryRun":{"type":"boolean"}},"required":["path","oldText","newText"]}""")
+        public EditFileTool(string workspaceRoot, ILongPathService longPathService)
+            : base(workspaceRoot, longPathService, "edit_file", "Replace exact text in a file.", """{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"expectedOccurrences":{"type":"integer"},"dryRun":{"type":"boolean"}},"required":["path","oldText","newText"]}""")
         {
         }
 
@@ -233,7 +260,8 @@ public sealed class BuiltinToolProvider : IToolProvider
             int expectedOccurrences = OptionalInt32(invocation.Arguments, "expectedOccurrences", 1);
             bool dryRun = OptionalBoolean(invocation.Arguments, "dryRun", false);
 
-            string content = await File.ReadAllTextAsync(path, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+            string normalizedPath = NormalizeForIo(path);
+            string content = await File.ReadAllTextAsync(normalizedPath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
             int occurrences = CountOccurrences(content, oldText);
             if (occurrences != expectedOccurrences)
             {
@@ -246,7 +274,7 @@ public sealed class BuiltinToolProvider : IToolProvider
                 return new ToolResult(true, $"Would replace {occurrences} occurrence(s). Updated length: {updated.Length} characters.");
             }
 
-            await AtomicWriteAllTextAsync(path, updated, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            await AtomicWriteAllTextAsync(normalizedPath, updated, Utf8NoBom, cancellationToken).ConfigureAwait(false);
             return new ToolResult(true, $"Replaced {occurrences} occurrence(s).");
         }
 
@@ -273,8 +301,11 @@ public sealed class BuiltinToolProvider : IToolProvider
     {
         private readonly ICommandExecutor _commandExecutor;
 
-        public RunCommandTool(string workspaceRoot, ICommandExecutor commandExecutor)
-            : base(workspaceRoot, "run_command", "Run a command with captured output by default.", """{"type":"object","properties":{"command":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"maxOutputBytes":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]}},"required":["command"]}""")
+        public RunCommandTool(
+            string workspaceRoot,
+            ICommandExecutor commandExecutor,
+            ILongPathService longPathService)
+            : base(workspaceRoot, longPathService, "run_command", "Run a command with captured output by default.", """{"type":"object","properties":{"command":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"maxOutputBytes":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]}},"required":["command"]}""")
         {
             _commandExecutor = commandExecutor;
         }
@@ -302,7 +333,7 @@ public sealed class BuiltinToolProvider : IToolProvider
                 FileName: RequireString(invocation.Arguments, "command"),
                 Arguments: commandArguments,
                 WorkingDirectory: invocation.Arguments.TryGetProperty("workingDirectory", out JsonElement workingDirectory) && workingDirectory.ValueKind == JsonValueKind.String
-                    ? ResolveWorkspacePath(invocation.Arguments, "workingDirectory")
+                    ? NormalizeForIo(ResolveWorkspacePath(invocation.Arguments, "workingDirectory"))
                     : WorkspaceRoot,
                 Mode: executionMode,
                 Timeout: TimeSpan.FromSeconds(OptionalInt32(invocation.Arguments, "timeoutSeconds", 60)));
@@ -393,8 +424,8 @@ public sealed class BuiltinToolProvider : IToolProvider
 
     private sealed class GlobTool : BuiltinTool
     {
-        public GlobTool(string workspaceRoot)
-            : base(workspaceRoot, "glob", "List files matching a glob pattern.", """{"type":"object","properties":{"pattern":{"type":"string"},"maxResults":{"type":"integer"}},"required":["pattern"]}""")
+        public GlobTool(string workspaceRoot, ILongPathService longPathService)
+            : base(workspaceRoot, longPathService, "glob", "List files matching a glob pattern.", """{"type":"object","properties":{"pattern":{"type":"string"},"maxResults":{"type":"integer"}},"required":["pattern"]}""")
         {
         }
 
@@ -424,8 +455,8 @@ public sealed class BuiltinToolProvider : IToolProvider
 
     private sealed class GrepTool : BuiltinTool
     {
-        public GrepTool(string workspaceRoot)
-            : base(workspaceRoot, "grep", "Search text files.", """{"type":"object","properties":{"pattern":{"type":"string"},"filePattern":{"type":"string"},"maxResults":{"type":"integer"},"maxFileBytes":{"type":"integer"}},"required":["pattern"]}""")
+        public GrepTool(string workspaceRoot, ILongPathService longPathService)
+            : base(workspaceRoot, longPathService, "grep", "Search text files.", """{"type":"object","properties":{"pattern":{"type":"string"},"filePattern":{"type":"string"},"maxResults":{"type":"integer"},"maxFileBytes":{"type":"integer"}},"required":["pattern"]}""")
         {
         }
 
@@ -448,18 +479,19 @@ public sealed class BuiltinToolProvider : IToolProvider
                     continue;
                 }
 
-                FileInfo info = new(file);
+                string normalizedFile = NormalizeForIo(file);
+                FileInfo info = new(normalizedFile);
                 if (info.Length > maxFileBytes)
                 {
                     continue;
                 }
 
-                if (await IsBinaryFileAsync(file, cancellationToken).ConfigureAwait(false))
+                if (await IsBinaryFileAsync(normalizedFile, cancellationToken).ConfigureAwait(false))
                 {
                     continue;
                 }
 
-                string[] lines = await File.ReadAllLinesAsync(file, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+                string[] lines = await File.ReadAllLinesAsync(normalizedFile, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
                 for (int index = 0; index < lines.Length; index++)
                 {
                     if (regex.IsMatch(lines[index]))
@@ -482,6 +514,14 @@ public sealed class BuiltinToolProvider : IToolProvider
             await using FileStream stream = File.OpenRead(file);
             int bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             return buffer.AsSpan(0, bytesRead).Contains((byte)0);
+        }
+    }
+
+    private sealed class PassThroughLongPathService : ILongPathService
+    {
+        public string Normalize(string path)
+        {
+            return path;
         }
     }
 }

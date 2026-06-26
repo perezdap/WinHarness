@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WinHarness.Platform;
 using WinHarness.Tools;
 
 namespace WinHarness.IntegrationTests;
@@ -121,6 +122,42 @@ public sealed class BuiltinToolProviderTests
 
         Assert.IsNotNull(exception);
         StringAssert.Contains(exception!.Message, "escapes the workspace");
+    }
+
+    [TestMethod]
+    public async Task FileToolsUseLongPathNormalization()
+    {
+        string root = CreateTempDirectory();
+        string path = Path.Combine(root, "notes.txt");
+        await File.WriteAllTextAsync(path, "content");
+        RecordingLongPathService longPathService = new();
+        BuiltinToolProvider provider = new(root, new FakeCommandExecutor(), longPathService);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "read_file")
+            .ExecuteAsync(new ToolInvocation("read_file", Json("""{"path":"notes.txt"}""")), CancellationToken.None);
+
+        Assert.AreEqual("content", result.Content);
+        Assert.IsTrue(longPathService.Paths.Any(candidate => candidate.EndsWith("notes.txt", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private sealed class RecordingLongPathService : ILongPathService
+    {
+        public List<string> Paths { get; } = [];
+
+        public string Normalize(string path)
+        {
+            Paths.Add(path);
+            return path;
+        }
+    }
+
+    private sealed class FakeCommandExecutor : ICommandExecutor
+    {
+        public ValueTask<CommandResult> ExecuteAsync(CommandRequest request, CancellationToken cancellationToken)
+        {
+            return ValueTask.FromResult(new CommandResult(0, string.Empty, string.Empty, request.Mode));
+        }
     }
 
     private static JsonElement Json(string json)
