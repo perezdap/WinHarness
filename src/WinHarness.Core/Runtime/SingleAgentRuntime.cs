@@ -84,7 +84,7 @@ public sealed class SingleAgentRuntime : IAgentRuntime
 
         while (true)
         {
-            ChatResponseUpdate update;
+            ChatResponseUpdate? update = null;
             AgentEvent? failureEvent = null;
             try
             {
@@ -118,7 +118,7 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                 yield break;
             }
 
-            usage = update.Contents.OfType<UsageContent>().LastOrDefault()?.Details ?? usage;
+            usage = update!.Contents.OfType<UsageContent>().LastOrDefault()?.Details ?? usage;
 
             foreach (AgentEvent toolEvent in toolActivitySink.Drain())
             {
