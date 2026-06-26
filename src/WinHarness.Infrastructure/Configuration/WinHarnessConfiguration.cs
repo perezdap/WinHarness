@@ -46,7 +46,7 @@ public static class WinHarnessConfiguration
 
     private static void ValidateNoInlineSecrets(IConfiguration configuration)
     {
-        foreach (IConfigurationSection section in configuration.AsEnumerable().Select(pair => configuration.GetSection(pair.Key)))
+        foreach (IConfigurationSection section in EnumerateWinHarnessOptionSections(configuration))
         {
             if (section.Value is null)
             {
@@ -62,6 +62,18 @@ public static class WinHarnessConfiguration
             if (LooksSecretBearingKey(key))
             {
                 throw new InvalidOperationException($"Configuration key '{key}' appears to contain a secret. Store secrets in Windows Credential Manager and reference them with credentialName.");
+            }
+        }
+    }
+
+    private static IEnumerable<IConfigurationSection> EnumerateWinHarnessOptionSections(IConfiguration configuration)
+    {
+        foreach (string rootKey in new[] { "providers", "mcpServers" })
+        {
+            IConfigurationSection root = configuration.GetSection(rootKey);
+            foreach (KeyValuePair<string, string?> pair in root.AsEnumerable())
+            {
+                yield return configuration.GetSection(pair.Key);
             }
         }
     }
