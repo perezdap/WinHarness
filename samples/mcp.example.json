@@ -1,0 +1,13 @@
+{
+  "mcpServers": [
+    {
+      "id": "example",
+      "command": "example-mcp-server.exe",
+      "arguments": [],
+      "workingDirectory": null,
+      "environment": {},
+      "enabled": false,
+      "startupTimeoutSeconds": 30
+    }
+  ]
+}

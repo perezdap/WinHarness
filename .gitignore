@@ -1,0 +1,42 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+TestResults/
+coverage/
+
+# Native AOT and publish outputs
+*.pdb
+*.ilk
+*.obj
+*.lib
+*.exp
+*.dll
+*.exe
+!samples/**/*.exe
+
+# User-specific IDE files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
+packages/
+
+# Local WinHarness runtime data
+WinHarness/

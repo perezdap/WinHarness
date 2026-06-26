@@ -1,0 +1,85 @@
+name: Phase 0 Native AOT
+
+on:
+  push:
+    branches:
+      - main
+      - 'cursor/**'
+  pull_request:
+
+jobs:
+  aot-spike:
+    name: AOT spike
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore solution
+        run: dotnet restore WinHarness.sln
+
+      - name: Build solution
+        run: dotnet build WinHarness.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test WinHarness.sln --configuration Release --no-build
+
+      - name: Publish Phase 0 Native AOT spike
+        run: dotnet publish spikes/WinHarness.AotSpike/WinHarness.AotSpike.csproj --configuration Release --runtime win-x64 --no-build /p:PublishAot=true
+
+      - name: Run published Phase 0 spike
+        shell: pwsh
+        run: |
+          $publishDir = "spikes/WinHarness.AotSpike/bin/Release/net10.0/win-x64/publish"
+          $unexpectedDll = Get-ChildItem -Path $publishDir -Filter *.dll -Recurse | Select-Object -First 1
+          if ($unexpectedDll) {
+            throw "Native AOT spike publish produced a DLL: $($unexpectedDll.FullName)"
+          }
+          $exe = Get-ChildItem -Path $publishDir -Filter winharness-aot-spike.exe -Recurse | Select-Object -First 1
+          if (-not $exe) {
+            throw "Published spike executable was not found."
+          }
+          & $exe.FullName
+
+      - name: Publish WinHarness CLI Native AOT
+        run: dotnet publish src/WinHarness.Cli/WinHarness.Cli.csproj --configuration Release --runtime win-x64 --no-build /p:PublishAot=true
+
+      - name: Run published WinHarness diagnostics
+        shell: pwsh
+        run: |
+          $publishDir = "src/WinHarness.Cli/bin/Release/net10.0/win-x64/publish"
+          $unexpectedDll = Get-ChildItem -Path $publishDir -Filter *.dll -Recurse | Select-Object -First 1
+          if ($unexpectedDll) {
+            throw "Native AOT CLI publish produced a DLL: $($unexpectedDll.FullName)"
+          }
+          $exe = Get-ChildItem -Path $publishDir -Filter winharness.exe -Recurse | Select-Object -First 1
+          if (-not $exe) {
+            throw "Published WinHarness executable was not found."
+          }
+          $env:APPDATA = Join-Path $PWD "artifacts/appdata"
+          & $exe.FullName diagnostics aot
+          & $exe.FullName diagnostics write --message "ci smoke"
+          & $exe.FullName config init
+          & $exe.FullName providers list
+          & $exe.FullName providers use --provider-id local-ollama
+          & $exe.FullName models list --provider-id local-ollama
+          & $exe.FullName models use --model-id local-coder
+          & $exe.FullName mcp list
+          & $exe.FullName mcp tools
+          & $exe.FullName credentials list
+          & $exe.FullName --version
+          & $exe.FullName version
+          & $exe.FullName tools list
+          & $exe.FullName tools call --name read_file --arguments-json '{"path":"README.md"}'
+          & $exe.FullName tools call --name write_file --arguments-json '{"path":"artifacts/tool-smoke.txt","content":"before","overwrite":true,"createDirectories":true}'
+          & $exe.FullName tools call --name edit_file --arguments-json '{"path":"artifacts/tool-smoke.txt","oldText":"before","newText":"after","expectedOccurrences":1}'
+          & $exe.FullName tools call --name read_file --arguments-json '{"path":"artifacts/tool-smoke.txt"}'
+          & $exe.FullName tools call --name glob --arguments-json '{"pattern":"*.md","maxResults":5}'
+          & $exe.FullName tools call --name grep --arguments-json '{"pattern":"WinHarness","filePattern":"README.md","maxResults":5}'
+          & $exe.FullName tools call --name run_command --arguments-json '{"command":"cmd.exe","arguments":["/c","echo cli-run-command"],"timeoutSeconds":10}'

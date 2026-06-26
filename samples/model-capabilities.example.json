@@ -1,0 +1,21 @@
+{
+  "providers": [
+    {
+      "id": "openai-main",
+      "models": [
+        {
+          "id": "gpt-primary",
+          "providerModelId": "gpt-4.1",
+          "capabilities": {
+            "streaming": true,
+            "toolCalling": true,
+            "vision": true,
+            "promptCaching": false,
+            "structuredOutput": true,
+            "reasoning": true
+          }
+        }
+      ]
+    }
+  ]
+}

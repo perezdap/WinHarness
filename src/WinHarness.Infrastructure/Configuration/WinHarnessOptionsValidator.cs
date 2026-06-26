@@ -1,0 +1,94 @@
+using WinHarness.Configuration;
+
+namespace WinHarness.Infrastructure.Configuration;
+
+/// <summary>
+/// Validates WinHarness options without reflection.
+/// </summary>
+public static class WinHarnessOptionsValidator
+{
+    /// <summary>
+    /// Validates options and throws when invalid.
+    /// </summary>
+    public static void Validate(WinHarnessOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        HashSet<string> providerIds = new(StringComparer.OrdinalIgnoreCase);
+        foreach (ProviderOptions provider in options.Providers)
+        {
+            RequireNonEmpty(provider.Id, "Provider id is required.");
+            RequireNonEmpty(provider.Kind, $"Provider '{provider.Id}' kind is required.");
+
+            if (!string.Equals(provider.Kind, "openai-compatible", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Provider '{provider.Id}' uses unsupported kind '{provider.Kind}'. v0.1 supports only openai-compatible.");
+            }
+
+            if (!providerIds.Add(provider.Id))
+            {
+                throw new InvalidOperationException($"Duplicate provider id '{provider.Id}'.");
+            }
+
+            if (provider.BaseUrl is not null && !Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _))
+            {
+                throw new InvalidOperationException($"Provider '{provider.Id}' baseUrl is not an absolute URI.");
+            }
+
+            if (provider.CredentialName is not null &&
+                !provider.CredentialName.StartsWith("WinHarness:", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Provider '{provider.Id}' credentialName must start with 'WinHarness:'.");
+            }
+
+            HashSet<string> modelIds = new(StringComparer.OrdinalIgnoreCase);
+            foreach (ModelOptions model in provider.Models)
+            {
+                RequireNonEmpty(model.Id, $"Provider '{provider.Id}' has a model without an id.");
+                RequireNonEmpty(model.ProviderModelId, $"Model '{model.Id}' is missing providerModelId.");
+
+                if (!modelIds.Add(model.Id))
+                {
+                    throw new InvalidOperationException($"Provider '{provider.Id}' has duplicate model id '{model.Id}'.");
+                }
+            }
+        }
+
+        if (options.DefaultProvider.Length > 0 && !providerIds.Contains(options.DefaultProvider))
+        {
+            throw new InvalidOperationException($"Default provider '{options.DefaultProvider}' is not configured.");
+        }
+
+        if (options.DefaultProvider.Length > 0 && options.DefaultModel.Length > 0)
+        {
+            ProviderOptions defaultProvider = options.Providers.First(provider =>
+                string.Equals(provider.Id, options.DefaultProvider, StringComparison.OrdinalIgnoreCase));
+            bool hasDefaultModel = defaultProvider.Models.Any(model =>
+                string.Equals(model.Id, options.DefaultModel, StringComparison.OrdinalIgnoreCase));
+            if (!hasDefaultModel)
+            {
+                throw new InvalidOperationException($"Default model '{options.DefaultModel}' is not configured for provider '{options.DefaultProvider}'.");
+            }
+        }
+
+        HashSet<string> mcpServerIds = new(StringComparer.OrdinalIgnoreCase);
+        foreach (McpServerOptions server in options.McpServers)
+        {
+            RequireNonEmpty(server.Id, "MCP server id is required.");
+            RequireNonEmpty(server.Command, $"MCP server '{server.Id}' command is required.");
+
+            if (!mcpServerIds.Add(server.Id))
+            {
+                throw new InvalidOperationException($"Duplicate MCP server id '{server.Id}'.");
+            }
+        }
+    }
+
+    private static void RequireNonEmpty(string value, string message)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException(message);
+        }
+    }
+}

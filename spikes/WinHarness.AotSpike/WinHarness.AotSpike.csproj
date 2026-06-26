@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>winharness-aot-spike</AssemblyName>
+    <RootNamespace>WinHarness.AotSpike</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ConsoleAppFramework" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="ModelContextProtocol.Core" />
+    <PackageReference Include="OpenAI" />
+    <PackageReference Include="Spectre.Console" />
+  </ItemGroup>
+</Project>

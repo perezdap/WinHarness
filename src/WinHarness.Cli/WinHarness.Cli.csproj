@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>winharness</AssemblyName>
+    <RootNamespace>WinHarness.Cli</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinHarness.Abstractions\WinHarness.Abstractions.csproj" />
+    <ProjectReference Include="..\WinHarness.Core\WinHarness.Core.csproj" />
+    <ProjectReference Include="..\WinHarness.Infrastructure\WinHarness.Infrastructure.csproj" />
+    <ProjectReference Include="..\WinHarness.Mcp\WinHarness.Mcp.csproj" />
+    <ProjectReference Include="..\WinHarness.Platform.Windows\WinHarness.Platform.Windows.csproj" />
+    <ProjectReference Include="..\WinHarness.Providers\WinHarness.Providers.csproj" />
+    <ProjectReference Include="..\WinHarness.Tools\WinHarness.Tools.csproj" />
+    <PackageReference Include="ConsoleAppFramework" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="Spectre.Console" />
+  </ItemGroup>
+</Project>

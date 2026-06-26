@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>WinHarness.SmokeTests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WinHarness.Cli\WinHarness.Cli.csproj" />
+    <ProjectReference Include="..\..\src\WinHarness.Infrastructure\WinHarness.Infrastructure.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="MSTest" />
+  </ItemGroup>
+</Project>
