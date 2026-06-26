@@ -16,15 +16,16 @@ using Spectre.Console;
 
 var app = ConsoleApp.Create();
 
+if (args is ["mcp-server"])
+{
+    await FakeMcpServer.RunAsync(Console.OpenStandardInput(), Console.OpenStandardOutput(), CancellationToken.None)
+        .ConfigureAwait(false);
+    return;
+}
+
 app.Add("", async (CancellationToken cancellationToken) =>
 {
     await AotSpikeRunner.RunAsync(cancellationToken).ConfigureAwait(false);
-});
-
-app.Add("mcp-server", async (CancellationToken cancellationToken) =>
-{
-    await FakeMcpServer.RunAsync(Console.OpenStandardInput(), Console.OpenStandardOutput(), cancellationToken)
-        .ConfigureAwait(false);
 });
 
 await app.RunAsync(args).ConfigureAwait(false);
