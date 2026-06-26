@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using ConsoleAppFramework;
@@ -177,8 +179,50 @@ app.Add("tools call", async (string name, string argumentsJson = "{}", Cancellat
     }
 
     using JsonDocument arguments = JsonDocument.Parse(argumentsJson);
-    ToolResult result = await tool.ExecuteAsync(
-        new ToolInvocation(name, arguments.RootElement.Clone()),
+    Stopwatch stopwatch = Stopwatch.StartNew();
+    IDiagnosticSink sink = host.Services.GetRequiredService<IDiagnosticSink>();
+    ToolResult result;
+    try
+    {
+        result = await tool.ExecuteAsync(
+            new ToolInvocation(name, arguments.RootElement.Clone()),
+            cancellationToken).ConfigureAwait(false);
+    }
+    catch (Exception ex)
+    {
+        await sink.WriteAsync(
+            new DiagnosticRecord(
+                DateTimeOffset.UtcNow,
+                "tool",
+                "tool.exception",
+                name,
+                new Dictionary<string, string>
+                {
+                    ["tool.name"] = name,
+                    ["tool.duration_ms"] = stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture),
+                    ["exception.type"] = ex.GetType().FullName ?? ex.GetType().Name,
+                    ["source"] = "cli"
+                }),
+            CancellationToken.None).ConfigureAwait(false);
+        throw;
+    }
+
+    await sink.WriteAsync(
+        new DiagnosticRecord(
+            DateTimeOffset.UtcNow,
+            "tool",
+            result.Succeeded ? "tool.completed" : "tool.failed",
+            name,
+            MergeToolMetadata(
+                new Dictionary<string, string>
+                {
+                    ["tool.name"] = name,
+                    ["tool.duration_ms"] = stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture),
+                    ["tool.succeeded"] = result.Succeeded.ToString(CultureInfo.InvariantCulture),
+                    ["tool.error_code"] = result.ErrorCode ?? string.Empty,
+                    ["source"] = "cli"
+                },
+                result.Metadata)),
         cancellationToken).ConfigureAwait(false);
 
     Console.WriteLine(result.Content);
@@ -306,6 +350,23 @@ app.Add("credentials delete", async (string targetName, CancellationToken cancel
 });
 
 await app.RunAsync(args).ConfigureAwait(false);
+
+static Dictionary<string, string> MergeToolMetadata(
+    Dictionary<string, string> properties,
+    IReadOnlyDictionary<string, string>? metadata)
+{
+    if (metadata is null)
+    {
+        return properties;
+    }
+
+    foreach (KeyValuePair<string, string> pair in metadata)
+    {
+        properties[pair.Key] = pair.Value;
+    }
+
+    return properties;
+}
 
 internal static class ConfigFileUpdater
 {
