@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\WinHarness.Infrastructure\WinHarness.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\WinHarness.Platform.Windows\WinHarness.Platform.Windows.csproj" />
     <ProjectReference Include="..\..\src\WinHarness.Tools\WinHarness.Tools.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="MSTest" />
