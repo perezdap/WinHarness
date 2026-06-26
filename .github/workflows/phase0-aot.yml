@@ -57,7 +57,9 @@ jobs:
           & $exe.FullName diagnostics write --message "ci smoke"
           & $exe.FullName config init
           & $exe.FullName providers list
+          & $exe.FullName providers use --provider-id local-ollama
           & $exe.FullName models list --provider-id local-ollama
+          & $exe.FullName models use --model-id local-coder
           & $exe.FullName mcp list
           & $exe.FullName mcp tools
           & $exe.FullName credentials list
