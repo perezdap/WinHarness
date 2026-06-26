@@ -298,23 +298,23 @@ internal static class FakeMcpServer
 
     private static string CreateInitializeResponse(JsonElement id)
     {
-        return $$"""
-            {"jsonrpc":"2.0","id":{{id.GetRawText()}},"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"winharness-aot-spike-fake","version":"0.1.0"}}}
-            """;
+        return string.Concat(
+            "{\"jsonrpc\":\"2.0\",\"id\":",
+            id.GetRawText(),
+            ",\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"winharness-aot-spike-fake\",\"version\":\"0.1.0\"}}}");
     }
 
     private static string CreateToolsListResponse(JsonElement id)
     {
-        return $$"""
-            {"jsonrpc":"2.0","id":{{id.GetRawText()}},"result":{"tools":[{"name":"spike_echo","description":"A fake AOT spike MCP tool.","inputSchema":{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}}]}}
-            """;
+        return string.Concat(
+            "{\"jsonrpc\":\"2.0\",\"id\":",
+            id.GetRawText(),
+            ",\"result\":{\"tools\":[{\"name\":\"spike_echo\",\"description\":\"A fake AOT spike MCP tool.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"]}}]}}");
     }
 
     private static string CreateEmptyResultResponse(JsonElement id)
     {
-        return $$"""
-            {"jsonrpc":"2.0","id":{{id.GetRawText()}},"result":{}}
-            """;
+        return string.Concat("{\"jsonrpc\":\"2.0\",\"id\":", id.GetRawText(), ",\"result\":{}}");
     }
 
     private static async Task<string?> ReadMessageAsync(Stream input, CancellationToken cancellationToken)
