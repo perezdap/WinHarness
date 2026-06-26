@@ -52,6 +52,30 @@ public static class WinHarnessOptionsValidator
         {
             throw new InvalidOperationException($"Default provider '{options.DefaultProvider}' is not configured.");
         }
+
+        if (options.DefaultProvider.Length > 0 && options.DefaultModel.Length > 0)
+        {
+            ProviderOptions defaultProvider = options.Providers.First(provider =>
+                string.Equals(provider.Id, options.DefaultProvider, StringComparison.OrdinalIgnoreCase));
+            bool hasDefaultModel = defaultProvider.Models.Any(model =>
+                string.Equals(model.Id, options.DefaultModel, StringComparison.OrdinalIgnoreCase));
+            if (!hasDefaultModel)
+            {
+                throw new InvalidOperationException($"Default model '{options.DefaultModel}' is not configured for provider '{options.DefaultProvider}'.");
+            }
+        }
+
+        HashSet<string> mcpServerIds = new(StringComparer.OrdinalIgnoreCase);
+        foreach (McpServerOptions server in options.McpServers)
+        {
+            RequireNonEmpty(server.Id, "MCP server id is required.");
+            RequireNonEmpty(server.Command, $"MCP server '{server.Id}' command is required.");
+
+            if (!mcpServerIds.Add(server.Id))
+            {
+                throw new InvalidOperationException($"Duplicate MCP server id '{server.Id}'.");
+            }
+        }
     }
 
     private static void RequireNonEmpty(string value, string message)
