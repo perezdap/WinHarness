@@ -88,7 +88,7 @@ public static partial class ConPtyCommandExecutor
 
             inputWriteSide.Dispose();
 
-            await using FileStream output = new(outputReadSide, FileAccess.Read, bufferSize: 4096, isAsync: true);
+            await using FileStream output = new(outputReadSide, FileAccess.Read, bufferSize: 4096, isAsync: false);
             Task<string> outputTask = ReadAllOutputAsync(output, cancellationToken);
 
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
