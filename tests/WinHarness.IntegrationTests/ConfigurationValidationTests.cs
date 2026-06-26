@@ -17,9 +17,17 @@ public sealed class ConfigurationValidationTests
             Kind = "anthropic"
         });
 
-        InvalidOperationException exception = Assert.ThrowsException<InvalidOperationException>(() =>
-            WinHarnessOptionsValidator.Validate(options));
+        InvalidOperationException? exception = null;
+        try
+        {
+            WinHarnessOptionsValidator.Validate(options);
+        }
+        catch (InvalidOperationException caught)
+        {
+            exception = caught;
+        }
 
-        StringAssert.Contains(exception.Message, "openai-compatible");
+        Assert.IsNotNull(exception);
+        StringAssert.Contains(exception!.Message, "openai-compatible");
     }
 }

@@ -1,4 +1,5 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WinHarness.Infrastructure.Configuration;
 
 namespace WinHarness.SmokeTests;
 
@@ -6,8 +7,10 @@ namespace WinHarness.SmokeTests;
 public sealed class CliSmokeTests
 {
     [TestMethod]
-    public void SmokeProjectLoads()
+    public void ConfigurationDirectoryUsesWinHarnessFolder()
     {
-        Assert.IsTrue(true);
+        string directory = WinHarnessConfiguration.GetConfigurationDirectory();
+
+        StringAssert.EndsWith(directory, "WinHarness");
     }
 }
