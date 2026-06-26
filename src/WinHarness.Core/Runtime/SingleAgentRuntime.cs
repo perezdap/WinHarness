@@ -85,6 +85,7 @@ public sealed class SingleAgentRuntime : IAgentRuntime
         while (true)
         {
             ChatResponseUpdate update;
+            AgentEvent? failureEvent = null;
             try
             {
                 if (!await updates.MoveNextAsync().ConfigureAwait(false))
@@ -108,7 +109,12 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                     throw;
                 }
 
-                yield return new AgentEvent(AgentEventKind.Failed, ex.Message);
+                failureEvent = new AgentEvent(AgentEventKind.Failed, ex.Message);
+            }
+
+            if (failureEvent is not null)
+            {
+                yield return failureEvent;
                 yield break;
             }
 
