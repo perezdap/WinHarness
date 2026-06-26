@@ -79,4 +79,29 @@ public sealed class ConfigurationValidationTests
         Assert.IsNotNull(exception);
         StringAssert.Contains(exception!.Message, "Duplicate MCP");
     }
+
+    [TestMethod]
+    public void RejectsNonWinHarnessCredentialName()
+    {
+        WinHarnessOptions options = new();
+        options.Providers.Add(new ProviderOptions
+        {
+            Id = "local",
+            Kind = "openai-compatible",
+            CredentialName = "OtherApp:token"
+        });
+
+        InvalidOperationException? exception = null;
+        try
+        {
+            WinHarnessOptionsValidator.Validate(options);
+        }
+        catch (InvalidOperationException caught)
+        {
+            exception = caught;
+        }
+
+        Assert.IsNotNull(exception);
+        StringAssert.Contains(exception!.Message, "WinHarness:");
+    }
 }

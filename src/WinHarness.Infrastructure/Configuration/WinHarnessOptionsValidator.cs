@@ -35,6 +35,12 @@ public static class WinHarnessOptionsValidator
                 throw new InvalidOperationException($"Provider '{provider.Id}' baseUrl is not an absolute URI.");
             }
 
+            if (provider.CredentialName is not null &&
+                !provider.CredentialName.StartsWith("WinHarness:", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Provider '{provider.Id}' credentialName must start with 'WinHarness:'.");
+            }
+
             HashSet<string> modelIds = new(StringComparer.OrdinalIgnoreCase);
             foreach (ModelOptions model in provider.Models)
             {

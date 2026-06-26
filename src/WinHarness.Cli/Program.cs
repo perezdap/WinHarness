@@ -277,6 +277,7 @@ app.Add("mcp tools", async (CancellationToken cancellationToken) =>
 
 app.Add("credentials set", async (string targetName, string secret, CancellationToken cancellationToken) =>
 {
+    CliValidation.ValidateCredentialTargetName(targetName);
     ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
     await store.SetSecretAsync(targetName, secret, cancellationToken).ConfigureAwait(false);
     Console.WriteLine("Credential stored.");
@@ -284,6 +285,7 @@ app.Add("credentials set", async (string targetName, string secret, Cancellation
 
 app.Add("credentials get", async (string targetName, CancellationToken cancellationToken) =>
 {
+    CliValidation.ValidateCredentialTargetName(targetName);
     ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
     string? secret = await store.GetSecretAsync(targetName, cancellationToken).ConfigureAwait(false);
     if (secret is null)
@@ -308,6 +310,7 @@ app.Add("credentials list", async (CancellationToken cancellationToken) =>
 
 app.Add("credentials delete", async (string targetName, CancellationToken cancellationToken) =>
 {
+    CliValidation.ValidateCredentialTargetName(targetName);
     ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
     await store.DeleteSecretAsync(targetName, cancellationToken).ConfigureAwait(false);
     Console.WriteLine("Credential deleted.");
@@ -369,5 +372,16 @@ internal static class ConfigFileUpdater
         }
 
         await File.WriteAllBytesAsync(path, buffer.WrittenMemory.ToArray(), cancellationToken).ConfigureAwait(false);
+    }
+}
+
+internal static class CliValidation
+{
+    public static void ValidateCredentialTargetName(string targetName)
+    {
+        if (!targetName.StartsWith("WinHarness:", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Credential target names must start with 'WinHarness:'.");
+        }
     }
 }
