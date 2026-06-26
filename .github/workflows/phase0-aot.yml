@@ -77,3 +77,9 @@ jobs:
           & $exe.FullName version
           & $exe.FullName tools list
           & $exe.FullName tools call --name read_file --arguments-json '{"path":"README.md"}'
+          & $exe.FullName tools call --name write_file --arguments-json '{"path":"artifacts/tool-smoke.txt","content":"before","overwrite":true,"createDirectories":true}'
+          & $exe.FullName tools call --name edit_file --arguments-json '{"path":"artifacts/tool-smoke.txt","oldText":"before","newText":"after","expectedOccurrences":1}'
+          & $exe.FullName tools call --name read_file --arguments-json '{"path":"artifacts/tool-smoke.txt"}'
+          & $exe.FullName tools call --name glob --arguments-json '{"pattern":"*.md","maxResults":5}'
+          & $exe.FullName tools call --name grep --arguments-json '{"pattern":"WinHarness","filePattern":"README.md","maxResults":5}'
+          & $exe.FullName tools call --name run_command --arguments-json '{"command":"cmd.exe","arguments":["/c","echo cli-run-command"],"timeoutSeconds":10}'
