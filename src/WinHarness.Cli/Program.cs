@@ -4,6 +4,8 @@ using Microsoft.Extensions.Hosting;
 using Spectre.Console;
 using WinHarness;
 using WinHarness.Configuration;
+using WinHarness.Diagnostics;
+using WinHarness.Infrastructure;
 using WinHarness.Infrastructure.Configuration;
 using WinHarness.Mcp;
 using WinHarness.Platform;
@@ -17,6 +19,7 @@ HostApplicationBuilder hostBuilder = Host.CreateApplicationBuilder(args);
 hostBuilder.Configuration.AddWinHarnessConfiguration();
 hostBuilder.Services.AddWinHarnessOptions(hostBuilder.Configuration);
 hostBuilder.Services
+    .AddWinHarnessInfrastructure()
     .AddWinHarnessPlatform()
     .AddWinHarnessCore()
     .AddWinHarnessProviders()
@@ -52,6 +55,23 @@ app.Add("diagnostics aot", () =>
     table.AddRow("Configuration", Markup.Escape(WinHarnessConfiguration.GetConfigurationDirectory()));
 
     AnsiConsole.Write(table);
+});
+
+app.Add("diagnostics write", async (string message, CancellationToken cancellationToken) =>
+{
+    IDiagnosticSink sink = host.Services.GetRequiredService<IDiagnosticSink>();
+    await sink.WriteAsync(
+        new DiagnosticRecord(
+            DateTimeOffset.UtcNow,
+            "cli",
+            "manual",
+            message,
+            new Dictionary<string, string>
+            {
+                ["source"] = "winharness diagnostics write"
+            }),
+        cancellationToken).ConfigureAwait(false);
+    Console.WriteLine("Diagnostic record written.");
 });
 
 app.Add("config init", (bool overwrite = false) =>
