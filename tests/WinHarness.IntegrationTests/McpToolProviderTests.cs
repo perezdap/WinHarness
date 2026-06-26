@@ -74,6 +74,44 @@ public sealed class McpToolProviderTests
         StringAssert.Contains(result.Content, "hello mcp");
     }
 
+    [TestMethod]
+    public async Task NormalizesMcpToolErrors()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("The fake MCP executable path is validated on the Windows CI runner.");
+        }
+
+        string serverPath = GetAotSpikeExecutablePath();
+        if (!File.Exists(serverPath))
+        {
+            Assert.Inconclusive("The AOT spike executable was not built at the expected path.");
+        }
+
+        WinHarnessOptions options = new();
+        options.McpServers.Add(new McpServerOptions
+        {
+            Id = "fake",
+            Command = serverPath,
+            Enabled = true
+        });
+        options.McpServers[0].Arguments.Add("mcp-server");
+
+        await using McpClientManager manager = new();
+        McpToolProvider provider = new(options, manager);
+
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+        ITool tool = tools.Single(static candidate => candidate.Name == "fake.spike_fail");
+
+        ToolResult result = await tool.ExecuteAsync(
+            new ToolInvocation("fake.spike_fail", Json("""{"message":"expected failure"}""")),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual("mcp_tool_error", result.ErrorCode);
+        StringAssert.Contains(result.Content, "expected failure");
+    }
+
     private static string GetAotSpikeExecutablePath()
     {
         string repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));

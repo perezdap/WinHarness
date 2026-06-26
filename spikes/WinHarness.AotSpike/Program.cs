@@ -326,16 +326,30 @@ internal static class FakeMcpServer
         return string.Concat(
             "{\"jsonrpc\":\"2.0\",\"id\":",
             id.GetRawText(),
-            ",\"result\":{\"tools\":[{\"name\":\"spike_echo\",\"description\":\"A fake AOT spike MCP tool.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"]}}]}}");
+            ",\"result\":{\"tools\":[{\"name\":\"spike_echo\",\"description\":\"A fake AOT spike MCP tool.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"]}},{\"name\":\"spike_fail\",\"description\":\"A fake failing AOT spike MCP tool.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}}}}]}}");
     }
 
     private static string CreateToolCallResponse(JsonElement id, JsonElement request)
     {
-        string message = request.TryGetProperty("params", out JsonElement parameters) &&
-            parameters.TryGetProperty("arguments", out JsonElement arguments) &&
+        request.TryGetProperty("params", out JsonElement parameters);
+        string toolName = parameters.TryGetProperty("name", out JsonElement toolNameElement)
+            ? toolNameElement.GetString() ?? string.Empty
+            : string.Empty;
+        string message = parameters.TryGetProperty("arguments", out JsonElement arguments) &&
             arguments.TryGetProperty("message", out JsonElement messageElement)
                 ? messageElement.GetString() ?? string.Empty
                 : string.Empty;
+
+        if (string.Equals(toolName, "spike_fail", StringComparison.Ordinal))
+        {
+            string escapedError = JsonSerializer.Serialize("error: " + message, SpikeJsonSerializerContext.Default.String);
+            return string.Concat(
+                "{\"jsonrpc\":\"2.0\",\"id\":",
+                id.GetRawText(),
+                ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":",
+                escapedError,
+                "}],\"isError\":true}}");
+        }
 
         string escapedMessage = JsonSerializer.Serialize("echo: " + message, SpikeJsonSerializerContext.Default.String);
         return string.Concat(
