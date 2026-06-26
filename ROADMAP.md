@@ -21,3 +21,7 @@ Revisit when one of the following is true:
 ### Plugin provider implementation
 
 `FuturePluginToolProvider` remains an architectural extension point only. Runtime plugin loading is deferred because arbitrary plugin loading conflicts with the v0.1 Native AOT and single-executable constraints.
+
+### Full ConPTY screen-buffer pump
+
+The Windows platform layer defines the AOT-safe ConPTY interop boundary with `LibraryImport`. The default `run_command` path is captured process execution, which is the required agent-readable path. A full interactive ConPTY screen-buffer pump is deferred until the interactive terminal UI flow is implemented so it can be tested against a real TUI/REPL lifecycle instead of a synthetic process-only path.

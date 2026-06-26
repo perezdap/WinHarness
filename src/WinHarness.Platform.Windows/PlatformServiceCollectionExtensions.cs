@@ -13,6 +13,9 @@ public static class PlatformServiceCollectionExtensions
     public static IServiceCollection AddWinHarnessPlatform(this IServiceCollection services)
     {
         services.AddSingleton<ICredentialStore, NullCredentialStore>();
+        services.AddSingleton<IAnsiConsoleConfigurator, WindowsAnsiConsoleConfigurator>();
+        services.AddSingleton<ILongPathService, WindowsLongPathService>();
+        services.AddSingleton<ICommandExecutor, CapturedCommandExecutor>();
         return services;
     }
 }

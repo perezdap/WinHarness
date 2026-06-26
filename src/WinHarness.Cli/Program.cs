@@ -22,6 +22,7 @@ hostBuilder.Services
     .AddWinHarnessTools();
 
 using IHost host = hostBuilder.Build();
+host.Services.GetRequiredService<IAnsiConsoleConfigurator>().EnableAnsi();
 
 var app = ConsoleApp.Create();
 

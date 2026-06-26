@@ -80,5 +80,15 @@ public sealed class OpenAiCompatibleProviderFactoryTests
         {
             return ValueTask.FromResult<string?>("test-key");
         }
+
+        public ValueTask SetSecretAsync(string targetName, string secret, CancellationToken cancellationToken)
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask DeleteSecretAsync(string targetName, CancellationToken cancellationToken)
+        {
+            return ValueTask.CompletedTask;
+        }
     }
 }

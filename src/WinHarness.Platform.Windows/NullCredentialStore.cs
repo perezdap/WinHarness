@@ -10,4 +10,16 @@ public sealed class NullCredentialStore : ICredentialStore
     {
         return ValueTask.FromResult<string?>(null);
     }
+
+    /// <inheritdoc />
+    public ValueTask SetSecretAsync(string targetName, string secret, CancellationToken cancellationToken)
+    {
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public ValueTask DeleteSecretAsync(string targetName, CancellationToken cancellationToken)
+    {
+        return ValueTask.CompletedTask;
+    }
 }
