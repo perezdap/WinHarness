@@ -6,6 +6,7 @@ using System.Text.Json;
 using ConsoleAppFramework;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using WinHarness;
 using WinHarness.Cli.Rendering;
@@ -31,6 +32,9 @@ if (args is ["--version"] or ["-v"])
 
 HostApplicationBuilder hostBuilder = Host.CreateApplicationBuilder(args);
 hostBuilder.Configuration.AddWinHarnessConfiguration();
+hostBuilder.Logging.ClearProviders();
+hostBuilder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
+hostBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
 hostBuilder.Services.AddWinHarnessOptions(hostBuilder.Configuration);
 hostBuilder.Services
     .AddWinHarnessInfrastructure()
