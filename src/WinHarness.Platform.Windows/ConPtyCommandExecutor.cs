@@ -122,7 +122,7 @@ public static partial class ConPtyCommandExecutor
             pseudoConsole = IntPtr.Zero;
             string capturedOutput = await outputTask.ConfigureAwait(false);
 
-            return new CommandResult(checked((int)exitCode), capturedOutput, string.Empty, CommandExecutionMode.Interactive);
+            return new CommandResult(unchecked((int)exitCode), capturedOutput, string.Empty, CommandExecutionMode.Interactive);
         }
         finally
         {
