@@ -125,6 +125,39 @@ public sealed class BuiltinToolProvider : IToolProvider
                 ? value.GetBoolean()
                 : defaultValue;
         }
+
+        protected static async ValueTask AtomicWriteAllTextAsync(
+            string path,
+            string content,
+            Encoding encoding,
+            CancellationToken cancellationToken)
+        {
+            string directory = Path.GetDirectoryName(path)
+                ?? throw new InvalidOperationException("Path has no parent directory.");
+            string tempPath = Path.Combine(directory, "." + Path.GetFileName(path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+
+            await File.WriteAllTextAsync(tempPath, content, encoding, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Replace(tempPath, path, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(tempPath, path);
+                }
+            }
+            catch (PlatformNotSupportedException)
+            {
+                File.Move(tempPath, path, overwrite: true);
+            }
+            catch
+            {
+                File.Delete(tempPath);
+                throw;
+            }
+        }
     }
 
     private sealed class ReadFileTool : BuiltinTool
@@ -179,7 +212,7 @@ public sealed class BuiltinToolProvider : IToolProvider
                 return new ToolResult(false, "File exists and overwrite is false.", "file_exists");
             }
 
-            await File.WriteAllTextAsync(path, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            await AtomicWriteAllTextAsync(path, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
             return new ToolResult(true, $"Wrote {content.Length} characters.");
         }
     }
@@ -187,7 +220,7 @@ public sealed class BuiltinToolProvider : IToolProvider
     private sealed class EditFileTool : BuiltinTool
     {
         public EditFileTool(string workspaceRoot)
-            : base(workspaceRoot, "edit_file", "Replace exact text in a file.", """{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"expectedOccurrences":{"type":"integer"}},"required":["path","oldText","newText"]}""")
+            : base(workspaceRoot, "edit_file", "Replace exact text in a file.", """{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"},"expectedOccurrences":{"type":"integer"},"dryRun":{"type":"boolean"}},"required":["path","oldText","newText"]}""")
         {
         }
 
@@ -197,6 +230,7 @@ public sealed class BuiltinToolProvider : IToolProvider
             string oldText = RequireString(invocation.Arguments, "oldText");
             string newText = RequireString(invocation.Arguments, "newText");
             int expectedOccurrences = OptionalInt32(invocation.Arguments, "expectedOccurrences", 1);
+            bool dryRun = OptionalBoolean(invocation.Arguments, "dryRun", false);
 
             string content = await File.ReadAllTextAsync(path, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
             int occurrences = CountOccurrences(content, oldText);
@@ -206,7 +240,12 @@ public sealed class BuiltinToolProvider : IToolProvider
             }
 
             string updated = content.Replace(oldText, newText, StringComparison.Ordinal);
-            await File.WriteAllTextAsync(path, updated, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            if (dryRun)
+            {
+                return new ToolResult(true, $"Would replace {occurrences} occurrence(s). Updated length: {updated.Length} characters.");
+            }
+
+            await AtomicWriteAllTextAsync(path, updated, Utf8NoBom, cancellationToken).ConfigureAwait(false);
             return new ToolResult(true, $"Replaced {occurrences} occurrence(s).");
         }
 
@@ -377,7 +416,7 @@ public sealed class BuiltinToolProvider : IToolProvider
     private sealed class GrepTool : BuiltinTool
     {
         public GrepTool(string workspaceRoot)
-            : base(workspaceRoot, "grep", "Search text files.", """{"type":"object","properties":{"pattern":{"type":"string"},"filePattern":{"type":"string"},"maxResults":{"type":"integer"}},"required":["pattern"]}""")
+            : base(workspaceRoot, "grep", "Search text files.", """{"type":"object","properties":{"pattern":{"type":"string"},"filePattern":{"type":"string"},"maxResults":{"type":"integer"},"maxFileBytes":{"type":"integer"}},"required":["pattern"]}""")
         {
         }
 
@@ -388,6 +427,7 @@ public sealed class BuiltinToolProvider : IToolProvider
                 ? value.GetString() ?? "*"
                 : "*";
             int maxResults = OptionalInt32(invocation.Arguments, "maxResults", 100);
+            int maxFileBytes = OptionalInt32(invocation.Arguments, "maxFileBytes", 1024 * 1024);
 
             List<string> results = [];
             foreach (string file in Directory.EnumerateFiles(WorkspaceRoot, "*", SearchOption.AllDirectories))
@@ -395,6 +435,12 @@ public sealed class BuiltinToolProvider : IToolProvider
                 cancellationToken.ThrowIfCancellationRequested();
                 string relative = Path.GetRelativePath(WorkspaceRoot, file).Replace('\\', '/');
                 if (!FileSystemName.MatchesSimpleExpression(filePattern, relative, ignoreCase: true))
+                {
+                    continue;
+                }
+
+                FileInfo info = new(file);
+                if (info.Length > maxFileBytes)
                 {
                     continue;
                 }

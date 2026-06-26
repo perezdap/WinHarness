@@ -46,6 +46,36 @@ public sealed class BuiltinToolProviderTests
     }
 
     [TestMethod]
+    public async Task EditFileDryRunDoesNotChangeFile()
+    {
+        string root = CreateTempDirectory();
+        string path = Path.Combine(root, "notes.txt");
+        await File.WriteAllTextAsync(path, "before");
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "edit_file")
+            .ExecuteAsync(new ToolInvocation("edit_file", Json("""{"path":"notes.txt","oldText":"before","newText":"after","dryRun":true}""")), CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        Assert.AreEqual("before", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task GrepSkipsFilesOverMaxFileBytes()
+    {
+        string root = CreateTempDirectory();
+        await File.WriteAllTextAsync(Path.Combine(root, "large.txt"), "needle");
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "grep")
+            .ExecuteAsync(new ToolInvocation("grep", Json("""{"pattern":"needle","filePattern":"*.txt","maxFileBytes":1}""")), CancellationToken.None);
+
+        Assert.AreEqual(string.Empty, result.Content);
+    }
+
+    [TestMethod]
     public async Task RunCommandCapturesOutput()
     {
         string root = CreateTempDirectory();
