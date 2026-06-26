@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WinHarness.Conversation;
 using WinHarness.Diagnostics;
 using WinHarness.Providers;
 using WinHarness.Runtime;
@@ -22,7 +23,7 @@ public sealed class SingleAgentRuntimeTests
 
         List<AgentEvent> events = [];
         await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                           new AgentRunRequest("test-provider", "test-model", "prompt"),
+                           CreateRequest("prompt"),
                            CancellationToken.None))
         {
             events.Add(agentEvent);
@@ -33,6 +34,9 @@ public sealed class SingleAgentRuntimeTests
         Assert.AreEqual("hello ", events[0].Message);
         Assert.AreEqual("WinHarness", events[1].Message);
         Assert.AreEqual(AgentEventKind.Completed, events[2].Kind);
+        Assert.IsNotNull(events[2].AssistantMessage);
+        Assert.AreEqual(ConversationRole.Assistant, events[2].AssistantMessage!.Role);
+        Assert.AreEqual("hello WinHarness", events[2].AssistantMessage!.Content);
     }
 
     [TestMethod]
@@ -44,7 +48,7 @@ public sealed class SingleAgentRuntimeTests
         using CancellationTokenSource cancellation = new();
 
         IAsyncEnumerator<AgentEvent> enumerator = runtime.RunAsync(
-            new AgentRunRequest("test-provider", "test-model", "prompt"),
+            CreateRequest("prompt"),
             cancellation.Token).GetAsyncEnumerator(cancellation.Token);
 
         Assert.IsTrue(await enumerator.MoveNextAsync());
@@ -79,7 +83,7 @@ public sealed class SingleAgentRuntimeTests
 
         List<AgentEvent> events = [];
         await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                           new AgentRunRequest("test-provider", "test-model", "prompt"),
+                           CreateRequest("prompt"),
                            CancellationToken.None))
         {
             events.Add(agentEvent);
@@ -111,7 +115,7 @@ public sealed class SingleAgentRuntimeTests
             NullLogger<SingleAgentRuntime>.Instance);
 
         await foreach (AgentEvent _ in runtime.RunAsync(
-                           new AgentRunRequest("test-provider", "test-model", "prompt"),
+                           CreateRequest("prompt"),
                            CancellationToken.None))
         {
         }
@@ -135,7 +139,7 @@ public sealed class SingleAgentRuntimeTests
 
         List<AgentEvent> events = [];
         await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                           new AgentRunRequest("test-provider", "test-model", "prompt"),
+                           CreateRequest("prompt"),
                            CancellationToken.None))
         {
             events.Add(agentEvent);
@@ -146,6 +150,66 @@ public sealed class SingleAgentRuntimeTests
         Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "provider.failed"));
     }
 
+
+    [TestMethod]
+    public async Task SendsConversationMessagesToChatClient()
+    {
+        Conversation.Conversation conversation = new();
+        conversation.Add(new ConversationMessage(ConversationRole.System, "system instructions"));
+        conversation.Add(new ConversationMessage(ConversationRole.User, "remember my name"));
+        conversation.Add(new ConversationMessage(ConversationRole.Assistant, "ok"));
+        conversation.Add(new ConversationMessage(ConversationRole.User, "what is my name?"));
+
+        FakeProviderFactory providerFactory = new(["Dave"]);
+        SingleAgentRuntime runtime = new(providerFactory, NullLogger<SingleAgentRuntime>.Instance);
+
+        await foreach (AgentEvent _ in runtime.RunAsync(
+                           new AgentRunRequest("test-provider", "test-model", conversation),
+                           CancellationToken.None))
+        {
+        }
+
+        CollectionAssert.AreEqual(
+            new[] { ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User },
+            providerFactory.LastMessages.Select(static message => message.Role).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "system instructions", "remember my name", "ok", "what is my name?" },
+            providerFactory.LastMessages.Select(static message => message.Text).ToArray());
+    }
+
+    [TestMethod]
+    public async Task RejectsConversationThatDoesNotEndWithUserMessage()
+    {
+        Conversation.Conversation conversation = new();
+        conversation.Add(new ConversationMessage(ConversationRole.Assistant, "not a user turn"));
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory(["ignored"]),
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        InvalidOperationException? exception = null;
+        try
+        {
+            await foreach (AgentEvent _ in runtime.RunAsync(
+                               new AgentRunRequest("test-provider", "test-model", conversation),
+                               CancellationToken.None))
+            {
+            }
+        }
+        catch (InvalidOperationException caught)
+        {
+            exception = caught;
+        }
+
+        Assert.IsNotNull(exception);
+        StringAssert.Contains(exception.Message, "end with a user message");
+    }
+
+    private static AgentRunRequest CreateRequest(string prompt)
+    {
+        Conversation.Conversation conversation = new();
+        conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
+        return new AgentRunRequest("test-provider", "test-model", conversation);
+    }
 
     private sealed class FakeProviderFactory : IProviderFactory
     {
@@ -158,9 +222,11 @@ public sealed class SingleAgentRuntimeTests
             _failOnStream = failOnStream;
         }
 
+        public IReadOnlyList<ChatMessage> LastMessages { get; private set; } = [];
+
         public IChatProvider Create(string providerId, string modelId)
         {
-            return new FakeProvider(providerId, modelId, _updates, _failOnStream);
+            return new FakeProvider(providerId, modelId, _updates, _failOnStream, messages => LastMessages = messages);
         }
     }
 
@@ -168,13 +234,20 @@ public sealed class SingleAgentRuntimeTests
     {
         private readonly IReadOnlyList<string> _updates;
         private readonly bool _failOnStream;
+        private readonly Action<IReadOnlyList<ChatMessage>> _captureMessages;
 
-        public FakeProvider(string providerId, string modelId, IReadOnlyList<string> updates, bool failOnStream)
+        public FakeProvider(
+            string providerId,
+            string modelId,
+            IReadOnlyList<string> updates,
+            bool failOnStream,
+            Action<IReadOnlyList<ChatMessage>> captureMessages)
         {
             ProviderId = providerId;
             ModelId = modelId;
             _updates = updates;
             _failOnStream = failOnStream;
+            _captureMessages = captureMessages;
         }
 
         public string ProviderId { get; }
@@ -185,7 +258,7 @@ public sealed class SingleAgentRuntimeTests
 
         public IChatClient CreateChatClient()
         {
-            return new FakeChatClient(_updates, _failOnStream);
+            return new FakeChatClient(_updates, _failOnStream, _captureMessages);
         }
     }
 
@@ -193,11 +266,16 @@ public sealed class SingleAgentRuntimeTests
     {
         private readonly IReadOnlyList<string> _updates;
         private readonly bool _failOnStream;
+        private readonly Action<IReadOnlyList<ChatMessage>> _captureMessages;
 
-        public FakeChatClient(IReadOnlyList<string> updates, bool failOnStream)
+        public FakeChatClient(
+            IReadOnlyList<string> updates,
+            bool failOnStream,
+            Action<IReadOnlyList<ChatMessage>> captureMessages)
         {
             _updates = updates;
             _failOnStream = failOnStream;
+            _captureMessages = captureMessages;
         }
 
         public Task<ChatResponse> GetResponseAsync(
@@ -213,6 +291,8 @@ public sealed class SingleAgentRuntimeTests
             ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            _captureMessages(messages.ToList());
+
             if (_failOnStream)
             {
                 await Task.Yield();
