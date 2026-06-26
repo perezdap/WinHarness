@@ -64,7 +64,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness tools call --name read_file --arguments-json '{"path":"README.md"}'`
 - `winharness mcp list`
 - `winharness mcp tools`
-- `winharness credentials set|get|delete`
+- `winharness credentials set|get|list|delete`
 
 ## Configuration
 
