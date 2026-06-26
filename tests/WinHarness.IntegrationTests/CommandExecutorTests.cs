@@ -20,6 +20,35 @@ public sealed class CommandExecutorTests
     }
 
     [TestMethod]
+    public async Task CapturedExecutorKillsTimedOutProcess()
+    {
+        CapturedCommandExecutor executor = new();
+        CommandRequest request = OperatingSystem.IsWindows()
+            ? new CommandRequest("cmd.exe", ["/c", "ping 127.0.0.1 -n 6 >NUL"], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromMilliseconds(100))
+            : new CommandRequest("/bin/sh", ["-c", "sleep 5"], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromMilliseconds(100));
+
+        CommandResult result = await executor.ExecuteAsync(request, CancellationToken.None);
+
+        Assert.AreEqual(1, result.ExitCode);
+        StringAssert.Contains(result.StandardError, "Process timed out.");
+        Assert.AreEqual(CommandExecutionMode.Captured, result.Mode);
+    }
+
+    [TestMethod]
+    public async Task CapturedExecutorReturnsNonZeroExitCode()
+    {
+        CapturedCommandExecutor executor = new();
+        CommandRequest request = OperatingSystem.IsWindows()
+            ? new CommandRequest("cmd.exe", ["/c", "exit /b 7"], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromSeconds(10))
+            : new CommandRequest("/bin/sh", ["-c", "exit 7"], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromSeconds(10));
+
+        CommandResult result = await executor.ExecuteAsync(request, CancellationToken.None);
+
+        Assert.AreEqual(7, result.ExitCode);
+        Assert.AreEqual(CommandExecutionMode.Captured, result.Mode);
+    }
+
+    [TestMethod]
     public async Task InteractiveExecutorUsesConPtyOnWindows()
     {
         if (!OperatingSystem.IsWindows())
