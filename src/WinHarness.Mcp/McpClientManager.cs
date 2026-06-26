@@ -29,6 +29,9 @@ public sealed class McpClientManager : IMcpClientManager
             return existing;
         }
 
+        using CancellationTokenSource startupTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        startupTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, server.StartupTimeoutSeconds)));
+
         StdioClientTransport transport = new(new StdioClientTransportOptions
         {
             Name = server.Id,
@@ -39,7 +42,7 @@ public sealed class McpClientManager : IMcpClientManager
             ShutdownTimeout = TimeSpan.FromSeconds(2)
         });
 
-        McpClient client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken)
+        McpClient client = await McpClient.CreateAsync(transport, cancellationToken: startupTimeout.Token)
             .ConfigureAwait(false);
         _clients.Add(server.Id, client);
         return client;
