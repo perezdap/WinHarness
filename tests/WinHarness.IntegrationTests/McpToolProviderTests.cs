@@ -10,6 +10,34 @@ namespace WinHarness.IntegrationTests;
 public sealed class McpToolProviderTests
 {
     [TestMethod]
+    public async Task ReportsServerStartupFailure()
+    {
+        WinHarnessOptions options = new();
+        options.McpServers.Add(new McpServerOptions
+        {
+            Id = "missing",
+            Command = OperatingSystem.IsWindows() ? "missing-winharness-mcp-server.exe" : "/missing-winharness-mcp-server",
+            Enabled = true,
+            StartupTimeoutSeconds = 1
+        });
+
+        await using McpClientManager manager = new();
+        McpToolProvider provider = new(options, manager);
+
+        Exception? exception = null;
+        try
+        {
+            _ = await provider.ListToolsAsync(CancellationToken.None);
+        }
+        catch (Exception caught)
+        {
+            exception = caught;
+        }
+
+        Assert.IsNotNull(exception);
+    }
+
+    [TestMethod]
     public async Task DiscoversAndCallsStdioMcpTool()
     {
         if (!OperatingSystem.IsWindows())
