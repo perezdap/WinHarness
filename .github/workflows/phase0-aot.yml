@@ -53,6 +53,7 @@ jobs:
             throw "Published WinHarness executable was not found."
           }
           & $exe.FullName diagnostics aot
+          & $exe.FullName --version
           & $exe.FullName version
           & $exe.FullName tools list
           & $exe.FullName tools call --name read_file --arguments-json '{"path":"README.md"}'

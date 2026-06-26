@@ -17,6 +17,12 @@ using WinHarness.Tools;
 
 const string Version = "0.1.0";
 
+if (args is ["--version"] or ["-v"])
+{
+    Console.WriteLine(Version);
+    return;
+}
+
 HostApplicationBuilder hostBuilder = Host.CreateApplicationBuilder(args);
 hostBuilder.Configuration.AddWinHarnessConfiguration();
 hostBuilder.Services.AddWinHarnessOptions(hostBuilder.Configuration);
