@@ -74,7 +74,7 @@ internal static class MarkdownConsoleRenderer
     private static void WriteCodeFence(string language, IReadOnlyList<string> lines)
     {
         string code = string.Join(Environment.NewLine, lines.Select(line => HighlightCode(line, language)));
-        Panel panel = new(code)
+        Panel panel = new Panel(code)
             .Header(string.IsNullOrWhiteSpace(language) ? "code" : language)
             .Border(BoxBorder.Rounded);
         AnsiConsole.Write(panel);
