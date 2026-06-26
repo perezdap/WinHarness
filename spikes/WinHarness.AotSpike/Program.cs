@@ -131,7 +131,7 @@ internal static class AotSpikeRunner
         await using McpClient client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
-        IReadOnlyList<McpClientTool> tools = await client.ListToolsAsync(cancellationToken: cancellationToken)
+        IList<McpClientTool> tools = await client.ListToolsAsync(cancellationToken: cancellationToken)
             .ConfigureAwait(false);
 
         if (!tools.Any(static tool => tool.Name == "spike_echo"))
