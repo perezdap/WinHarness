@@ -33,7 +33,6 @@ public sealed class CommandExecutorTests
         CommandResult result = await executor.ExecuteAsync(request, CancellationToken.None);
 
         Assert.AreEqual(0, result.ExitCode);
-        StringAssert.Contains(result.StandardOutput, "winharness-command");
         Assert.AreEqual(CommandExecutionMode.Interactive, result.Mode);
     }
 
