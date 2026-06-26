@@ -1,8 +1,8 @@
-using System.Diagnostics;
 using System.IO.Enumeration;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using WinHarness.Platform;
 
 namespace WinHarness.Tools;
 
@@ -13,13 +13,22 @@ public sealed class BuiltinToolProvider : IToolProvider
 {
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
+    private readonly ICommandExecutor _commandExecutor;
     private readonly string _workspaceRoot;
 
     /// <summary>
     /// Creates a built-in tool provider rooted at the current directory.
     /// </summary>
     public BuiltinToolProvider()
-        : this(Environment.CurrentDirectory)
+        : this(Environment.CurrentDirectory, new LocalCapturedCommandExecutor())
+    {
+    }
+
+    /// <summary>
+    /// Creates a built-in tool provider rooted at the current directory.
+    /// </summary>
+    public BuiltinToolProvider(ICommandExecutor commandExecutor)
+        : this(Environment.CurrentDirectory, commandExecutor)
     {
     }
 
@@ -27,8 +36,17 @@ public sealed class BuiltinToolProvider : IToolProvider
     /// Creates a built-in tool provider.
     /// </summary>
     public BuiltinToolProvider(string workspaceRoot)
+        : this(workspaceRoot, new LocalCapturedCommandExecutor())
+    {
+    }
+
+    /// <summary>
+    /// Creates a built-in tool provider.
+    /// </summary>
+    public BuiltinToolProvider(string workspaceRoot, ICommandExecutor commandExecutor)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
+        _commandExecutor = commandExecutor;
     }
 
     /// <inheritdoc />
@@ -39,7 +57,7 @@ public sealed class BuiltinToolProvider : IToolProvider
             new ReadFileTool(_workspaceRoot),
             new WriteFileTool(_workspaceRoot),
             new EditFileTool(_workspaceRoot),
-            new RunCommandTool(_workspaceRoot),
+            new RunCommandTool(_workspaceRoot, _commandExecutor),
             new GlobTool(_workspaceRoot),
             new GrepTool(_workspaceRoot)
         ];
@@ -209,9 +227,12 @@ public sealed class BuiltinToolProvider : IToolProvider
 
     private sealed class RunCommandTool : BuiltinTool
     {
-        public RunCommandTool(string workspaceRoot)
+        private readonly ICommandExecutor _commandExecutor;
+
+        public RunCommandTool(string workspaceRoot, ICommandExecutor commandExecutor)
             : base(workspaceRoot, "run_command", "Run a command with captured output by default.", """{"type":"object","properties":{"command":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]}},"required":["command"]}""")
         {
+            _commandExecutor = commandExecutor;
         }
 
         public override async ValueTask<ToolResult> ExecuteAsync(ToolInvocation invocation, CancellationToken cancellationToken)
@@ -220,43 +241,68 @@ public sealed class BuiltinToolProvider : IToolProvider
                 ? modeElement.GetString() ?? "captured"
                 : "captured";
 
-            if (!string.Equals(mode, "captured", StringComparison.OrdinalIgnoreCase))
-            {
-                return new ToolResult(false, "Interactive command execution is implemented in the Windows platform phase.", "interactive_not_available");
-            }
+            CommandExecutionMode executionMode = string.Equals(mode, "interactive", StringComparison.OrdinalIgnoreCase)
+                ? CommandExecutionMode.Interactive
+                : CommandExecutionMode.Captured;
 
-            ProcessStartInfo startInfo = new()
-            {
-                FileName = RequireString(invocation.Arguments, "command"),
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                WorkingDirectory = invocation.Arguments.TryGetProperty("workingDirectory", out JsonElement workingDirectory) && workingDirectory.ValueKind == JsonValueKind.String
-                    ? ResolveWorkspacePath(invocation.Arguments, "workingDirectory")
-                    : WorkspaceRoot
-            };
-
+            List<string> commandArguments = [];
             if (invocation.Arguments.TryGetProperty("arguments", out JsonElement arguments) && arguments.ValueKind == JsonValueKind.Array)
             {
                 foreach (JsonElement argument in arguments.EnumerateArray())
                 {
-                    startInfo.ArgumentList.Add(argument.GetString() ?? string.Empty);
+                    commandArguments.Add(argument.GetString() ?? string.Empty);
                 }
             }
 
-            using Process process = Process.Start(startInfo)
+            CommandRequest request = new(
+                FileName: RequireString(invocation.Arguments, "command"),
+                Arguments: commandArguments,
+                WorkingDirectory: invocation.Arguments.TryGetProperty("workingDirectory", out JsonElement workingDirectory) && workingDirectory.ValueKind == JsonValueKind.String
+                    ? ResolveWorkspacePath(invocation.Arguments, "workingDirectory")
+                    : WorkspaceRoot,
+                Mode: executionMode,
+                Timeout: TimeSpan.FromSeconds(OptionalInt32(invocation.Arguments, "timeoutSeconds", 60)));
+
+            CommandResult result = await _commandExecutor.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
+            string content = string.Concat("mode: ", result.Mode, Environment.NewLine, "exit_code: ", result.ExitCode, Environment.NewLine, "stdout:", Environment.NewLine, result.StandardOutput, Environment.NewLine, "stderr:", Environment.NewLine, result.StandardError);
+            return new ToolResult(result.ExitCode == 0, content, result.ExitCode == 0 ? null : "nonzero_exit");
+        }
+    }
+
+    private sealed class LocalCapturedCommandExecutor : ICommandExecutor
+    {
+        public async ValueTask<CommandResult> ExecuteAsync(CommandRequest request, CancellationToken cancellationToken)
+        {
+            if (request.Mode == CommandExecutionMode.Interactive)
+            {
+                return new CommandResult(1, string.Empty, "Interactive command execution requires the Windows platform executor.", CommandExecutionMode.Interactive);
+            }
+
+            System.Diagnostics.ProcessStartInfo startInfo = new()
+            {
+                FileName = request.FileName,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = request.WorkingDirectory
+            };
+
+            foreach (string argument in request.Arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            using System.Diagnostics.Process process = System.Diagnostics.Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start process.");
 
-            int timeoutSeconds = OptionalInt32(invocation.Arguments, "timeoutSeconds", 60);
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            timeout.CancelAfter(request.Timeout);
 
             string stdout = await process.StandardOutput.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
             string stderr = await process.StandardError.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
             await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
 
-            string content = string.Concat("exit_code: ", process.ExitCode, Environment.NewLine, "stdout:", Environment.NewLine, stdout, Environment.NewLine, "stderr:", Environment.NewLine, stderr);
-            return new ToolResult(process.ExitCode == 0, content, process.ExitCode == 0 ? null : "nonzero_exit");
+            return new CommandResult(process.ExitCode, stdout, stderr, CommandExecutionMode.Captured);
         }
     }
 
