@@ -210,6 +210,12 @@ app.Add("providers list", () =>
 
 app.Add("providers use", async (string providerId, CancellationToken cancellationToken) =>
 {
+    WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    if (!options.Providers.Any(provider => string.Equals(provider.Id, providerId, StringComparison.OrdinalIgnoreCase)))
+    {
+        throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+    }
+
     await ConfigFileUpdater.SetRootStringPropertyAsync("defaultProvider", providerId, cancellationToken).ConfigureAwait(false);
     Console.WriteLine($"Default provider set to {providerId}.");
 });
@@ -233,6 +239,19 @@ app.Add("models list", (string providerId) =>
 
 app.Add("models use", async (string modelId, CancellationToken cancellationToken) =>
 {
+    WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
+        string.Equals(candidate.Id, options.DefaultProvider, StringComparison.OrdinalIgnoreCase));
+    if (provider is null)
+    {
+        throw new InvalidOperationException("Configure a default provider before selecting a model.");
+    }
+
+    if (!provider.Models.Any(model => string.Equals(model.Id, modelId, StringComparison.OrdinalIgnoreCase)))
+    {
+        throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{provider.Id}'.");
+    }
+
     await ConfigFileUpdater.SetRootStringPropertyAsync("defaultModel", modelId, cancellationToken).ConfigureAwait(false);
     Console.WriteLine($"Default model set to {modelId}.");
 });
