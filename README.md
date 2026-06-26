@@ -80,6 +80,110 @@ WinHarness credential target names must use the `WinHarness:` prefix, for exampl
 
 Example configuration files are in `samples/`.
 
+Create a starter configuration:
+
+```powershell
+winharness config init
+```
+
+The generated file configures a local OpenAI-compatible Ollama endpoint at `http://localhost:11434/v1`. Edit `%APPDATA%\WinHarness\config.json` to add hosted endpoints.
+
+## Provider setup
+
+OpenAI-compatible providers use the official `OpenAI` SDK plus `Microsoft.Extensions.AI.OpenAI` for the `IChatClient` adapter. Each configured model declares its own capabilities instead of relying on provider-wide hardcoding.
+
+Example hosted provider:
+
+```json
+{
+  "id": "openai-main",
+  "kind": "openai-compatible",
+  "baseUrl": "https://api.openai.com/v1",
+  "credentialName": "WinHarness:openai-main",
+  "models": [
+    {
+      "id": "gpt-primary",
+      "providerModelId": "gpt-4.1",
+      "capabilities": {
+        "streaming": true,
+        "toolCalling": true,
+        "vision": true,
+        "promptCaching": false,
+        "structuredOutput": true,
+        "reasoning": true
+      }
+    }
+  ]
+}
+```
+
+Store the API key:
+
+```powershell
+winharness credentials set --target-name WinHarness:openai-main --secret $env:OPENAI_API_KEY
+```
+
+Select defaults:
+
+```powershell
+winharness providers use --provider-id openai-main
+winharness models use --model-id gpt-primary
+```
+
+## MCP setup
+
+MCP servers are configured as stdio processes. WinHarness discovers tools with explicit client-side `tools/list` and calls them with `tools/call`; it does not use assembly scanning or attribute-based discovery in the AOT path.
+
+Example:
+
+```json
+{
+  "id": "filesystem",
+  "command": "filesystem-mcp-server.exe",
+  "arguments": ["--root", "C:\\src"],
+  "workingDirectory": null,
+  "environment": {},
+  "enabled": true,
+  "startupTimeoutSeconds": 30
+}
+```
+
+Inspect MCP tools:
+
+```powershell
+winharness mcp list
+winharness mcp tools
+```
+
+## Built-in tools
+
+Built-in tools are exposed through the same `ITool` registry as MCP tools:
+
+- `read_file`
+- `write_file`
+- `edit_file`
+- `run_command`
+- `glob`
+- `grep`
+
+`run_command` defaults to captured stdout/stderr for clean agent-readable output. Set `mode` to `interactive` only when a command needs a real terminal; that path uses the Windows ConPTY executor.
+
+Example:
+
+```powershell
+winharness tools call --name run_command --arguments-json '{"command":"dotnet","arguments":["--info"],"timeoutSeconds":30}'
+```
+
+## Diagnostics
+
+WinHarness writes structured local JSONL diagnostics under:
+
+```text
+%APPDATA%\WinHarness\logs
+```
+
+Diagnostics include provider calls, tool execution timing, failures, and selected command execution mode. No external telemetry is emitted.
+
 ## Architectural decisions
 
 ADRs are stored in `docs/adr/`.
