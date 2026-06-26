@@ -63,10 +63,20 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
                 UserName = "WinHarness"
             };
 
-            if (!CredWrite(ref credential, 0))
+            IntPtr credentialPtr = Marshal.AllocHGlobal(Marshal.SizeOf<NativeCredential>());
+            try
             {
-                int error = Marshal.GetLastPInvokeError();
-                throw new InvalidOperationException($"CredWrite failed for '{targetName}' with error {error}.");
+                Marshal.StructureToPtr(credential, credentialPtr, fDeleteOld: false);
+                if (!CredWrite(credentialPtr, 0))
+                {
+                    int error = Marshal.GetLastPInvokeError();
+                    throw new InvalidOperationException($"CredWrite failed for '{targetName}' with error {error}.");
+                }
+            }
+            finally
+            {
+                Marshal.DestroyStructure<NativeCredential>(credentialPtr);
+                Marshal.FreeHGlobal(credentialPtr);
             }
         }
         finally
@@ -109,7 +119,7 @@ public sealed partial class WindowsCredentialStore : ICredentialStore
 
     [LibraryImport("advapi32.dll", EntryPoint = "CredWriteW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool CredWrite(ref NativeCredential userCredential, uint flags);
+    private static partial bool CredWrite(IntPtr userCredential, uint flags);
 
     [LibraryImport("advapi32.dll", EntryPoint = "CredDeleteW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]
