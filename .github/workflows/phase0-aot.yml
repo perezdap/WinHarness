@@ -58,6 +58,9 @@ jobs:
           & $exe.FullName config init
           & $exe.FullName providers list
           & $exe.FullName models list --provider-id local-ollama
+          & $exe.FullName mcp list
+          & $exe.FullName mcp tools
+          & $exe.FullName credentials list
           & $exe.FullName --version
           & $exe.FullName version
           & $exe.FullName tools list
