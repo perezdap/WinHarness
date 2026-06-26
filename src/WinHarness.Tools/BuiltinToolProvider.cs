@@ -89,8 +89,12 @@ public sealed class BuiltinToolProvider : IToolProvider
         {
             string relativePath = RequireString(arguments, propertyName);
             string fullPath = Path.GetFullPath(Path.Combine(WorkspaceRoot, relativePath));
+            string relativeToWorkspace = Path.GetRelativePath(WorkspaceRoot, fullPath);
 
-            if (!fullPath.StartsWith(WorkspaceRoot, StringComparison.OrdinalIgnoreCase))
+            if (Path.IsPathFullyQualified(relativeToWorkspace) ||
+                relativeToWorkspace == ".." ||
+                relativeToWorkspace.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                relativeToWorkspace.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException($"Path '{relativePath}' escapes the workspace.");
             }

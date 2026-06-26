@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using WinHarness.Providers;
@@ -80,87 +79,10 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                     throw new InvalidOperationException($"Duplicate tool name '{tool.Name}'.");
                 }
 
-                tools.Add(new RuntimeToolFunction(tool));
+                tools.Add(new ToolAIFunctionAdapter(tool));
             }
         }
 
         return tools.Count == 0 ? null : new ChatOptions { Tools = tools };
-    }
-
-    private sealed class RuntimeToolFunction : AIFunction
-    {
-        private readonly ITool _tool;
-
-        public RuntimeToolFunction(ITool tool)
-        {
-            _tool = tool;
-        }
-
-        public override string Name => _tool.Name;
-
-        public override string Description => _tool.Description;
-
-        public override JsonElement JsonSchema => _tool.InputSchema;
-
-        protected override async ValueTask<object?> InvokeCoreAsync(
-            AIFunctionArguments arguments,
-            CancellationToken cancellationToken)
-        {
-            JsonElement jsonArguments = ConvertArguments(arguments);
-            ToolResult result = await _tool.ExecuteAsync(new ToolInvocation(_tool.Name, jsonArguments), cancellationToken)
-                .ConfigureAwait(false);
-
-            return result.Succeeded ? result.Content : $"Tool failed ({result.ErrorCode}): {result.Content}";
-        }
-
-        private static JsonElement ConvertArguments(AIFunctionArguments arguments)
-        {
-            using MemoryStream stream = new();
-            using (Utf8JsonWriter writer = new(stream))
-            {
-                writer.WriteStartObject();
-                foreach (KeyValuePair<string, object?> argument in arguments)
-                {
-                    writer.WritePropertyName(argument.Key);
-                    WriteValue(writer, argument.Value);
-                }
-
-                writer.WriteEndObject();
-            }
-
-            using JsonDocument document = JsonDocument.Parse(stream.ToArray());
-            return document.RootElement.Clone();
-        }
-
-        private static void WriteValue(Utf8JsonWriter writer, object? value)
-        {
-            switch (value)
-            {
-                case null:
-                    writer.WriteNullValue();
-                    break;
-                case string stringValue:
-                    writer.WriteStringValue(stringValue);
-                    break;
-                case bool boolValue:
-                    writer.WriteBooleanValue(boolValue);
-                    break;
-                case int intValue:
-                    writer.WriteNumberValue(intValue);
-                    break;
-                case long longValue:
-                    writer.WriteNumberValue(longValue);
-                    break;
-                case double doubleValue:
-                    writer.WriteNumberValue(doubleValue);
-                    break;
-                case JsonElement json:
-                    json.WriteTo(writer);
-                    break;
-                default:
-                    writer.WriteStringValue(value.ToString());
-                    break;
-            }
-        }
     }
 }

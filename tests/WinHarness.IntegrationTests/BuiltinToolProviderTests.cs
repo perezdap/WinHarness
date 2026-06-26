@@ -63,6 +63,36 @@ public sealed class BuiltinToolProviderTests
         StringAssert.Contains(result.Content, "hello");
     }
 
+    [TestMethod]
+    public async Task RejectsSiblingPathEscape()
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "WinHarnessTests", Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(parent, "root");
+        string sibling = Path.Combine(parent, "root-sibling");
+        Directory.CreateDirectory(root);
+        Directory.CreateDirectory(sibling);
+        await File.WriteAllTextAsync(Path.Combine(sibling, "secret.txt"), "secret");
+
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+        ITool read = tools.Single(static tool => tool.Name == "read_file");
+
+        InvalidOperationException? exception = null;
+        try
+        {
+            _ = await read.ExecuteAsync(
+                new ToolInvocation("read_file", Json("""{"path":"../root-sibling/secret.txt"}""")),
+                CancellationToken.None);
+        }
+        catch (InvalidOperationException caught)
+        {
+            exception = caught;
+        }
+
+        Assert.IsNotNull(exception);
+        StringAssert.Contains(exception!.Message, "escapes the workspace");
+    }
+
     private static JsonElement Json(string json)
     {
         using JsonDocument document = JsonDocument.Parse(json);
