@@ -36,7 +36,12 @@ jobs:
       - name: Run published Phase 0 spike
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path spikes/WinHarness.AotSpike/bin/Release/net10.0/win-x64/publish -Filter winharness-aot-spike.exe -Recurse | Select-Object -First 1
+          $publishDir = "spikes/WinHarness.AotSpike/bin/Release/net10.0/win-x64/publish"
+          $unexpectedDll = Get-ChildItem -Path $publishDir -Filter *.dll -Recurse | Select-Object -First 1
+          if ($unexpectedDll) {
+            throw "Native AOT spike publish produced a DLL: $($unexpectedDll.FullName)"
+          }
+          $exe = Get-ChildItem -Path $publishDir -Filter winharness-aot-spike.exe -Recurse | Select-Object -First 1
           if (-not $exe) {
             throw "Published spike executable was not found."
           }
@@ -48,7 +53,12 @@ jobs:
       - name: Run published WinHarness diagnostics
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path src/WinHarness.Cli/bin/Release/net10.0/win-x64/publish -Filter winharness.exe -Recurse | Select-Object -First 1
+          $publishDir = "src/WinHarness.Cli/bin/Release/net10.0/win-x64/publish"
+          $unexpectedDll = Get-ChildItem -Path $publishDir -Filter *.dll -Recurse | Select-Object -First 1
+          if ($unexpectedDll) {
+            throw "Native AOT CLI publish produced a DLL: $($unexpectedDll.FullName)"
+          }
+          $exe = Get-ChildItem -Path $publishDir -Filter winharness.exe -Recurse | Select-Object -First 1
           if (-not $exe) {
             throw "Published WinHarness executable was not found."
           }
