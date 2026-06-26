@@ -130,7 +130,7 @@ app.Add("config init", (bool overwrite = false) =>
     Console.WriteLine($"Wrote {path}");
 });
 
-app.Add("chat", async (string prompt, string? providerId = null, string? modelId = null, bool renderMarkdown = false, CancellationToken cancellationToken = default) =>
+app.Add("chat", async (string? prompt = null, string? providerId = null, string? modelId = null, bool renderMarkdown = false, CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
     string resolvedProviderId = providerId ?? options.DefaultProvider;
@@ -141,31 +141,20 @@ app.Add("chat", async (string prompt, string? providerId = null, string? modelId
         throw new InvalidOperationException("Configure defaultProvider/defaultModel or pass --provider-id and --model-id.");
     }
 
-    IAgentRuntime runtime = host.Services.GetRequiredService<IAgentRuntime>();
-    StringBuilder? markdownBuffer = renderMarkdown ? new StringBuilder() : null;
-    await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                       new AgentRunRequest(resolvedProviderId, resolvedModelId, prompt),
-                       cancellationToken).ConfigureAwait(false))
+    if (string.IsNullOrWhiteSpace(prompt))
     {
-        if (agentEvent.Kind == AgentEventKind.AssistantDelta)
-        {
-            if (markdownBuffer is null)
-            {
-                Console.Write(agentEvent.Message);
-            }
-            else
-            {
-                markdownBuffer.Append(agentEvent.Message);
-            }
-        }
+        await ChatRepl.RunAsync(host.Services, resolvedProviderId, resolvedModelId, renderMarkdown, cancellationToken)
+            .ConfigureAwait(false);
+        return;
     }
 
-    if (markdownBuffer is not null)
-    {
-        MarkdownConsoleRenderer.Write(markdownBuffer.ToString());
-    }
-
-    Console.WriteLine();
+    await ChatRepl.RunTurnAsync(
+        host.Services,
+        resolvedProviderId,
+        resolvedModelId,
+        prompt,
+        renderMarkdown,
+        cancellationToken).ConfigureAwait(false);
 });
 
 app.Add("tools list", async (CancellationToken cancellationToken) =>
@@ -383,5 +372,95 @@ internal static class CliValidation
         {
             throw new InvalidOperationException("Credential target names must start with 'WinHarness:'.");
         }
+    }
+}
+
+internal static class ChatRepl
+{
+    public static async ValueTask RunAsync(
+        IServiceProvider services,
+        string providerId,
+        string modelId,
+        bool renderMarkdown,
+        CancellationToken cancellationToken)
+    {
+        string currentProviderId = providerId;
+        string currentModelId = modelId;
+
+        AnsiConsole.MarkupLine("[dim]Enter /exit to quit, /provider <id> to switch provider, /model <id> to switch model.[/]");
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            Console.Write("winharness> ");
+            string? input = Console.ReadLine();
+            if (input is null || string.Equals(input, "/exit", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (input.StartsWith("/provider ", StringComparison.OrdinalIgnoreCase))
+            {
+                currentProviderId = input["/provider ".Length..].Trim();
+                AnsiConsole.MarkupLine("[dim]Provider: " + Markup.Escape(currentProviderId) + "[/]");
+                continue;
+            }
+
+            if (input.StartsWith("/model ", StringComparison.OrdinalIgnoreCase))
+            {
+                currentModelId = input["/model ".Length..].Trim();
+                AnsiConsole.MarkupLine("[dim]Model: " + Markup.Escape(currentModelId) + "[/]");
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                continue;
+            }
+
+            await RunTurnAsync(
+                services,
+                currentProviderId,
+                currentModelId,
+                input,
+                renderMarkdown,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public static async ValueTask RunTurnAsync(
+        IServiceProvider services,
+        string providerId,
+        string modelId,
+        string prompt,
+        bool renderMarkdown,
+        CancellationToken cancellationToken)
+    {
+        IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
+        StringBuilder? markdownBuffer = renderMarkdown ? new StringBuilder() : null;
+
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           new AgentRunRequest(providerId, modelId, prompt),
+                           cancellationToken).ConfigureAwait(false))
+        {
+            if (agentEvent.Kind != AgentEventKind.AssistantDelta)
+            {
+                continue;
+            }
+
+            if (markdownBuffer is null)
+            {
+                Console.Write(agentEvent.Message);
+            }
+            else
+            {
+                markdownBuffer.Append(agentEvent.Message);
+            }
+        }
+
+        if (markdownBuffer is not null)
+        {
+            MarkdownConsoleRenderer.Write(markdownBuffer.ToString());
+        }
+
+        Console.WriteLine();
     }
 }
