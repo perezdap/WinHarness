@@ -45,6 +45,24 @@ public sealed class BuiltinToolProviderTests
         StringAssert.Contains(grepResult.Content, "namespace WinHarness;");
     }
 
+    [TestMethod]
+    public async Task RunCommandCapturesOutput()
+    {
+        string root = CreateTempDirectory();
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        string json = OperatingSystem.IsWindows()
+            ? """{"command":"cmd.exe","arguments":["/c","echo hello"],"timeoutSeconds":10}"""
+            : """{"command":"/bin/sh","arguments":["-c","echo hello"],"timeoutSeconds":10}""";
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "run_command")
+            .ExecuteAsync(new ToolInvocation("run_command", Json(json)), CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        StringAssert.Contains(result.Content, "hello");
+    }
+
     private static JsonElement Json(string json)
     {
         using JsonDocument document = JsonDocument.Parse(json);

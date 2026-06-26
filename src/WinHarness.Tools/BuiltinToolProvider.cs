@@ -316,6 +316,11 @@ public sealed class BuiltinToolProvider : IToolProvider
                     continue;
                 }
 
+                if (await IsBinaryFileAsync(file, cancellationToken).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
                 string[] lines = await File.ReadAllLinesAsync(file, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
                 for (int index = 0; index < lines.Length; index++)
                 {
@@ -331,6 +336,14 @@ public sealed class BuiltinToolProvider : IToolProvider
             }
 
             return new ToolResult(true, string.Join(Environment.NewLine, results));
+        }
+
+        private static async ValueTask<bool> IsBinaryFileAsync(string file, CancellationToken cancellationToken)
+        {
+            byte[] buffer = new byte[1024];
+            await using FileStream stream = File.OpenRead(file);
+            int bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            return buffer.AsSpan(0, bytesRead).Contains((byte)0);
         }
     }
 }
