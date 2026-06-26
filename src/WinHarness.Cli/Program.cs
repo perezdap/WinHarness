@@ -447,6 +447,12 @@ internal static class ChatRepl
                 continue;
             }
 
+            if (agentEvent.Kind == AgentEventKind.Failed)
+            {
+                AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
+                continue;
+            }
+
             if (agentEvent.Kind != AgentEventKind.AssistantDelta)
             {
                 continue;
