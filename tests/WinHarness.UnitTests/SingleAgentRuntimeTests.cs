@@ -1,9 +1,11 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WinHarness.Providers;
 using WinHarness.Runtime;
+using WinHarness.Tools;
 
 namespace WinHarness.UnitTests;
 
@@ -62,6 +64,25 @@ public sealed class SingleAgentRuntimeTests
         }
 
         Assert.IsNotNull(exception);
+    }
+
+    [TestMethod]
+    public async Task PassesToolsToChatClient()
+    {
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory([]),
+            [new FakeToolProvider()],
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        List<AgentEvent> events = [];
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           new AgentRunRequest("test-provider", "test-model", "prompt"),
+                           CancellationToken.None))
+        {
+            events.Add(agentEvent);
+        }
+
+        Assert.AreEqual("tool says pong", events[0].Message);
     }
 
     private sealed class FakeProviderFactory : IProviderFactory
@@ -124,6 +145,16 @@ public sealed class SingleAgentRuntimeTests
             ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            AIFunction? function = options?.Tools?.OfType<AIFunction>().FirstOrDefault();
+            if (function is not null)
+            {
+                object? result = await function.InvokeAsync(
+                    new AIFunctionArguments { ["message"] = "ping" },
+                    cancellationToken);
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "tool says " + result);
+                yield break;
+            }
+
             foreach (string update in _updates)
             {
                 await Task.Yield();
@@ -139,6 +170,33 @@ public sealed class SingleAgentRuntimeTests
 
         public void Dispose()
         {
+        }
+    }
+
+    private sealed class FakeToolProvider : IToolProvider
+    {
+        private static readonly IReadOnlyList<ITool> Tools = [new FakeTool()];
+
+        public ValueTask<IReadOnlyList<ITool>> ListToolsAsync(CancellationToken cancellationToken)
+        {
+            return ValueTask.FromResult(Tools);
+        }
+    }
+
+    private sealed class FakeTool : ITool
+    {
+        private static readonly JsonElement Schema = JsonDocument.Parse("""{"type":"object","properties":{"message":{"type":"string"}}}""").RootElement.Clone();
+
+        public string Name => "fake_tool";
+
+        public string Description => "Fake runtime tool.";
+
+        public JsonElement InputSchema => Schema;
+
+        public ValueTask<ToolResult> ExecuteAsync(ToolInvocation invocation, CancellationToken cancellationToken)
+        {
+            Assert.AreEqual("ping", invocation.Arguments.GetProperty("message").GetString());
+            return ValueTask.FromResult(new ToolResult(true, "pong"));
         }
     }
 }
