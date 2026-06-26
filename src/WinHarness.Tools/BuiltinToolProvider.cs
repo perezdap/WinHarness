@@ -1,4 +1,5 @@
 using System.IO.Enumeration;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -309,7 +310,15 @@ public sealed class BuiltinToolProvider : IToolProvider
             CommandResult result = await _commandExecutor.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
             string content = string.Concat("mode: ", result.Mode, Environment.NewLine, "exit_code: ", result.ExitCode, Environment.NewLine, "stdout:", Environment.NewLine, result.StandardOutput, Environment.NewLine, "stderr:", Environment.NewLine, result.StandardError);
             content = Truncate(content, OptionalInt32(invocation.Arguments, "maxOutputBytes", 128 * 1024));
-            return new ToolResult(result.ExitCode == 0, content, result.ExitCode == 0 ? null : "nonzero_exit");
+            return new ToolResult(
+                result.ExitCode == 0,
+                content,
+                result.ExitCode == 0 ? null : "nonzero_exit",
+                new Dictionary<string, string>
+                {
+                    ["command.mode"] = result.Mode.ToString(),
+                    ["command.exit_code"] = result.ExitCode.ToString(CultureInfo.InvariantCulture)
+                });
         }
 
         private static string Truncate(string content, int maxOutputBytes)

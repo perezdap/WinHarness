@@ -96,6 +96,8 @@ public sealed class SingleAgentRuntimeTests
             agentEvent.Message == "tool says pong"));
         Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "provider.completed"));
         Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "tool.completed"));
+        DiagnosticRecord toolRecord = diagnostics.Records.Single(static record => record.EventName == "tool.completed");
+        Assert.AreEqual("value", toolRecord.Properties["custom.metadata"]);
     }
 
     [TestMethod]
@@ -277,7 +279,10 @@ public sealed class SingleAgentRuntimeTests
         public ValueTask<ToolResult> ExecuteAsync(ToolInvocation invocation, CancellationToken cancellationToken)
         {
             Assert.AreEqual("ping", invocation.Arguments.GetProperty("message").GetString());
-            return ValueTask.FromResult(new ToolResult(true, "pong"));
+            return ValueTask.FromResult(new ToolResult(
+                true,
+                "pong",
+                Metadata: new Dictionary<string, string> { ["custom.metadata"] = "value" }));
         }
     }
 

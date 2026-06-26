@@ -78,13 +78,15 @@ public sealed class ToolAIFunctionAdapter : AIFunction
                     "tool",
                     result.Succeeded ? "tool.completed" : "tool.failed",
                     _tool.Name,
-                    new Dictionary<string, string>
-                    {
-                        ["tool.name"] = _tool.Name,
-                        ["tool.duration_ms"] = stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture),
-                        ["tool.succeeded"] = result.Succeeded.ToString(CultureInfo.InvariantCulture),
-                        ["tool.error_code"] = result.ErrorCode ?? string.Empty
-                    }),
+                    MergeMetadata(
+                        new Dictionary<string, string>
+                        {
+                            ["tool.name"] = _tool.Name,
+                            ["tool.duration_ms"] = stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture),
+                            ["tool.succeeded"] = result.Succeeded.ToString(CultureInfo.InvariantCulture),
+                            ["tool.error_code"] = result.ErrorCode ?? string.Empty
+                        },
+                        result.Metadata)),
                 cancellationToken).ConfigureAwait(false);
 
             _activitySink.ToolCompleted(_tool.Name, result, stopwatch.Elapsed);
@@ -166,6 +168,23 @@ public sealed class ToolAIFunctionAdapter : AIFunction
                 writer.WriteStringValue(value.ToString());
                 break;
         }
+    }
+
+    private static Dictionary<string, string> MergeMetadata(
+        Dictionary<string, string> properties,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (metadata is null)
+        {
+            return properties;
+        }
+
+        foreach (KeyValuePair<string, string> pair in metadata)
+        {
+            properties[pair.Key] = pair.Value;
+        }
+
+        return properties;
     }
 
     private sealed class NullDiagnosticSink : IDiagnosticSink

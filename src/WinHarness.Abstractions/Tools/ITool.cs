@@ -47,4 +47,8 @@ public sealed record ToolInvocation(string ToolName, JsonElement Arguments);
 /// <summary>
 /// Tool execution result.
 /// </summary>
-public sealed record ToolResult(bool Succeeded, string Content, string? ErrorCode = null);
+public sealed record ToolResult(
+    bool Succeeded,
+    string Content,
+    string? ErrorCode = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
