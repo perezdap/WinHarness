@@ -21,16 +21,19 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Restore
-        run: dotnet restore spikes/WinHarness.AotSpike/WinHarness.AotSpike.csproj
+      - name: Restore solution
+        run: dotnet restore WinHarness.sln
 
-      - name: Build
-        run: dotnet build spikes/WinHarness.AotSpike/WinHarness.AotSpike.csproj --configuration Release --no-restore
+      - name: Build solution
+        run: dotnet build WinHarness.sln --configuration Release --no-restore
 
-      - name: Publish Native AOT
+      - name: Test
+        run: dotnet test WinHarness.sln --configuration Release --no-build
+
+      - name: Publish Phase 0 Native AOT spike
         run: dotnet publish spikes/WinHarness.AotSpike/WinHarness.AotSpike.csproj --configuration Release --runtime win-x64 --no-build /p:PublishAot=true
 
-      - name: Run published spike
+      - name: Run published Phase 0 spike
         shell: pwsh
         run: |
           $exe = Get-ChildItem -Path spikes/WinHarness.AotSpike/bin/Release/net10.0/win-x64/publish -Filter winharness-aot-spike.exe -Recurse | Select-Object -First 1
@@ -38,3 +41,15 @@ jobs:
             throw "Published spike executable was not found."
           }
           & $exe.FullName
+
+      - name: Publish WinHarness CLI Native AOT
+        run: dotnet publish src/WinHarness.Cli/WinHarness.Cli.csproj --configuration Release --runtime win-x64 --no-build /p:PublishAot=true
+
+      - name: Run published WinHarness diagnostics
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path src/WinHarness.Cli/bin/Release/net10.0/win-x64/publish -Filter winharness.exe -Recurse | Select-Object -First 1
+          if (-not $exe) {
+            throw "Published WinHarness executable was not found."
+          }
+          & $exe.FullName diagnostics aot
