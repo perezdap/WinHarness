@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using WinHarness.Platform;
 
 namespace WinHarness.Tools;
 
@@ -12,7 +13,9 @@ public static class ToolServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddWinHarnessTools(this IServiceCollection services)
     {
-        services.AddSingleton<BuiltinToolProvider>();
+        services.AddSingleton(static provider => new BuiltinToolProvider(
+            Environment.CurrentDirectory,
+            provider.GetRequiredService<ICommandExecutor>()));
         services.AddSingleton<IToolProvider>(static provider => provider.GetRequiredService<BuiltinToolProvider>());
         services.AddSingleton<ToolRegistry>();
         return services;
