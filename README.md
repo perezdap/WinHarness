@@ -75,6 +75,7 @@ Runtime configuration will live under:
 ```
 
 API keys must be stored in Windows Credential Manager, not configuration files.
+WinHarness credential target names must use the `WinHarness:` prefix, for example `WinHarness:openai-main`.
 
 Example configuration files are in `samples/`.
 
