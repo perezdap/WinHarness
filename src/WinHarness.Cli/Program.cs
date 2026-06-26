@@ -13,6 +13,7 @@ const string Version = "0.1.0";
 
 HostApplicationBuilder hostBuilder = Host.CreateApplicationBuilder(args);
 hostBuilder.Configuration.AddWinHarnessConfiguration();
+hostBuilder.Services.AddWinHarnessOptions(hostBuilder.Configuration);
 hostBuilder.Services
     .AddWinHarnessPlatform()
     .AddWinHarnessCore()
