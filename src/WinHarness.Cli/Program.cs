@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Spectre.Console;
 using WinHarness;
+using WinHarness.Configuration;
 using WinHarness.Infrastructure.Configuration;
 using WinHarness.Mcp;
 using WinHarness.Platform;
@@ -63,6 +64,46 @@ app.Add("tools list", async (CancellationToken cancellationToken) =>
             Console.WriteLine($"{tool.Name}\t{tool.Description}");
         }
     }
+});
+
+app.Add("providers list", () =>
+{
+    WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    foreach (ProviderOptions provider in options.Providers)
+    {
+        Console.WriteLine($"{provider.Id}\t{provider.Kind}\t{provider.BaseUrl}");
+    }
+});
+
+app.Add("models list", (string providerId) =>
+{
+    WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
+        string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
+
+    if (provider is null)
+    {
+        throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+    }
+
+    foreach (ModelOptions model in provider.Models)
+    {
+        Console.WriteLine($"{model.Id}\t{model.ProviderModelId}");
+    }
+});
+
+app.Add("credentials set", async (string targetName, string secret, CancellationToken cancellationToken) =>
+{
+    ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
+    await store.SetSecretAsync(targetName, secret, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine("Credential stored.");
+});
+
+app.Add("credentials delete", async (string targetName, CancellationToken cancellationToken) =>
+{
+    ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
+    await store.DeleteSecretAsync(targetName, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine("Credential deleted.");
 });
 
 await app.RunAsync(args).ConfigureAwait(false);
