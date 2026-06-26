@@ -40,6 +40,32 @@ dotnet publish .\spikes\WinHarness.AotSpike\WinHarness.AotSpike.csproj -c Releas
 .\spikes\WinHarness.AotSpike\bin\Release\net10.0\win-x64\publish\winharness-aot-spike.exe
 ```
 
+## CLI smoke commands
+
+```powershell
+dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 --no-build /p:PublishAot=true
+.\src\WinHarness.Cli\bin\Release\net10.0\win-x64\publish\winharness.exe diagnostics aot
+.\src\WinHarness.Cli\bin\Release\net10.0\win-x64\publish\winharness.exe tools list
+.\src\WinHarness.Cli\bin\Release\net10.0\win-x64\publish\winharness.exe tools call --name read_file --arguments-json '{"path":"README.md"}'
+```
+
+## CLI commands
+
+- `winharness version`
+- `winharness diagnostics aot`
+- `winharness diagnostics write --message "..."`
+- `winharness config init`
+- `winharness chat --prompt "..."`
+- `winharness providers list`
+- `winharness providers use --provider-id local-ollama`
+- `winharness models list --provider-id local-ollama`
+- `winharness models use --model-id local-coder`
+- `winharness tools list`
+- `winharness tools call --name read_file --arguments-json '{"path":"README.md"}'`
+- `winharness mcp list`
+- `winharness mcp tools`
+- `winharness credentials set|get|delete`
+
 ## Configuration
 
 Runtime configuration will live under:
