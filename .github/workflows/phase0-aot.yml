@@ -1,0 +1,40 @@
+name: Phase 0 Native AOT
+
+on:
+  push:
+    branches:
+      - main
+      - 'cursor/**'
+  pull_request:
+
+jobs:
+  aot-spike:
+    name: AOT spike
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore spikes/WinHarness.AotSpike/WinHarness.AotSpike.csproj
+
+      - name: Build
+        run: dotnet build spikes/WinHarness.AotSpike/WinHarness.AotSpike.csproj --configuration Release --no-restore
+
+      - name: Publish Native AOT
+        run: dotnet publish spikes/WinHarness.AotSpike/WinHarness.AotSpike.csproj --configuration Release --runtime win-x64 --no-build /p:PublishAot=true
+
+      - name: Run published spike
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path spikes/WinHarness.AotSpike/bin/Release/net10.0/win-x64/publish -Filter winharness-aot-spike.exe -Recurse | Select-Object -First 1
+          if (-not $exe) {
+            throw "Published spike executable was not found."
+          }
+          & $exe.FullName

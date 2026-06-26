@@ -1,0 +1,47 @@
+{
+  "defaultProvider": "openai-main",
+  "defaultModel": "gpt-primary",
+  "providers": [
+    {
+      "id": "openai-main",
+      "kind": "openai-compatible",
+      "baseUrl": "https://api.openai.com/v1",
+      "credentialName": "WinHarness:openai-main",
+      "models": [
+        {
+          "id": "gpt-primary",
+          "providerModelId": "gpt-4.1",
+          "capabilities": {
+            "streaming": true,
+            "toolCalling": true,
+            "vision": true,
+            "promptCaching": false,
+            "structuredOutput": true,
+            "reasoning": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "local-ollama",
+      "kind": "openai-compatible",
+      "baseUrl": "http://localhost:11434/v1",
+      "credentialName": null,
+      "models": [
+        {
+          "id": "local-coder",
+          "providerModelId": "qwen2.5-coder:latest",
+          "capabilities": {
+            "streaming": true,
+            "toolCalling": false,
+            "vision": false,
+            "promptCaching": false,
+            "structuredOutput": false,
+            "reasoning": false
+          }
+        }
+      ]
+    }
+  ],
+  "mcpServers": []
+}
