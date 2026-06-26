@@ -1,10 +1,12 @@
 using System.Buffers;
+using System.Text;
 using System.Text.Json;
 using ConsoleAppFramework;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Spectre.Console;
 using WinHarness;
+using WinHarness.Cli.Rendering;
 using WinHarness.Configuration;
 using WinHarness.Diagnostics;
 using WinHarness.Infrastructure;
@@ -128,7 +130,7 @@ app.Add("config init", (bool overwrite = false) =>
     Console.WriteLine($"Wrote {path}");
 });
 
-app.Add("chat", async (string prompt, string? providerId = null, string? modelId = null, CancellationToken cancellationToken = default) =>
+app.Add("chat", async (string prompt, string? providerId = null, string? modelId = null, bool renderMarkdown = false, CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
     string resolvedProviderId = providerId ?? options.DefaultProvider;
@@ -140,14 +142,27 @@ app.Add("chat", async (string prompt, string? providerId = null, string? modelId
     }
 
     IAgentRuntime runtime = host.Services.GetRequiredService<IAgentRuntime>();
+    StringBuilder? markdownBuffer = renderMarkdown ? new StringBuilder() : null;
     await foreach (AgentEvent agentEvent in runtime.RunAsync(
                        new AgentRunRequest(resolvedProviderId, resolvedModelId, prompt),
                        cancellationToken).ConfigureAwait(false))
     {
         if (agentEvent.Kind == AgentEventKind.AssistantDelta)
         {
-            Console.Write(agentEvent.Message);
+            if (markdownBuffer is null)
+            {
+                Console.Write(agentEvent.Message);
+            }
+            else
+            {
+                markdownBuffer.Append(agentEvent.Message);
+            }
         }
+    }
+
+    if (markdownBuffer is not null)
+    {
+        MarkdownConsoleRenderer.Write(markdownBuffer.ToString());
     }
 
     Console.WriteLine();
