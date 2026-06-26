@@ -11,6 +11,8 @@ namespace WinHarness.Tools;
 /// </summary>
 public sealed class BuiltinToolProvider : IToolProvider
 {
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
     private readonly string _workspaceRoot;
 
     /// <summary>
@@ -155,7 +157,7 @@ public sealed class BuiltinToolProvider : IToolProvider
                 return new ToolResult(false, "File exists and overwrite is false.", "file_exists");
             }
 
-            await File.WriteAllTextAsync(path, content, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(path, content, Utf8NoBom, cancellationToken).ConfigureAwait(false);
             return new ToolResult(true, $"Wrote {content.Length} characters.");
         }
     }
@@ -182,7 +184,7 @@ public sealed class BuiltinToolProvider : IToolProvider
             }
 
             string updated = content.Replace(oldText, newText, StringComparison.Ordinal);
-            await File.WriteAllTextAsync(path, updated, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(path, updated, Utf8NoBom, cancellationToken).ConfigureAwait(false);
             return new ToolResult(true, $"Replaced {occurrences} occurrence(s).");
         }
 
