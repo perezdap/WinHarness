@@ -10,6 +10,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 using OpenAI;
 using OpenAI.Chat;
 using Spectre.Console;
@@ -39,7 +40,7 @@ internal static class AotSpikeRunner
         ExerciseSpectreConsole(options);
 
         await ExerciseOpenAiCompatibleStreamingAsync(cancellationToken).ConfigureAwait(false);
-        await ExerciseMcpToolsListAsync(cancellationToken).ConfigureAwait(false);
+        await ExerciseMcpToolsAsync(cancellationToken).ConfigureAwait(false);
 
         AnsiConsole.MarkupLine("[green]WinHarness AOT spike completed successfully.[/]");
     }
@@ -116,7 +117,7 @@ internal static class AotSpikeRunner
         }
     }
 
-    private static async Task ExerciseMcpToolsListAsync(CancellationToken cancellationToken)
+    private static async Task ExerciseMcpToolsAsync(CancellationToken cancellationToken)
     {
         string executablePath = Environment.ProcessPath
             ?? throw new InvalidOperationException("Environment.ProcessPath is unavailable.");
@@ -138,6 +139,19 @@ internal static class AotSpikeRunner
         if (!tools.Any(static tool => tool.Name == "spike_echo"))
         {
             throw new InvalidOperationException("MCP tools/list did not return the fake spike_echo tool.");
+        }
+
+        CallToolResult result = await client.CallToolAsync(
+            "spike_echo",
+            new Dictionary<string, object?> { ["message"] = "Hello MCP!" },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        string text = string.Join(
+            Environment.NewLine,
+            result.Content.OfType<TextContentBlock>().Select(static block => block.Text));
+        if (result.IsError is true || !text.Contains("Hello MCP!", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("MCP tools/call did not return the expected echo result.");
         }
     }
 }
@@ -290,6 +304,7 @@ internal static class FakeMcpServer
             {
                 "initialize" => CreateInitializeResponse(id.Value),
                 "tools/list" => CreateToolsListResponse(id.Value),
+                "tools/call" => CreateToolCallResponse(id.Value, root),
                 _ => CreateEmptyResultResponse(id.Value)
             };
 
@@ -312,6 +327,23 @@ internal static class FakeMcpServer
             "{\"jsonrpc\":\"2.0\",\"id\":",
             id.GetRawText(),
             ",\"result\":{\"tools\":[{\"name\":\"spike_echo\",\"description\":\"A fake AOT spike MCP tool.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\"}},\"required\":[\"message\"]}}]}}");
+    }
+
+    private static string CreateToolCallResponse(JsonElement id, JsonElement request)
+    {
+        string message = request.TryGetProperty("params", out JsonElement parameters) &&
+            parameters.TryGetProperty("arguments", out JsonElement arguments) &&
+            arguments.TryGetProperty("message", out JsonElement messageElement)
+                ? messageElement.GetString() ?? string.Empty
+                : string.Empty;
+
+        string escapedMessage = JsonSerializer.Serialize("echo: " + message, SpikeJsonSerializerContext.Default.String);
+        return string.Concat(
+            "{\"jsonrpc\":\"2.0\",\"id\":",
+            id.GetRawText(),
+            ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":",
+            escapedMessage,
+            "}],\"isError\":false}}");
     }
 
     private static string CreateEmptyResultResponse(JsonElement id)
@@ -436,4 +468,5 @@ internal sealed record SpikePayload(string Name, string Message, DateTimeOffset 
 
 [JsonSerializable(typeof(SpikeOptions))]
 [JsonSerializable(typeof(SpikePayload))]
+[JsonSerializable(typeof(string))]
 internal sealed partial class SpikeJsonSerializerContext : JsonSerializerContext;
