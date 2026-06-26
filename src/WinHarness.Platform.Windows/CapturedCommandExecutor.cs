@@ -32,12 +32,34 @@ public sealed class CapturedCommandExecutor : ICommandExecutor
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start '{request.FileName}'.");
 
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(request.Timeout);
 
-        string stdout = await process.StandardOutput.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
-        string stderr = await process.StandardError.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
-        await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+
+            string timedOutStdout = await stdoutTask.ConfigureAwait(false);
+            string timedOutStderr = await stderrTask.ConfigureAwait(false);
+            return new CommandResult(1, timedOutStdout, timedOutStderr + Environment.NewLine + "Process timed out.", CommandExecutionMode.Captured);
+        }
+
+        string stdout = await stdoutTask.ConfigureAwait(false);
+        string stderr = await stderrTask.ConfigureAwait(false);
 
         return new CommandResult(process.ExitCode, stdout, stderr, CommandExecutionMode.Captured);
     }

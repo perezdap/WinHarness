@@ -230,7 +230,7 @@ public sealed class BuiltinToolProvider : IToolProvider
         private readonly ICommandExecutor _commandExecutor;
 
         public RunCommandTool(string workspaceRoot, ICommandExecutor commandExecutor)
-            : base(workspaceRoot, "run_command", "Run a command with captured output by default.", """{"type":"object","properties":{"command":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]}},"required":["command"]}""")
+            : base(workspaceRoot, "run_command", "Run a command with captured output by default.", """{"type":"object","properties":{"command":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"maxOutputBytes":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]}},"required":["command"]}""")
         {
             _commandExecutor = commandExecutor;
         }
@@ -265,7 +265,19 @@ public sealed class BuiltinToolProvider : IToolProvider
 
             CommandResult result = await _commandExecutor.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
             string content = string.Concat("mode: ", result.Mode, Environment.NewLine, "exit_code: ", result.ExitCode, Environment.NewLine, "stdout:", Environment.NewLine, result.StandardOutput, Environment.NewLine, "stderr:", Environment.NewLine, result.StandardError);
+            content = Truncate(content, OptionalInt32(invocation.Arguments, "maxOutputBytes", 128 * 1024));
             return new ToolResult(result.ExitCode == 0, content, result.ExitCode == 0 ? null : "nonzero_exit");
+        }
+
+        private static string Truncate(string content, int maxOutputBytes)
+        {
+            if (Encoding.UTF8.GetByteCount(content) <= maxOutputBytes)
+            {
+                return content;
+            }
+
+            byte[] bytes = Encoding.UTF8.GetBytes(content);
+            return Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Max(0, maxOutputBytes))) + Environment.NewLine + "[output truncated]";
         }
     }
 
@@ -295,12 +307,33 @@ public sealed class BuiltinToolProvider : IToolProvider
             using System.Diagnostics.Process process = System.Diagnostics.Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Failed to start process.");
 
+            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderrTask = process.StandardError.ReadToEndAsync();
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(request.Timeout);
 
-            string stdout = await process.StandardOutput.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
-            string stderr = await process.StandardError.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
-            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                string timedOutStdout = await stdoutTask.ConfigureAwait(false);
+                string timedOutStderr = await stderrTask.ConfigureAwait(false);
+                return new CommandResult(1, timedOutStdout, timedOutStderr + Environment.NewLine + "Process timed out.", CommandExecutionMode.Captured);
+            }
+
+            string stdout = await stdoutTask.ConfigureAwait(false);
+            string stderr = await stderrTask.ConfigureAwait(false);
 
             return new CommandResult(process.ExitCode, stdout, stderr, CommandExecutionMode.Captured);
         }
