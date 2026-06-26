@@ -8,6 +8,7 @@ using WinHarness.Infrastructure.Configuration;
 using WinHarness.Mcp;
 using WinHarness.Platform;
 using WinHarness.Providers;
+using WinHarness.Runtime;
 using WinHarness.Tools;
 
 const string Version = "0.1.0";
@@ -51,6 +52,77 @@ app.Add("diagnostics aot", () =>
     table.AddRow("Configuration", Markup.Escape(WinHarnessConfiguration.GetConfigurationDirectory()));
 
     AnsiConsole.Write(table);
+});
+
+app.Add("config init", (bool overwrite = false) =>
+{
+    string directory = WinHarnessConfiguration.GetConfigurationDirectory();
+    Directory.CreateDirectory(directory);
+
+    string path = Path.Combine(directory, "config.json");
+    if (File.Exists(path) && !overwrite)
+    {
+        Console.WriteLine($"Configuration already exists: {path}");
+        return;
+    }
+
+    const string sample = """
+        {
+          "defaultProvider": "local-ollama",
+          "defaultModel": "local-coder",
+          "providers": [
+            {
+              "id": "local-ollama",
+              "kind": "openai-compatible",
+              "baseUrl": "http://localhost:11434/v1",
+              "credentialName": null,
+              "models": [
+                {
+                  "id": "local-coder",
+                  "providerModelId": "qwen2.5-coder:latest",
+                  "capabilities": {
+                    "streaming": true,
+                    "toolCalling": false,
+                    "vision": false,
+                    "promptCaching": false,
+                    "structuredOutput": false,
+                    "reasoning": false
+                  }
+                }
+              ]
+            }
+          ],
+          "mcpServers": []
+        }
+        """;
+
+    File.WriteAllText(path, sample);
+    Console.WriteLine($"Wrote {path}");
+});
+
+app.Add("chat", async (string prompt, string? providerId = null, string? modelId = null, CancellationToken cancellationToken = default) =>
+{
+    WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    string resolvedProviderId = providerId ?? options.DefaultProvider;
+    string resolvedModelId = modelId ?? options.DefaultModel;
+
+    if (string.IsNullOrWhiteSpace(resolvedProviderId) || string.IsNullOrWhiteSpace(resolvedModelId))
+    {
+        throw new InvalidOperationException("Configure defaultProvider/defaultModel or pass --provider-id and --model-id.");
+    }
+
+    IAgentRuntime runtime = host.Services.GetRequiredService<IAgentRuntime>();
+    await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                       new AgentRunRequest(resolvedProviderId, resolvedModelId, prompt),
+                       cancellationToken).ConfigureAwait(false))
+    {
+        if (agentEvent.Kind == AgentEventKind.AssistantDelta)
+        {
+            Console.Write(agentEvent.Message);
+        }
+    }
+
+    Console.WriteLine();
 });
 
 app.Add("tools list", async (CancellationToken cancellationToken) =>
