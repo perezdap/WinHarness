@@ -98,6 +98,29 @@ public sealed class SingleAgentRuntimeTests
         Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "tool.completed"));
     }
 
+    [TestMethod]
+    public async Task RecordsUsageDiagnosticsWhenProviderReportsTokens()
+    {
+        RecordingDiagnosticSink diagnostics = new();
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory(["hello"]),
+            [],
+            diagnostics,
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        await foreach (AgentEvent _ in runtime.RunAsync(
+                           new AgentRunRequest("test-provider", "test-model", "prompt"),
+                           CancellationToken.None))
+        {
+        }
+
+        DiagnosticRecord completed = diagnostics.Records.Single(static record => record.EventName == "provider.completed");
+        Assert.AreEqual("3", completed.Properties["usage.input_tokens"]);
+        Assert.AreEqual("5", completed.Properties["usage.output_tokens"]);
+        Assert.AreEqual("8", completed.Properties["usage.total_tokens"]);
+        Assert.AreEqual("0", completed.Properties["retry.count"]);
+    }
+
     private sealed class FakeProviderFactory : IProviderFactory
     {
         private readonly IReadOnlyList<string> _updates;
@@ -174,6 +197,15 @@ public sealed class SingleAgentRuntimeTests
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return new ChatResponseUpdate(ChatRole.Assistant, update);
             }
+
+            yield return new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new UsageContent(new UsageDetails
+                {
+                    InputTokenCount = 3,
+                    OutputTokenCount = 5,
+                    TotalTokenCount = 8
+                })]);
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null)

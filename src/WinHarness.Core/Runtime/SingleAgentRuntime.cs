@@ -80,6 +80,7 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                 options,
                 cancellationToken: cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
+        UsageDetails? usage = null;
 
         while (true)
         {
@@ -104,6 +105,8 @@ public sealed class SingleAgentRuntime : IAgentRuntime
                 throw;
             }
 
+            usage = update.Contents.OfType<UsageContent>().LastOrDefault()?.Details ?? usage;
+
             foreach (AgentEvent toolEvent in toolActivitySink.Drain())
             {
                 yield return toolEvent;
@@ -126,7 +129,8 @@ public sealed class SingleAgentRuntime : IAgentRuntime
             "provider.completed",
             provider,
             stopwatch,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            usage: usage).ConfigureAwait(false);
         yield return new AgentEvent(AgentEventKind.Completed, "completed");
     }
 
@@ -159,18 +163,28 @@ public sealed class SingleAgentRuntime : IAgentRuntime
         IChatProvider provider,
         Stopwatch stopwatch,
         CancellationToken cancellationToken,
-        Exception? exception = null)
+        Exception? exception = null,
+        UsageDetails? usage = null)
     {
         Dictionary<string, string> properties = new()
         {
             ["provider.id"] = provider.ProviderId,
             ["model.id"] = provider.ModelId,
-            ["provider.duration_ms"] = stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)
+            ["provider.duration_ms"] = stopwatch.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["retry.count"] = "0"
         };
 
         if (exception is not null)
         {
             properties["exception.type"] = exception.GetType().FullName ?? exception.GetType().Name;
+        }
+
+        if (usage is not null)
+        {
+            properties["usage.input_tokens"] = usage.InputTokenCount?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            properties["usage.output_tokens"] = usage.OutputTokenCount?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            properties["usage.total_tokens"] = usage.TotalTokenCount?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+            properties["usage.reasoning_tokens"] = usage.ReasoningTokenCount?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
         }
 
         await _diagnosticSink.WriteAsync(
