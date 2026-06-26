@@ -17,6 +17,7 @@ using WinHarness.Mcp;
 using WinHarness.Platform;
 using WinHarness.Providers;
 using WinHarness.Runtime;
+using WinHarness.Serialization;
 using WinHarness.Tools;
 
 const string Version = "0.1.0";
@@ -98,35 +99,9 @@ app.Add("config init", (bool overwrite = false) =>
         return;
     }
 
-    const string sample = """
-        {
-          "defaultProvider": "local-ollama",
-          "defaultModel": "local-coder",
-          "providers": [
-            {
-              "id": "local-ollama",
-              "kind": "openai-compatible",
-              "baseUrl": "http://localhost:11434/v1",
-              "credentialName": null,
-              "models": [
-                {
-                  "id": "local-coder",
-                  "providerModelId": "qwen2.5-coder:latest",
-                  "capabilities": {
-                    "streaming": true,
-                    "toolCalling": false,
-                    "vision": false,
-                    "promptCaching": false,
-                    "structuredOutput": false,
-                    "reasoning": false
-                  }
-                }
-              ]
-            }
-          ],
-          "mcpServers": []
-        }
-        """;
+    string sample = JsonSerializer.Serialize(
+        StarterConfiguration.Create(),
+        WinHarnessJsonSerializerContext.Default.WinHarnessOptions);
 
     File.WriteAllText(path, sample);
     Console.WriteLine($"Wrote {path}");
@@ -422,6 +397,41 @@ internal static class ConfigFileUpdater
         }
 
         await File.WriteAllBytesAsync(path, buffer.WrittenMemory.ToArray(), cancellationToken).ConfigureAwait(false);
+    }
+}
+
+internal static class StarterConfiguration
+{
+    public static WinHarnessOptions Create()
+    {
+        WinHarnessOptions options = new()
+        {
+            DefaultProvider = "local-ollama",
+            DefaultModel = "local-coder"
+        };
+
+        ProviderOptions provider = new()
+        {
+            Id = "local-ollama",
+            Kind = "openai-compatible",
+            BaseUrl = "http://localhost:11434/v1"
+        };
+
+        provider.Models.Add(new ModelOptions
+        {
+            Id = "local-coder",
+            ProviderModelId = "qwen2.5-coder:latest",
+            Capabilities = new ProviderCapabilities(
+                Streaming: true,
+                ToolCalling: false,
+                Vision: false,
+                PromptCaching: false,
+                StructuredOutput: false,
+                Reasoning: false)
+        });
+
+        options.Providers.Add(provider);
+        return options;
     }
 }
 
