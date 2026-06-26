@@ -73,7 +73,10 @@ internal sealed class OpenAiCompatibleChatProvider : IChatProvider
                 Endpoint = _provider.BaseUrl is null ? null : new Uri(_provider.BaseUrl)
             });
 
-        return client.AsIChatClient();
+        return client.AsIChatClient()
+            .AsBuilder()
+            .UseFunctionInvocation()
+            .Build();
     }
 
     private string ResolveApiKey()
