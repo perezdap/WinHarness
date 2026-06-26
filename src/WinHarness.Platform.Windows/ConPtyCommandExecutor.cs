@@ -8,7 +8,7 @@ namespace WinHarness.Platform;
 /// <summary>
 /// ConPTY interactive command entry point.
 /// </summary>
-public static unsafe partial class ConPtyCommandExecutor
+public static partial class ConPtyCommandExecutor
 {
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint WaitObject0 = 0x00000000;
@@ -75,26 +75,15 @@ public static unsafe partial class ConPtyCommandExecutor
             };
 
             string commandLine = BuildCommandLine(request.FileName, request.Arguments);
-            char[] mutableCommandLine = string.Concat(commandLine, '\0').ToCharArray();
+            bool created = CreateProcessWithCommandLine(
+                commandLine,
+                request.WorkingDirectory,
+                ref startupInfo,
+                out processInformation);
 
-            fixed (char* commandLinePointer = mutableCommandLine)
+            if (!created)
             {
-                bool created = CreateProcess(
-                    null,
-                    commandLinePointer,
-                    IntPtr.Zero,
-                    IntPtr.Zero,
-                    false,
-                    ExtendedStartupInfoPresent,
-                    IntPtr.Zero,
-                    request.WorkingDirectory,
-                    ref startupInfo,
-                    out processInformation);
-
-                if (!created)
-                {
-                    throw new Win32Exception(Marshal.GetLastPInvokeError(), $"CreateProcess failed for '{request.FileName}'.");
-                }
+                throw new Win32Exception(Marshal.GetLastPInvokeError(), $"CreateProcess failed for '{request.FileName}'.");
             }
 
             inputWriteSide.Dispose();
@@ -260,6 +249,29 @@ public static unsafe partial class ConPtyCommandExecutor
         builder.Append('"');
     }
 
+    private static unsafe bool CreateProcessWithCommandLine(
+        string commandLine,
+        string workingDirectory,
+        ref StartupInfoEx startupInfo,
+        out ProcessInformation processInformation)
+    {
+        char[] mutableCommandLine = string.Concat(commandLine, '\0').ToCharArray();
+        fixed (char* commandLinePointer = mutableCommandLine)
+        {
+            return CreateProcess(
+                null,
+                commandLinePointer,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                false,
+                ExtendedStartupInfoPresent,
+                IntPtr.Zero,
+                workingDirectory,
+                ref startupInfo,
+                out processInformation);
+        }
+    }
+
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial int CreatePseudoConsole(
         Coord size,
@@ -306,7 +318,7 @@ public static unsafe partial class ConPtyCommandExecutor
 
     [LibraryImport("kernel32.dll", EntryPoint = "CreateProcessW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool CreateProcess(
+    private static unsafe partial bool CreateProcess(
         string? lpApplicationName,
         char* lpCommandLine,
         IntPtr lpProcessAttributes,
