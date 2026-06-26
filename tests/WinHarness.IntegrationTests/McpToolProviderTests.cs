@@ -38,6 +38,36 @@ public sealed class McpToolProviderTests
     }
 
     [TestMethod]
+    public async Task HonorsCancellationBeforeServerStartup()
+    {
+        WinHarnessOptions options = new();
+        McpServerOptions server = new()
+        {
+            Id = "cancelled",
+            Command = OperatingSystem.IsWindows() ? "missing-winharness-mcp-server.exe" : "/missing-winharness-mcp-server",
+            Enabled = true,
+            StartupTimeoutSeconds = 30
+        };
+        options.McpServers.Add(server);
+
+        await using McpClientManager manager = new();
+        using CancellationTokenSource cancellation = new();
+        await cancellation.CancelAsync();
+
+        OperationCanceledException? exception = null;
+        try
+        {
+            _ = await manager.GetClientAsync(server, cancellation.Token);
+        }
+        catch (OperationCanceledException caught)
+        {
+            exception = caught;
+        }
+
+        Assert.IsNotNull(exception);
+    }
+
+    [TestMethod]
     public async Task DiscoversAndCallsStdioMcpTool()
     {
         if (!OperatingSystem.IsWindows())
