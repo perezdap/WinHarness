@@ -45,6 +45,24 @@ public sealed class ToolRegistryTests
         Assert.AreEqual("hello", result);
     }
 
+    [TestMethod]
+    public async Task BuiltinToolsExposeValidSchemas()
+    {
+        BuiltinToolProvider provider = new(Path.GetTempPath());
+
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        CollectionAssert.AreEquivalent(
+            new[] { "read_file", "write_file", "edit_file", "run_command", "glob", "grep" },
+            tools.Select(static tool => tool.Name).ToArray());
+        foreach (ITool tool in tools)
+        {
+            Assert.AreEqual(JsonValueKind.Object, tool.InputSchema.ValueKind, tool.Name);
+            Assert.IsTrue(tool.InputSchema.TryGetProperty("type", out JsonElement type), tool.Name);
+            Assert.AreEqual("object", type.GetString(), tool.Name);
+        }
+    }
+
     private sealed class FakeProvider : IToolProvider
     {
         private readonly IReadOnlyList<ITool> _tools;
