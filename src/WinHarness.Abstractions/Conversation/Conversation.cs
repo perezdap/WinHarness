@@ -19,6 +19,14 @@ public sealed class Conversation
     {
         _messages.Add(message);
     }
+
+    /// <summary>
+    /// Removes all messages, resetting the conversation.
+    /// </summary>
+    public void Clear()
+    {
+        _messages.Clear();
+    }
 }
 
 /// <summary>

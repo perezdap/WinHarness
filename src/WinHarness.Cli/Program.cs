@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using WinHarness;
+using WinHarness.Cli.Configuration;
 using WinHarness.Cli.Rendering;
 using WinHarness.Configuration;
 using WinHarness.Conversation;
@@ -110,6 +111,69 @@ app.Add("config init", (bool overwrite = false) =>
 
     File.WriteAllText(path, sample);
     Console.WriteLine($"Wrote {path}");
+});
+
+app.Add("config wizard", async (CancellationToken cancellationToken) =>
+{
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
+    ConfigStore store = host.Services.GetRequiredService<ConfigStore>();
+    IModelCatalog catalog = host.Services.GetRequiredService<IModelCatalog>();
+    ProviderWizard wizard = new(configurator, store, catalog);
+    await wizard.RunAsync(cancellationToken).ConfigureAwait(false);
+    AnsiConsole.MarkupLine("[dim]Run [bold]winharness chat[/] to start a session.[/]");
+});
+
+app.Add("providers add", async (string id, string baseUrl, string? apiKey = null, bool setDefault = false, CancellationToken cancellationToken = default) =>
+{
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
+    ProviderOptions provider = await configurator.AddProviderAsync(id, baseUrl, apiKey, setDefault, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"Provider '{provider.Id}' saved ({provider.BaseUrl}).");
+    if (provider.CredentialName is not null)
+    {
+        Console.WriteLine($"API key stored as {provider.CredentialName}.");
+    }
+});
+
+app.Add("providers remove", async (string id, CancellationToken cancellationToken) =>
+{
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
+    await configurator.RemoveProviderAsync(id, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"Provider '{id}' removed.");
+});
+
+app.Add("models discover", async (string baseUrl, string? apiKey = null, CancellationToken cancellationToken = default) =>
+{
+    IModelCatalog catalog = host.Services.GetRequiredService<IModelCatalog>();
+    IReadOnlyList<CatalogModel> models = await catalog.ListModelsAsync(baseUrl, apiKey, cancellationToken).ConfigureAwait(false);
+    if (models.Count == 0)
+    {
+        Console.WriteLine("No models returned.");
+        return;
+    }
+
+    foreach (CatalogModel model in models)
+    {
+        Console.WriteLine(model.OwnedBy is null ? model.Id : $"{model.Id}\t{model.OwnedBy}");
+    }
+});
+
+app.Add("models add", async (
+    string providerId,
+    string id,
+    string providerModelId,
+    bool streaming = true,
+    bool toolCalling = true,
+    bool vision = false,
+    bool promptCaching = false,
+    bool structuredOutput = false,
+    bool reasoning = false,
+    bool setDefault = false,
+    CancellationToken cancellationToken = default) =>
+{
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
+    ProviderCapabilities capabilities = new(streaming, toolCalling, vision, promptCaching, structuredOutput, reasoning);
+    ModelOptions model = await configurator.AddModelAsync(providerId, id, providerModelId, capabilities, setDefault, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"Model '{model.Id}' ({model.ProviderModelId}) saved under '{providerId}'.");
 });
 
 app.Add("chat", async (string? prompt = null, string? providerId = null, string? modelId = null, bool renderMarkdown = false, CancellationToken cancellationToken = default) =>
@@ -460,37 +524,47 @@ internal static class ChatRepl
         bool renderMarkdown,
         CancellationToken cancellationToken)
     {
+        WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
         string currentProviderId = providerId;
         string currentModelId = modelId;
+        bool currentRenderMarkdown = renderMarkdown;
         Conversation conversation = new();
 
-        AnsiConsole.MarkupLine("[dim]Enter /exit to quit, /provider <id> to switch provider, /model <id> to switch model.[/]");
+        WriteBanner(currentProviderId, currentModelId, currentRenderMarkdown);
+
         while (!cancellationToken.IsCancellationRequested)
         {
-            Console.Write("winharness> ");
+            AnsiConsole.Markup("[bold green]›[/] ");
             string? input = Console.ReadLine();
-            if (input is null || string.Equals(input, "/exit", StringComparison.OrdinalIgnoreCase))
+            if (input is null)
             {
                 return;
             }
 
-            if (input.StartsWith("/provider ", StringComparison.OrdinalIgnoreCase))
+            input = input.Trim();
+            if (input.Length == 0)
             {
-                currentProviderId = input["/provider ".Length..].Trim();
-                AnsiConsole.MarkupLine("[dim]Provider: " + Markup.Escape(currentProviderId) + "[/]");
                 continue;
             }
 
-            if (input.StartsWith("/model ", StringComparison.OrdinalIgnoreCase))
+            if (input.StartsWith('/'))
             {
-                currentModelId = input["/model ".Length..].Trim();
-                AnsiConsole.MarkupLine("[dim]Model: " + Markup.Escape(currentModelId) + "[/]");
-                continue;
-            }
+                if (HandleSlashCommand(
+                        options,
+                        input,
+                        ref currentProviderId,
+                        ref currentModelId,
+                        ref currentRenderMarkdown,
+                        conversation,
+                        out bool shouldExit))
+                {
+                    if (shouldExit)
+                    {
+                        return;
+                    }
 
-            if (string.IsNullOrWhiteSpace(input))
-            {
-                continue;
+                    continue;
+                }
             }
 
             await RunTurnAsync(
@@ -499,9 +573,195 @@ internal static class ChatRepl
                 currentModelId,
                 conversation,
                 input,
-                renderMarkdown,
+                currentRenderMarkdown,
                 cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private static void WriteBanner(string providerId, string modelId, bool renderMarkdown)
+    {
+        AnsiConsole.Write(new Rule("[bold]WinHarness chat[/]").LeftJustified());
+        AnsiConsole.MarkupLine(
+            $"[dim]provider[/] [bold]{Markup.Escape(providerId)}[/]  [dim]model[/] [bold]{Markup.Escape(modelId)}[/]  [dim]markdown[/] {(renderMarkdown ? "[green]on[/]" : "[grey]off[/]")}");
+        AnsiConsole.MarkupLine("[dim]/help for commands · /exit to quit[/]");
+        AnsiConsole.WriteLine();
+    }
+
+    private static bool HandleSlashCommand(
+        WinHarnessOptions options,
+        string input,
+        ref string currentProviderId,
+        ref string currentModelId,
+        ref bool currentRenderMarkdown,
+        Conversation conversation,
+        out bool shouldExit)
+    {
+        shouldExit = false;
+        string[] parts = input.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        string command = parts[0].ToLowerInvariant();
+        string argument = parts.Length > 1 ? parts[1] : string.Empty;
+
+        switch (command)
+        {
+            case "/exit":
+            case "/quit":
+                shouldExit = true;
+                return true;
+
+            case "/help":
+                WriteHelp();
+                return true;
+
+            case "/providers":
+                WriteProviders(options, currentProviderId);
+                return true;
+
+            case "/models":
+                WriteModels(options, argument.Length > 0 ? argument : currentProviderId, currentModelId);
+                return true;
+
+            case "/provider":
+                SwitchProvider(options, argument, ref currentProviderId, ref currentModelId);
+                return true;
+
+            case "/model":
+                SwitchModel(options, currentProviderId, argument, ref currentModelId);
+                return true;
+
+            case "/markdown":
+                currentRenderMarkdown = !currentRenderMarkdown;
+                AnsiConsole.MarkupLine($"[dim]Markdown rendering {(currentRenderMarkdown ? "[green]on[/]" : "[grey]off[/]")}.[/]");
+                return true;
+
+            case "/new":
+            case "/clear":
+                conversation.Clear();
+                AnsiConsole.MarkupLine("[dim]Conversation cleared.[/]");
+                return true;
+
+            default:
+                AnsiConsole.MarkupLine($"[red]Unknown command '{Markup.Escape(command)}'. Try /help.[/]");
+                return true;
+        }
+    }
+
+    private static void WriteHelp()
+    {
+        Table table = new Table()
+            .Border(TableBorder.Rounded)
+            .AddColumn("Command")
+            .AddColumn("Description");
+        table.AddRow("/help", "Show this help");
+        table.AddRow("/providers", "List configured providers");
+        table.AddRow("/models [provider]", "List models for a provider");
+        table.AddRow("/provider <id>", "Switch active provider");
+        table.AddRow("/model <id>", "Switch active model");
+        table.AddRow("/markdown", "Toggle markdown rendering");
+        table.AddRow("/new, /clear", "Reset the conversation");
+        table.AddRow("/exit, /quit", "Leave the session");
+        AnsiConsole.Write(table);
+    }
+
+    private static void WriteProviders(WinHarnessOptions options, string currentProviderId)
+    {
+        if (options.Providers.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No providers configured. Run 'winharness config wizard'.[/]");
+            return;
+        }
+
+        foreach (ProviderOptions provider in options.Providers)
+        {
+            bool active = string.Equals(provider.Id, currentProviderId, StringComparison.OrdinalIgnoreCase);
+            string marker = active ? "[green]●[/] " : "  ";
+            AnsiConsole.MarkupLine($"{marker}[bold]{Markup.Escape(provider.Id)}[/] [dim]{Markup.Escape(provider.BaseUrl ?? string.Empty)}[/]");
+        }
+    }
+
+    private static void WriteModels(WinHarnessOptions options, string providerId, string currentModelId)
+    {
+        ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
+        if (provider is null)
+        {
+            AnsiConsole.MarkupLine($"[red]Provider '{Markup.Escape(providerId)}' is not configured.[/]");
+            return;
+        }
+
+        if (provider.Models.Count == 0)
+        {
+            AnsiConsole.MarkupLine($"[yellow]No models configured for '{Markup.Escape(provider.Id)}'.[/]");
+            return;
+        }
+
+        foreach (ModelOptions model in provider.Models)
+        {
+            bool active = string.Equals(model.Id, currentModelId, StringComparison.OrdinalIgnoreCase);
+            string marker = active ? "[green]●[/] " : "  ";
+            AnsiConsole.MarkupLine($"{marker}[bold]{Markup.Escape(model.Id)}[/] [dim]{Markup.Escape(model.ProviderModelId)}[/]");
+        }
+    }
+
+    private static void SwitchProvider(
+        WinHarnessOptions options,
+        string providerId,
+        ref string currentProviderId,
+        ref string currentModelId)
+    {
+        if (providerId.Length == 0)
+        {
+            WriteProviders(options, currentProviderId);
+            return;
+        }
+
+        ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
+        if (provider is null)
+        {
+            AnsiConsole.MarkupLine($"[red]Provider '{Markup.Escape(providerId)}' is not configured.[/]");
+            return;
+        }
+
+        currentProviderId = provider.Id;
+        string activeModelId = currentModelId;
+        if (!provider.Models.Any(model => string.Equals(model.Id, activeModelId, StringComparison.OrdinalIgnoreCase)))
+        {
+            currentModelId = provider.Models.Count > 0 ? provider.Models[0].Id : string.Empty;
+        }
+
+        AnsiConsole.MarkupLine($"[dim]Provider [bold]{Markup.Escape(currentProviderId)}[/], model [bold]{Markup.Escape(currentModelId)}[/].[/]");
+    }
+
+    private static void SwitchModel(
+        WinHarnessOptions options,
+        string currentProviderId,
+        string modelId,
+        ref string currentModelId)
+    {
+        ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, currentProviderId, StringComparison.OrdinalIgnoreCase));
+        if (provider is null)
+        {
+            AnsiConsole.MarkupLine($"[red]Provider '{Markup.Escape(currentProviderId)}' is not configured.[/]");
+            return;
+        }
+
+        if (modelId.Length == 0)
+        {
+            WriteModels(options, currentProviderId, currentModelId);
+            return;
+        }
+
+        ModelOptions? model = provider.Models.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase));
+        if (model is null)
+        {
+            AnsiConsole.MarkupLine($"[red]Model '{Markup.Escape(modelId)}' is not configured for '{Markup.Escape(currentProviderId)}'.[/]");
+            return;
+        }
+
+        currentModelId = model.Id;
+        AnsiConsole.MarkupLine($"[dim]Model [bold]{Markup.Escape(currentModelId)}[/].[/]");
     }
 
     public static async ValueTask RunTurnAsync(
@@ -533,6 +793,7 @@ internal static class ChatRepl
     {
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
         StringBuilder? markdownBuffer = renderMarkdown ? new StringBuilder() : null;
+        bool wroteAssistantLabel = false;
 
         conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
 
@@ -569,6 +830,12 @@ internal static class ChatRepl
 
             if (markdownBuffer is null)
             {
+                if (!wroteAssistantLabel)
+                {
+                    AnsiConsole.Markup("[bold blue]•[/] ");
+                    wroteAssistantLabel = true;
+                }
+
                 Console.Write(agentEvent.Message);
             }
             else

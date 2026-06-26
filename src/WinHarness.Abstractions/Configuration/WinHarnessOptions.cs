@@ -18,14 +18,14 @@ public sealed class WinHarnessOptions
     public string DefaultModel { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets configured provider endpoints.
+    /// Gets or sets configured provider endpoints.
     /// </summary>
-    public List<ProviderOptions> Providers { get; } = [];
+    public List<ProviderOptions> Providers { get; set; } = [];
 
     /// <summary>
-    /// Gets configured MCP servers.
+    /// Gets or sets configured MCP servers.
     /// </summary>
-    public List<McpServerOptions> McpServers { get; } = [];
+    public List<McpServerOptions> McpServers { get; set; } = [];
 }
 
 /// <summary>
@@ -54,9 +54,9 @@ public sealed class ProviderOptions
     public string? CredentialName { get; set; }
 
     /// <summary>
-    /// Gets configured models for this provider.
+    /// Gets or sets configured models for this provider.
     /// </summary>
-    public List<ModelOptions> Models { get; } = [];
+    public List<ModelOptions> Models { get; set; } = [];
 }
 
 /// <summary>
@@ -96,9 +96,9 @@ public sealed class McpServerOptions
     public string Command { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets command arguments.
+    /// Gets or sets command arguments.
     /// </summary>
-    public List<string> Arguments { get; } = [];
+    public List<string> Arguments { get; set; } = [];
 
     /// <summary>
     /// Gets or sets the optional working directory.
@@ -106,9 +106,9 @@ public sealed class McpServerOptions
     public string? WorkingDirectory { get; set; }
 
     /// <summary>
-    /// Gets environment overrides.
+    /// Gets or sets environment overrides.
     /// </summary>
-    public Dictionary<string, string?> Environment { get; } = [];
+    public Dictionary<string, string?> Environment { get; set; } = [];
 
     /// <summary>
     /// Gets or sets whether this server is enabled.

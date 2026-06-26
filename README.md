@@ -55,11 +55,16 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness diagnostics aot`
 - `winharness diagnostics write --message "..."`
 - `winharness config init`
+- `winharness config wizard` for guided, interactive provider/model setup
 - `winharness chat --prompt "..." [--render-markdown true]`
-- `winharness chat` for the terminal REPL (`/provider <id>`, `/model <id>`, `/exit`)
+- `winharness chat` for the terminal REPL (`/help`, `/providers`, `/models`, `/provider <id>`, `/model <id>`, `/markdown`, `/new`, `/exit`)
 - `winharness providers list`
+- `winharness providers add --id openai-main --base-url https://api.openai.com/v1 [--api-key sk-... --set-default]`
+- `winharness providers remove --id openai-main`
 - `winharness providers use --provider-id local-ollama`
 - `winharness models list --provider-id local-ollama`
+- `winharness models discover --base-url http://localhost:11434/v1 [--api-key sk-...]` to query the endpoint's `GET /v1/models`
+- `winharness models add --provider-id openai-main --id gpt-primary --provider-model-id gpt-4.1 [--tool-calling --vision --set-default]`
 - `winharness models use --model-id local-coder`
 - `winharness tools list`
 - `winharness tools call --name read_file --arguments-json '{"path":"README.md"}'`
@@ -87,6 +92,41 @@ winharness config init
 ```
 
 The generated file configures a local OpenAI-compatible Ollama endpoint at `http://localhost:11434/v1`. Edit `%APPDATA%\WinHarness\config.json` to add hosted endpoints.
+
+### Interactive setup
+
+The fastest way to add providers is the guided wizard, which prompts for the
+base URL and API key, stores the key in Windows Credential Manager, then queries
+the endpoint's `GET /v1/models` route so you can multi-select real model ids
+(instead of typing them), assign capabilities, and pick defaults:
+
+```powershell
+winharness config wizard
+```
+
+You can also list an endpoint's advertised models directly:
+
+```powershell
+winharness models discover --base-url https://api.openai.com/v1 --api-key $env:OPENAI_API_KEY
+```
+
+### Scripted setup
+
+The same operations are available non-interactively. Adding a provider with
+`--api-key` stores the secret in Windows Credential Manager under
+`WinHarness:<id>` automatically:
+
+```powershell
+winharness providers add --id openai-main --base-url https://api.openai.com/v1 --api-key $env:OPENAI_API_KEY --set-default
+winharness models add --provider-id openai-main --id gpt-primary --provider-model-id gpt-4.1 --tool-calling --vision --set-default
+```
+
+Keyless local endpoints (Ollama, LM Studio, vLLM) simply omit `--api-key`:
+
+```powershell
+winharness providers add --id local-ollama --base-url http://localhost:11434/v1 --set-default
+winharness models add --provider-id local-ollama --id local-coder --provider-model-id qwen2.5-coder:latest
+```
 
 ## Provider setup
 
