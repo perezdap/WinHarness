@@ -56,6 +56,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness diagnostics write --message "..."`
 - `winharness config init`
 - `winharness chat --prompt "..." [--render-markdown true]`
+- `winharness chat` for the terminal REPL (`/provider <id>`, `/model <id>`, `/exit`)
 - `winharness providers list`
 - `winharness providers use --provider-id local-ollama`
 - `winharness models list --provider-id local-ollama`
