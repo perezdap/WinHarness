@@ -27,6 +27,7 @@ internal sealed class ChatTuiApp
     private readonly WinHarnessOptions _options;
     private readonly ChatSession _session;
     private readonly SlashCommandContext _slashContext;
+    private readonly List<TranscriptMessage> _messages = [];
     private readonly ObservableCollection<TranscriptRow> _transcriptRows = [];
     private readonly CancellationTokenSource _shutdownCts;
 
@@ -283,16 +284,18 @@ internal sealed class ChatTuiApp
 
     private void InitializeTranscript()
     {
-        PopulateTranscriptRowsFromSession();
-        RefreshTranscript();
+        _messages.Clear();
+        PopulateTranscriptMessagesFromSession();
+        RebuildWrappedTranscript(scrollToEnd: false);
     }
 
     private void LoadTranscriptFromSession()
     {
         InvokeUi(() =>
         {
-            PopulateTranscriptRowsFromSession();
-            RefreshTranscript();
+            _messages.Clear();
+            PopulateTranscriptMessagesFromSession();
+            RebuildWrappedTranscript(scrollToEnd: false);
         });
     }
 
@@ -306,13 +309,13 @@ internal sealed class ChatTuiApp
 
         InvokeUi(() =>
         {
-            _transcriptRows.Clear();
-            PopulateTranscriptRowsFromSession();
-            RefreshTranscript();
+            _messages.Clear();
+            PopulateTranscriptMessagesFromSession();
+            RebuildWrappedTranscript(scrollToEnd: false);
         });
     }
 
-    private void PopulateTranscriptRowsFromSession()
+    private void PopulateTranscriptMessagesFromSession()
     {
         foreach (ConversationMessage message in _session.Conversation.Messages)
         {
@@ -322,8 +325,39 @@ internal sealed class ChatTuiApp
                 ConversationRole.Assistant => TranscriptRole.Assistant,
                 _ => TranscriptRole.System
             };
-            _transcriptRows.Add(new TranscriptRow(role, message.Text));
+            _messages.Add(new TranscriptMessage(role, message.Text));
         }
+    }
+
+    private int GetTranscriptWrapWidth()
+    {
+        int width = _transcript.Viewport.Width;
+        if (width <= 1)
+        {
+            width = _app.Screen.Size.Width - 4;
+        }
+
+        return Math.Max(24, width - 1);
+    }
+
+    private void RebuildWrappedTranscript(bool scrollToEnd)
+    {
+        int width = GetTranscriptWrapWidth();
+        _transcriptRows.Clear();
+        foreach (TranscriptMessage message in _messages)
+        {
+            foreach (string line in TranscriptWrap.Wrap(message.Role, message.Text, width))
+            {
+                _transcriptRows.Add(new TranscriptRow(message.Role, line));
+            }
+        }
+
+        if (scrollToEnd && _transcriptRows.Count > 0)
+        {
+            _transcript.MoveEnd(false);
+        }
+
+        _transcript.SetNeedsDraw();
     }
 
     private async Task SubmitCurrentInputAsync()
@@ -466,8 +500,8 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            _transcriptRows.Add(new TranscriptRow(TranscriptRole.System, message));
-            RefreshTranscript();
+            _messages.Add(new TranscriptMessage(TranscriptRole.System, message));
+            RebuildWrappedTranscript(scrollToEnd: true);
         });
     }
 
@@ -475,8 +509,8 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            _transcriptRows.Add(new TranscriptRow(TranscriptRole.User, message));
-            RefreshTranscript();
+            _messages.Add(new TranscriptMessage(TranscriptRole.User, message));
+            RebuildWrappedTranscript(scrollToEnd: true);
         });
     }
 
@@ -486,14 +520,14 @@ internal sealed class ChatTuiApp
         {
             if (_activeAssistantRowIndex < 0)
             {
-                _transcriptRows.Add(new TranscriptRow(TranscriptRole.Assistant, string.Empty));
-                _activeAssistantRowIndex = _transcriptRows.Count - 1;
+                _messages.Add(new TranscriptMessage(TranscriptRole.Assistant, string.Empty));
+                _activeAssistantRowIndex = _messages.Count - 1;
             }
 
-            TranscriptRow row = _transcriptRows[_activeAssistantRowIndex];
+            TranscriptMessage row = _messages[_activeAssistantRowIndex];
             string cleaned = delta.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\n', ' ');
-            _transcriptRows[_activeAssistantRowIndex] = row with { Text = row.Text + cleaned };
-            RefreshTranscript();
+            _messages[_activeAssistantRowIndex] = row with { Text = row.Text + cleaned };
+            RebuildWrappedTranscript(scrollToEnd: true);
         });
     }
 
@@ -580,17 +614,15 @@ internal sealed class ChatTuiApp
         });
     }
 
-    private void RefreshTranscript()
-    {
-        _transcript.SetNeedsDraw();
-    }
-
     private void InvokeUi(Action action)
     {
         _app.Invoke(action);
     }
 
-    /// <summary>A single transcript line tagged with the role that produced it, used for color-coded rendering.</summary>
+    /// <summary>A logical transcript message before wrapping for display.</summary>
+    private sealed record TranscriptMessage(TranscriptRole Role, string Text);
+
+    /// <summary>A wrapped display line tagged with the role that produced it.</summary>
     private sealed record TranscriptRow(TranscriptRole Role, string Text);
 
     /// <summary>Identifies the source of a transcript line so it can be colored distinctly.</summary>
@@ -665,18 +697,10 @@ internal sealed class ChatTuiApp
 
             container.SetAttribute(attr);
 
-            string prefix = row.Role switch
-            {
-                TranscriptRole.System => "system › ",
-                TranscriptRole.User => "you › ",
-                TranscriptRole.Assistant => "ai › ",
-                _ => string.Empty
-            };
-
-            string text = prefix + row.Text;
+            string text = row.Text;
             if (text.Length > width)
             {
-                text = width <= 1 ? text[..width] : string.Concat(text.AsSpan(0, width - 1), "…");
+                text = text[..width];
             }
 
             container.AddStr(text);
@@ -702,6 +726,70 @@ internal sealed class ChatTuiApp
             }
 
             _disposed = true;
+        }
+    }
+
+    private static class TranscriptWrap
+    {
+        public static IEnumerable<string> Wrap(TranscriptRole role, string text, int width)
+        {
+            string prefix = role switch
+            {
+                TranscriptRole.System => "system › ",
+                TranscriptRole.User => "you › ",
+                TranscriptRole.Assistant => "ai › ",
+                _ => string.Empty
+            };
+
+            string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+            int contentWidth = Math.Max(1, width - prefix.Length);
+            string indent = new string(' ', prefix.Length);
+
+            bool first = true;
+            foreach (string chunk in WordWrap(normalized, contentWidth))
+            {
+                yield return first ? prefix + chunk : indent + chunk;
+                first = false;
+            }
+
+            if (first)
+            {
+                yield return prefix;
+            }
+        }
+
+        private static IEnumerable<string> WordWrap(string text, int width)
+        {
+            if (text.Length == 0)
+            {
+                yield break;
+            }
+
+            string remaining = text;
+            while (remaining.Length > 0)
+            {
+                if (remaining.Length <= width)
+                {
+                    yield return remaining;
+                    yield break;
+                }
+
+                int breakAt = width;
+                ReadOnlySpan<char> slice = remaining.AsSpan(0, width);
+                int lastNewline = slice.LastIndexOf('\n');
+                int lastSpace = slice.LastIndexOf(' ');
+                if (lastNewline >= 0)
+                {
+                    breakAt = lastNewline + 1;
+                }
+                else if (lastSpace > width / 3)
+                {
+                    breakAt = lastSpace;
+                }
+
+                yield return remaining[..breakAt].TrimEnd('\n');
+                remaining = remaining[breakAt..].TrimStart('\n').TrimStart(' ');
+            }
         }
     }
 }
