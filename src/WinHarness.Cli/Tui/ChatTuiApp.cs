@@ -70,7 +70,7 @@ internal sealed class ChatTuiApp
         ISessionManager sessionManager = await ChatSessionBootstrap.ResolveAsync(
             factory,
             bootstrapRequest,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken);
         ChatSession session = ChatSessionBootstrap.CreateChatSession(
             sessionManager,
             contextFileLoader,
