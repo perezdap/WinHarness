@@ -40,3 +40,7 @@ packages/
 
 # Local WinHarness runtime data
 WinHarness/
+
+# ZeroTwo / MCP tooling artifacts
+agent-tools/
+mcps/
