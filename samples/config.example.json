@@ -43,5 +43,30 @@
       ]
     }
   ],
-  "mcpServers": []
+  "mcpServers": [
+    {
+      "id": "filesystem",
+      "transport": "stdio",
+      "command": "filesystem-mcp-server.exe",
+      "arguments": ["--root", "C:\\src"],
+      "workingDirectory": null,
+      "environment": {},
+      "endpoint": null,
+      "headers": {},
+      "enabled": false,
+      "startupTimeoutSeconds": 30
+    },
+    {
+      "id": "remote-docs",
+      "transport": "http",
+      "command": "",
+      "arguments": [],
+      "workingDirectory": null,
+      "environment": {},
+      "endpoint": "https://example.com/mcp",
+      "headers": {},
+      "enabled": false,
+      "startupTimeoutSeconds": 30
+    }
+  ]
 }

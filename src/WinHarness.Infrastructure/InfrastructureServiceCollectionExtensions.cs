@@ -18,6 +18,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IDiagnosticSink, JsonlDiagnosticSink>();
         services.AddSingleton(static _ => new ConfigStore());
         services.AddSingleton<ProviderConfigurator>();
+        services.AddSingleton<McpConfigurator>();
         return services;
     }
 }

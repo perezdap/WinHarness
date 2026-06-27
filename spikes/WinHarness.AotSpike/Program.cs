@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.Collections.ObjectModel;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -14,6 +15,10 @@ using ModelContextProtocol.Protocol;
 using OpenAI;
 using OpenAI.Chat;
 using Spectre.Console;
+using Terminal.Gui.App;
+using Terminal.Gui.Drivers;
+using Terminal.Gui.ViewBase;
+using Terminal.Gui.Views;
 
 var app = ConsoleApp.Create();
 
@@ -29,6 +34,11 @@ app.Add("", async (CancellationToken cancellationToken) =>
     await AotSpikeRunner.RunAsync(cancellationToken).ConfigureAwait(false);
 });
 
+app.Add("tui-smoke", () =>
+{
+    AotSpikeRunner.RunTuiSmoke();
+});
+
 await app.RunAsync(args).ConfigureAwait(false);
 
 internal static class AotSpikeRunner
@@ -38,11 +48,18 @@ internal static class AotSpikeRunner
         SpikeOptions options = ExerciseHostingAndConfiguration();
         ExerciseSourceGeneratedJson(options);
         ExerciseSpectreConsole(options);
+        ExerciseTerminalGui();
 
         await ExerciseOpenAiCompatibleStreamingAsync(cancellationToken).ConfigureAwait(false);
         await ExerciseMcpToolsAsync(cancellationToken).ConfigureAwait(false);
 
         AnsiConsole.MarkupLine("[green]WinHarness AOT spike completed successfully.[/]");
+    }
+
+    public static void RunTuiSmoke()
+    {
+        ExerciseTerminalGui();
+        AnsiConsole.MarkupLine("[green]Terminal.Gui smoke completed successfully.[/]");
     }
 
     private static SpikeOptions ExerciseHostingAndConfiguration()
@@ -87,6 +104,58 @@ internal static class AotSpikeRunner
         table.AddRow("Spectre.Console", "[green]rendered[/]");
 
         AnsiConsole.Write(table);
+    }
+
+    private static void ExerciseTerminalGui()
+    {
+        using IApplication app = Application.Create();
+        app.Init(DriverRegistry.Names.ANSI);
+
+        using Window window = new()
+        {
+            Title = "WinHarness TUI AOT Smoke",
+            Width = Dim.Fill(),
+            Height = Dim.Fill()
+        };
+
+        Label status = new()
+        {
+            Text = "provider local-ollama · model local-coder",
+            X = 1,
+            Y = 0,
+            Width = Dim.Fill()
+        };
+        ObservableCollection<string> transcriptLines = ["user: hello", "assistant: hello from WinHarness"];
+        ListView transcript = new()
+        {
+            X = 1,
+            Y = 2,
+            Width = Dim.Fill()! - 2,
+            Height = Dim.Fill()! - 4
+        };
+        transcript.SetSource(transcriptLines);
+        TextField input = new()
+        {
+            Text = "Type a prompt...",
+            X = 1,
+            Y = Pos.AnchorEnd(2),
+            Width = Dim.Fill()! - 2
+        };
+
+        window.Add(status, transcript, input);
+        SessionToken? token = app.Begin(window);
+        if (token is null)
+        {
+            throw new InvalidOperationException("Terminal.Gui did not start a session.");
+        }
+
+        app.Invoke(() =>
+        {
+            transcriptLines.Add("tool: spike rendered");
+            transcript.SetSource(transcriptLines);
+            input.Text = string.Empty;
+        });
+        app.End(token);
     }
 
     private static async Task ExerciseOpenAiCompatibleStreamingAsync(CancellationToken cancellationToken)

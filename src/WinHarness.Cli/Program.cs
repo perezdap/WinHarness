@@ -9,8 +9,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using WinHarness;
+using WinHarness.Cli.Chat;
 using WinHarness.Cli.Configuration;
 using WinHarness.Cli.Rendering;
+using WinHarness.Cli.Tui;
 using WinHarness.Configuration;
 using WinHarness.Conversation;
 using WinHarness.Diagnostics;
@@ -176,7 +178,7 @@ app.Add("models add", async (
     Console.WriteLine($"Model '{model.Id}' ({model.ProviderModelId}) saved under '{providerId}'.");
 });
 
-app.Add("chat", async (string? prompt = null, string? providerId = null, string? modelId = null, bool renderMarkdown = false, CancellationToken cancellationToken = default) =>
+app.Add("chat", async (string? prompt = null, string? providerId = null, string? modelId = null, bool renderMarkdown = false, bool tui = false, CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
     string resolvedProviderId = providerId ?? options.DefaultProvider;
@@ -189,6 +191,13 @@ app.Add("chat", async (string? prompt = null, string? providerId = null, string?
 
     if (string.IsNullOrWhiteSpace(prompt))
     {
+        if (tui)
+        {
+            await ChatTuiApp.RunAsync(host.Services, resolvedProviderId, resolvedModelId, renderMarkdown, cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
         await ChatRepl.RunAsync(host.Services, resolvedProviderId, resolvedModelId, renderMarkdown, cancellationToken)
             .ConfigureAwait(false);
         return;
@@ -333,13 +342,101 @@ app.Add("models use", async (string modelId, CancellationToken cancellationToken
     Console.WriteLine($"Default model set to {modelId}.");
 });
 
+app.Add("models set-capabilities", async (
+    string providerId,
+    string modelId,
+    bool streaming = true,
+    bool toolCalling = true,
+    bool vision = false,
+    bool promptCaching = false,
+    bool structuredOutput = false,
+    bool reasoning = false,
+    CancellationToken cancellationToken = default) =>
+{
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
+    ProviderCapabilities capabilities = new(streaming, toolCalling, vision, promptCaching, structuredOutput, reasoning);
+    ModelOptions model = await configurator.SetModelCapabilitiesAsync(providerId, modelId, capabilities, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"Model '{model.Id}' capabilities updated.");
+});
+
 app.Add("mcp list", () =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
     foreach (McpServerOptions server in options.McpServers)
     {
-        Console.WriteLine($"{server.Id}\t{server.Command}\t{server.Enabled}");
+        string target = string.Equals(server.Transport, "stdio", StringComparison.OrdinalIgnoreCase)
+            ? server.Command
+            : server.Endpoint ?? string.Empty;
+        Console.WriteLine($"{server.Id}\t{server.Transport}\t{target}\t{server.Enabled}");
     }
+});
+
+app.Add("mcp add-stdio", async (
+    string id,
+    string command,
+    string argumentsJson = "[]",
+    string? workingDirectory = null,
+    string environmentJson = "{}",
+    bool enabled = true,
+    int startupTimeoutSeconds = 30,
+    CancellationToken cancellationToken = default) =>
+{
+    McpConfigurator configurator = host.Services.GetRequiredService<McpConfigurator>();
+    IReadOnlyList<string> arguments = ParseStringArray(argumentsJson);
+    IReadOnlyDictionary<string, string?> environment = ParseNullableStringDictionary(environmentJson);
+    McpServerOptions server = await configurator.AddStdioServerAsync(
+        id,
+        command,
+        arguments,
+        workingDirectory,
+        environment,
+        enabled,
+        startupTimeoutSeconds,
+        cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"MCP server '{server.Id}' saved (stdio, enabled={server.Enabled}).");
+});
+
+app.Add("mcp add-http", async (
+    string id,
+    string endpoint,
+    string transport = "http",
+    string headersJson = "{}",
+    bool enabled = true,
+    int startupTimeoutSeconds = 30,
+    CancellationToken cancellationToken = default) =>
+{
+    McpConfigurator configurator = host.Services.GetRequiredService<McpConfigurator>();
+    IReadOnlyDictionary<string, string> headers = ParseStringDictionary(headersJson);
+    McpServerOptions server = await configurator.AddHttpServerAsync(
+        id,
+        transport,
+        endpoint,
+        headers,
+        enabled,
+        startupTimeoutSeconds,
+        cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"MCP server '{server.Id}' saved ({server.Transport}, enabled={server.Enabled}).");
+});
+
+app.Add("mcp remove", async (string id, CancellationToken cancellationToken) =>
+{
+    McpConfigurator configurator = host.Services.GetRequiredService<McpConfigurator>();
+    await configurator.RemoveServerAsync(id, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"MCP server '{id}' removed.");
+});
+
+app.Add("mcp enable", async (string id, CancellationToken cancellationToken) =>
+{
+    McpConfigurator configurator = host.Services.GetRequiredService<McpConfigurator>();
+    McpServerOptions server = await configurator.SetEnabledAsync(id, enabled: true, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"MCP server '{server.Id}' enabled.");
+});
+
+app.Add("mcp disable", async (string id, CancellationToken cancellationToken) =>
+{
+    McpConfigurator configurator = host.Services.GetRequiredService<McpConfigurator>();
+    McpServerOptions server = await configurator.SetEnabledAsync(id, enabled: false, cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"MCP server '{server.Id}' disabled.");
 });
 
 app.Add("mcp tools", async (CancellationToken cancellationToken) =>
@@ -394,6 +491,72 @@ app.Add("credentials delete", async (string targetName, CancellationToken cancel
 });
 
 await app.RunAsync(args).ConfigureAwait(false);
+
+static IReadOnlyList<string> ParseStringArray(string json)
+{
+    using JsonDocument document = JsonDocument.Parse(json);
+    if (document.RootElement.ValueKind != JsonValueKind.Array)
+    {
+        throw new InvalidOperationException("Expected a JSON string array.");
+    }
+
+    List<string> values = [];
+    foreach (JsonElement element in document.RootElement.EnumerateArray())
+    {
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException("Expected a JSON string array.");
+        }
+
+        values.Add(element.GetString() ?? string.Empty);
+    }
+
+    return values;
+}
+
+static IReadOnlyDictionary<string, string> ParseStringDictionary(string json)
+{
+    using JsonDocument document = JsonDocument.Parse(json);
+    if (document.RootElement.ValueKind != JsonValueKind.Object)
+    {
+        throw new InvalidOperationException("Expected a JSON string object.");
+    }
+
+    Dictionary<string, string> values = new(StringComparer.Ordinal);
+    foreach (JsonProperty property in document.RootElement.EnumerateObject())
+    {
+        if (property.Value.ValueKind != JsonValueKind.String)
+        {
+            throw new InvalidOperationException("Expected a JSON string object.");
+        }
+
+        values[property.Name] = property.Value.GetString() ?? string.Empty;
+    }
+
+    return values;
+}
+
+static IReadOnlyDictionary<string, string?> ParseNullableStringDictionary(string json)
+{
+    using JsonDocument document = JsonDocument.Parse(json);
+    if (document.RootElement.ValueKind != JsonValueKind.Object)
+    {
+        throw new InvalidOperationException("Expected a JSON string object.");
+    }
+
+    Dictionary<string, string?> values = new(StringComparer.Ordinal);
+    foreach (JsonProperty property in document.RootElement.EnumerateObject())
+    {
+        values[property.Name] = property.Value.ValueKind switch
+        {
+            JsonValueKind.String => property.Value.GetString(),
+            JsonValueKind.Null => null,
+            _ => throw new InvalidOperationException("Expected a JSON string object.")
+        };
+    }
+
+    return values;
+}
 
 static Dictionary<string, string> MergeToolMetadata(
     Dictionary<string, string> properties,
@@ -525,12 +688,9 @@ internal static class ChatRepl
         CancellationToken cancellationToken)
     {
         WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
-        string currentProviderId = providerId;
-        string currentModelId = modelId;
-        bool currentRenderMarkdown = renderMarkdown;
-        Conversation conversation = new();
+        ChatSession session = new(providerId, modelId, renderMarkdown);
 
-        WriteBanner(currentProviderId, currentModelId, currentRenderMarkdown);
+        WriteBanner(session.ProviderId, session.ModelId, session.RenderMarkdown);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -549,31 +709,23 @@ internal static class ChatRepl
 
             if (input.StartsWith('/'))
             {
-                if (HandleSlashCommand(
-                        options,
-                        input,
-                        ref currentProviderId,
-                        ref currentModelId,
-                        ref currentRenderMarkdown,
-                        conversation,
-                        out bool shouldExit))
+                SlashCommandResult result = SlashCommandProcessor.Execute(options, session, input);
+                WriteSlashCommandMessages(result.Messages);
+                if (result.ShouldExit)
                 {
-                    if (shouldExit)
-                    {
-                        return;
-                    }
-
-                    continue;
+                    return;
                 }
+
+                continue;
             }
 
             await RunTurnAsync(
                 services,
-                currentProviderId,
-                currentModelId,
-                conversation,
+                session.ProviderId,
+                session.ModelId,
+                session.Conversation,
                 input,
-                currentRenderMarkdown,
+                session.RenderMarkdown,
                 cancellationToken).ConfigureAwait(false);
         }
     }
@@ -587,181 +739,12 @@ internal static class ChatRepl
         AnsiConsole.WriteLine();
     }
 
-    private static bool HandleSlashCommand(
-        WinHarnessOptions options,
-        string input,
-        ref string currentProviderId,
-        ref string currentModelId,
-        ref bool currentRenderMarkdown,
-        Conversation conversation,
-        out bool shouldExit)
+    private static void WriteSlashCommandMessages(IReadOnlyList<string> messages)
     {
-        shouldExit = false;
-        string[] parts = input.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        string command = parts[0].ToLowerInvariant();
-        string argument = parts.Length > 1 ? parts[1] : string.Empty;
-
-        switch (command)
+        foreach (string message in messages)
         {
-            case "/exit":
-            case "/quit":
-                shouldExit = true;
-                return true;
-
-            case "/help":
-                WriteHelp();
-                return true;
-
-            case "/providers":
-                WriteProviders(options, currentProviderId);
-                return true;
-
-            case "/models":
-                WriteModels(options, argument.Length > 0 ? argument : currentProviderId, currentModelId);
-                return true;
-
-            case "/provider":
-                SwitchProvider(options, argument, ref currentProviderId, ref currentModelId);
-                return true;
-
-            case "/model":
-                SwitchModel(options, currentProviderId, argument, ref currentModelId);
-                return true;
-
-            case "/markdown":
-                currentRenderMarkdown = !currentRenderMarkdown;
-                AnsiConsole.MarkupLine($"[dim]Markdown rendering {(currentRenderMarkdown ? "[green]on[/]" : "[grey]off[/]")}.[/]");
-                return true;
-
-            case "/new":
-            case "/clear":
-                conversation.Clear();
-                AnsiConsole.MarkupLine("[dim]Conversation cleared.[/]");
-                return true;
-
-            default:
-                AnsiConsole.MarkupLine($"[red]Unknown command '{Markup.Escape(command)}'. Try /help.[/]");
-                return true;
+            AnsiConsole.MarkupLine("[dim]" + Markup.Escape(message) + "[/]");
         }
-    }
-
-    private static void WriteHelp()
-    {
-        Table table = new Table()
-            .Border(TableBorder.Rounded)
-            .AddColumn("Command")
-            .AddColumn("Description");
-        table.AddRow("/help", "Show this help");
-        table.AddRow("/providers", "List configured providers");
-        table.AddRow("/models [provider]", "List models for a provider");
-        table.AddRow("/provider <id>", "Switch active provider");
-        table.AddRow("/model <id>", "Switch active model");
-        table.AddRow("/markdown", "Toggle markdown rendering");
-        table.AddRow("/new, /clear", "Reset the conversation");
-        table.AddRow("/exit, /quit", "Leave the session");
-        AnsiConsole.Write(table);
-    }
-
-    private static void WriteProviders(WinHarnessOptions options, string currentProviderId)
-    {
-        if (options.Providers.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[yellow]No providers configured. Run 'winharness config wizard'.[/]");
-            return;
-        }
-
-        foreach (ProviderOptions provider in options.Providers)
-        {
-            bool active = string.Equals(provider.Id, currentProviderId, StringComparison.OrdinalIgnoreCase);
-            string marker = active ? "[green]●[/] " : "  ";
-            AnsiConsole.MarkupLine($"{marker}[bold]{Markup.Escape(provider.Id)}[/] [dim]{Markup.Escape(provider.BaseUrl ?? string.Empty)}[/]");
-        }
-    }
-
-    private static void WriteModels(WinHarnessOptions options, string providerId, string currentModelId)
-    {
-        ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
-        if (provider is null)
-        {
-            AnsiConsole.MarkupLine($"[red]Provider '{Markup.Escape(providerId)}' is not configured.[/]");
-            return;
-        }
-
-        if (provider.Models.Count == 0)
-        {
-            AnsiConsole.MarkupLine($"[yellow]No models configured for '{Markup.Escape(provider.Id)}'.[/]");
-            return;
-        }
-
-        foreach (ModelOptions model in provider.Models)
-        {
-            bool active = string.Equals(model.Id, currentModelId, StringComparison.OrdinalIgnoreCase);
-            string marker = active ? "[green]●[/] " : "  ";
-            AnsiConsole.MarkupLine($"{marker}[bold]{Markup.Escape(model.Id)}[/] [dim]{Markup.Escape(model.ProviderModelId)}[/]");
-        }
-    }
-
-    private static void SwitchProvider(
-        WinHarnessOptions options,
-        string providerId,
-        ref string currentProviderId,
-        ref string currentModelId)
-    {
-        if (providerId.Length == 0)
-        {
-            WriteProviders(options, currentProviderId);
-            return;
-        }
-
-        ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
-        if (provider is null)
-        {
-            AnsiConsole.MarkupLine($"[red]Provider '{Markup.Escape(providerId)}' is not configured.[/]");
-            return;
-        }
-
-        currentProviderId = provider.Id;
-        string activeModelId = currentModelId;
-        if (!provider.Models.Any(model => string.Equals(model.Id, activeModelId, StringComparison.OrdinalIgnoreCase)))
-        {
-            currentModelId = provider.Models.Count > 0 ? provider.Models[0].Id : string.Empty;
-        }
-
-        AnsiConsole.MarkupLine($"[dim]Provider [bold]{Markup.Escape(currentProviderId)}[/], model [bold]{Markup.Escape(currentModelId)}[/].[/]");
-    }
-
-    private static void SwitchModel(
-        WinHarnessOptions options,
-        string currentProviderId,
-        string modelId,
-        ref string currentModelId)
-    {
-        ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, currentProviderId, StringComparison.OrdinalIgnoreCase));
-        if (provider is null)
-        {
-            AnsiConsole.MarkupLine($"[red]Provider '{Markup.Escape(currentProviderId)}' is not configured.[/]");
-            return;
-        }
-
-        if (modelId.Length == 0)
-        {
-            WriteModels(options, currentProviderId, currentModelId);
-            return;
-        }
-
-        ModelOptions? model = provider.Models.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase));
-        if (model is null)
-        {
-            AnsiConsole.MarkupLine($"[red]Model '{Markup.Escape(modelId)}' is not configured for '{Markup.Escape(currentProviderId)}'.[/]");
-            return;
-        }
-
-        currentModelId = model.Id;
-        AnsiConsole.MarkupLine($"[dim]Model [bold]{Markup.Escape(currentModelId)}[/].[/]");
     }
 
     public static async ValueTask RunTurnAsync(

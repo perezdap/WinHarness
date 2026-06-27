@@ -83,6 +83,60 @@ public sealed class ConfigurationValidationTests
     }
 
     [TestMethod]
+    public void RejectsHttpMcpServerWithoutEndpoint()
+    {
+        WinHarnessOptions options = new();
+        options.McpServers.Add(new McpServerOptions { Id = "remote", Transport = "http" });
+
+        InvalidOperationException? exception = null;
+        try
+        {
+            WinHarnessOptionsValidator.Validate(options);
+        }
+        catch (InvalidOperationException caught)
+        {
+            exception = caught;
+        }
+
+        Assert.IsNotNull(exception);
+        StringAssert.Contains(exception!.Message, "endpoint");
+    }
+
+    [TestMethod]
+    public void RejectsUnsupportedMcpTransport()
+    {
+        WinHarnessOptions options = new();
+        options.McpServers.Add(new McpServerOptions { Id = "remote", Transport = "grpc", Endpoint = "https://example.com/mcp" });
+
+        InvalidOperationException? exception = null;
+        try
+        {
+            WinHarnessOptionsValidator.Validate(options);
+        }
+        catch (InvalidOperationException caught)
+        {
+            exception = caught;
+        }
+
+        Assert.IsNotNull(exception);
+        StringAssert.Contains(exception!.Message, "unsupported transport");
+    }
+
+    [TestMethod]
+    public void AllowsSseMcpServerWithEndpoint()
+    {
+        WinHarnessOptions options = new();
+        options.McpServers.Add(new McpServerOptions
+        {
+            Id = "remote",
+            Transport = "sse",
+            Endpoint = "https://example.com/mcp"
+        });
+
+        WinHarnessOptionsValidator.Validate(options);
+    }
+
+    [TestMethod]
     public void RejectsNonWinHarnessCredentialName()
     {
         WinHarnessOptions options = new();

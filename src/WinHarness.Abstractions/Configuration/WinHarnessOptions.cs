@@ -81,7 +81,7 @@ public sealed class ModelOptions
 }
 
 /// <summary>
-/// Stdio MCP server configuration.
+/// MCP server configuration.
 /// </summary>
 public sealed class McpServerOptions
 {
@@ -91,24 +91,39 @@ public sealed class McpServerOptions
     public string Id { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the command to execute.
+    /// Gets or sets the MCP transport kind: "stdio", "http", or "sse".
+    /// </summary>
+    public string Transport { get; set; } = "stdio";
+
+    /// <summary>
+    /// Gets or sets the command to execute for stdio transports.
     /// </summary>
     public string Command { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets command arguments.
+    /// Gets or sets command arguments for stdio transports.
     /// </summary>
     public List<string> Arguments { get; set; } = [];
 
     /// <summary>
-    /// Gets or sets the optional working directory.
+    /// Gets or sets the optional working directory for stdio transports.
     /// </summary>
     public string? WorkingDirectory { get; set; }
 
     /// <summary>
-    /// Gets or sets environment overrides.
+    /// Gets or sets environment overrides for stdio transports.
     /// </summary>
     public Dictionary<string, string?> Environment { get; set; } = [];
+
+    /// <summary>
+    /// Gets or sets the HTTP/SSE MCP endpoint.
+    /// </summary>
+    public string? Endpoint { get; set; }
+
+    /// <summary>
+    /// Gets or sets custom HTTP headers for HTTP/SSE MCP transports.
+    /// </summary>
+    public Dictionary<string, string> Headers { get; set; } = [];
 
     /// <summary>
     /// Gets or sets whether this server is enabled.

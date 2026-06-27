@@ -151,6 +151,59 @@ public sealed class ProviderConfigurator
     }
 
     /// <summary>
+    /// Replaces the capabilities of an existing model under a provider.
+    /// Returns the updated model definition.
+    /// </summary>
+    public async ValueTask<ModelOptions> SetModelCapabilitiesAsync(
+        string providerId,
+        string modelId,
+        ProviderCapabilities capabilities,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        WinHarnessOptions options = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
+        ProviderOptions provider = options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+
+        ModelOptions model = provider.Models.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{providerId}'.");
+
+        model.Capabilities = capabilities;
+        await _store.SaveAsync(options, cancellationToken).ConfigureAwait(false);
+        return model;
+    }
+
+    /// <summary>
+    /// Removes a model from a provider. Clears the default model when it pointed
+    /// at the removed model.
+    /// </summary>
+    public async ValueTask RemoveModelAsync(string providerId, string modelId, CancellationToken cancellationToken)
+    {
+        WinHarnessOptions options = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
+        ProviderOptions provider = options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+
+        ModelOptions model = provider.Models.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{providerId}'.");
+
+        provider.Models.Remove(model);
+
+        if (string.Equals(options.DefaultProvider, provider.Id, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(options.DefaultModel, model.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            options.DefaultModel = provider.Models.Count > 0 ? provider.Models[0].Id : string.Empty;
+        }
+
+        await _store.SaveAsync(options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Removes a provider, its models, and any owned credential. Clears the
     /// default selection when it pointed at the removed provider.
     /// </summary>

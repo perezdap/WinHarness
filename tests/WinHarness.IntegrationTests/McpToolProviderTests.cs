@@ -10,7 +10,7 @@ namespace WinHarness.IntegrationTests;
 public sealed class McpToolProviderTests
 {
     [TestMethod]
-    public async Task ReportsServerStartupFailure()
+    public async Task SkipsUnavailableServerDuringToolDiscovery()
     {
         WinHarnessOptions options = new();
         options.McpServers.Add(new McpServerOptions
@@ -24,17 +24,9 @@ public sealed class McpToolProviderTests
         await using McpClientManager manager = new();
         McpToolProvider provider = new(options, manager);
 
-        Exception? exception = null;
-        try
-        {
-            _ = await provider.ListToolsAsync(CancellationToken.None);
-        }
-        catch (Exception caught)
-        {
-            exception = caught;
-        }
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
 
-        Assert.IsNotNull(exception);
+        Assert.AreEqual(0, tools.Count);
     }
 
     [TestMethod]

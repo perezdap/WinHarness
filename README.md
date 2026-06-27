@@ -58,6 +58,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness config wizard` for guided, interactive provider/model setup
 - `winharness chat --prompt "..." [--render-markdown true]`
 - `winharness chat` for the terminal REPL (`/help`, `/providers`, `/models`, `/provider <id>`, `/model <id>`, `/markdown`, `/new`, `/exit`)
+- `winharness chat --tui` for the full-screen terminal UI with a scrollback pane, persistent input box, tool activity panel, status bar, and the same slash commands
 - `winharness providers list`
 - `winharness providers add --id openai-main --base-url https://api.openai.com/v1 [--api-key sk-... --set-default]`
 - `winharness providers remove --id openai-main`
@@ -65,12 +66,28 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness models list --provider-id local-ollama`
 - `winharness models discover --base-url http://localhost:11434/v1 [--api-key sk-...]` to query the endpoint's `GET /v1/models`
 - `winharness models add --provider-id openai-main --id gpt-primary --provider-model-id gpt-4.1 [--tool-calling --vision --set-default]`
+- `winharness models set-capabilities --provider-id openai-main --model-id gpt-primary [--tool-calling --vision --reasoning ...]`
 - `winharness models use --model-id local-coder`
 - `winharness tools list`
 - `winharness tools call --name read_file --arguments-json '{"path":"README.md"}'`
 - `winharness mcp list`
+- `winharness mcp add-stdio --id filesystem --command filesystem-mcp-server.exe [--arguments-json '["--root","C:\\src"]' --environment-json '{}' --enabled true]`
+- `winharness mcp add-http --id remote --endpoint https://example.com/mcp [--transport http|sse --headers-json '{"X-Client-Name":"WinHarness"}' --enabled true]`
+- `winharness mcp enable --id filesystem`
+- `winharness mcp disable --id filesystem`
+- `winharness mcp remove --id filesystem`
 - `winharness mcp tools`
 - `winharness credentials set|get|list|delete`
+
+### Full-screen TUI
+
+Launch the full-screen chat UI with:
+
+```powershell
+winharness chat --tui
+```
+
+The TUI keeps conversation scrollback visible, shows live tool activity, and provides a persistent input box. Press `Enter` to submit, `Ctrl+L` to clear the current conversation, and `Ctrl+Q` to quit. Slash commands such as `/provider <id>`, `/model <id>`, `/markdown`, and `/help` work in both the TUI and the line-based REPL.
 
 ## Configuration
 
@@ -172,20 +189,30 @@ winharness models use --model-id gpt-primary
 
 ## MCP setup
 
-MCP servers are configured as stdio processes. WinHarness discovers tools with explicit client-side `tools/list` and calls them with `tools/call`; it does not use assembly scanning or attribute-based discovery in the AOT path.
+MCP servers can use stdio, Streamable HTTP, or HTTP with SSE. WinHarness discovers tools with explicit client-side `tools/list` and calls them with `tools/call`; it does not use assembly scanning or attribute-based discovery in the AOT path.
 
-Example:
+Stdio example:
 
-```json
-{
-  "id": "filesystem",
-  "command": "filesystem-mcp-server.exe",
-  "arguments": ["--root", "C:\\src"],
-  "workingDirectory": null,
-  "environment": {},
-  "enabled": true,
-  "startupTimeoutSeconds": 30
-}
+```powershell
+winharness mcp add-stdio --id filesystem --command filesystem-mcp-server.exe --arguments-json '["--root","C:\\src"]' --enabled true
+```
+
+Streamable HTTP example:
+
+```powershell
+winharness mcp add-http --id remote --endpoint https://example.com/mcp --transport http --enabled true
+```
+
+HTTP with SSE example:
+
+```powershell
+winharness mcp add-http --id legacy-sse --endpoint https://example.com/sse --transport sse --enabled true
+```
+
+Non-secret headers are supplied as JSON when needed:
+
+```powershell
+winharness mcp add-http --id remote --endpoint https://example.com/mcp --headers-json '{"X-Client-Name":"WinHarness"}'
 ```
 
 Inspect MCP tools:

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using WinHarness.Configuration;
@@ -13,14 +15,24 @@ public sealed class McpToolProvider : IToolProvider
 {
     private readonly WinHarnessOptions _options;
     private readonly IMcpClientManager _clientManager;
+    private readonly ILogger<McpToolProvider> _logger;
 
     /// <summary>
     /// Creates an MCP tool provider.
     /// </summary>
     public McpToolProvider(WinHarnessOptions options, IMcpClientManager clientManager)
+        : this(options, clientManager, NullLogger<McpToolProvider>.Instance)
+    {
+    }
+
+    /// <summary>
+    /// Creates an MCP tool provider.
+    /// </summary>
+    public McpToolProvider(WinHarnessOptions options, IMcpClientManager clientManager, ILogger<McpToolProvider> logger)
     {
         _options = options;
         _clientManager = clientManager;
+        _logger = logger;
     }
 
     /// <inheritdoc />
@@ -34,13 +46,27 @@ public sealed class McpToolProvider : IToolProvider
                 continue;
             }
 
-            McpClient client = await _clientManager.GetClientAsync(server, cancellationToken).ConfigureAwait(false);
-            IList<McpClientTool> discovered = await client.ListToolsAsync(cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-
-            foreach (McpClientTool tool in discovered)
+            // A single unavailable or misbehaving MCP server must not take down the whole
+            // session. Isolate per-server failures so the remaining servers and built-in
+            // tools stay usable; only honor genuine cancellation.
+            try
             {
-                tools.Add(new McpTool(server.Id, client, tool));
+                McpClient client = await _clientManager.GetClientAsync(server, cancellationToken).ConfigureAwait(false);
+                IList<McpClientTool> discovered = await client.ListToolsAsync(cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+
+                foreach (McpClientTool tool in discovered)
+                {
+                    tools.Add(new McpTool(server.Id, client, tool));
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.McpServerUnavailable(server.Id, ex.Message);
             }
         }
 

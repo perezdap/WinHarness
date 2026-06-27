@@ -72,6 +72,41 @@ public sealed class ProviderConfiguratorTests
     }
 
     [TestMethod]
+    public async Task SetModelCapabilitiesUpdatesExistingModel()
+    {
+        ConfigStore store = new(_directory);
+        ProviderConfigurator configurator = new(store, new InMemoryCredentialStore());
+
+        await configurator.AddProviderAsync("local", "http://localhost:11434/v1", apiKey: null, makeDefault: true, CancellationToken.None);
+        await configurator.AddModelAsync(
+            "local",
+            "coder",
+            "qwen2.5-coder:latest",
+            ProviderCapabilities.None,
+            makeDefault: true,
+            CancellationToken.None);
+
+        ProviderCapabilities capabilities = new(
+            Streaming: true,
+            ToolCalling: true,
+            Vision: true,
+            PromptCaching: false,
+            StructuredOutput: true,
+            Reasoning: true);
+        ModelOptions model = await configurator.SetModelCapabilitiesAsync(
+            "local",
+            "coder",
+            capabilities,
+            CancellationToken.None);
+
+        Assert.IsTrue(model.Capabilities.ToolCalling);
+        Assert.IsTrue(model.Capabilities.Vision);
+
+        WinHarnessOptions saved = await store.LoadAsync(CancellationToken.None);
+        Assert.IsTrue(saved.Providers[0].Models[0].Capabilities.StructuredOutput);
+    }
+
+    [TestMethod]
     public async Task RemoveProviderDeletesCredentialAndClearsDefault()
     {
         ConfigStore store = new(_directory);

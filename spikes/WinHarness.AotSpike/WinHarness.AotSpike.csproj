@@ -18,5 +18,6 @@
     <PackageReference Include="ModelContextProtocol.Core" />
     <PackageReference Include="OpenAI" />
     <PackageReference Include="Spectre.Console" />
+    <PackageReference Include="Terminal.Gui" />
   </ItemGroup>
 </Project>

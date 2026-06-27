@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\WinHarness.Cli\WinHarness.Cli.csproj" />
     <ProjectReference Include="..\..\src\WinHarness.Infrastructure\WinHarness.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\WinHarness.Mcp\WinHarness.Mcp.csproj" />
     <ProjectReference Include="..\..\src\WinHarness.Platform.Windows\WinHarness.Platform.Windows.csproj" />

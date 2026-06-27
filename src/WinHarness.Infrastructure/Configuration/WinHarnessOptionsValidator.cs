@@ -75,13 +75,42 @@ public static class WinHarnessOptionsValidator
         foreach (McpServerOptions server in options.McpServers)
         {
             RequireNonEmpty(server.Id, "MCP server id is required.");
-            RequireNonEmpty(server.Command, $"MCP server '{server.Id}' command is required.");
+            RequireNonEmpty(server.Transport, $"MCP server '{server.Id}' transport is required.");
 
             if (!mcpServerIds.Add(server.Id))
             {
                 throw new InvalidOperationException($"Duplicate MCP server id '{server.Id}'.");
             }
+
+            if (IsStdioTransport(server.Transport))
+            {
+                RequireNonEmpty(server.Command, $"MCP server '{server.Id}' command is required for stdio transport.");
+            }
+            else if (IsHttpTransport(server.Transport))
+            {
+                RequireNonEmpty(server.Endpoint ?? string.Empty, $"MCP server '{server.Id}' endpoint is required for {server.Transport} transport.");
+                if (!Uri.TryCreate(server.Endpoint, UriKind.Absolute, out Uri? endpoint) ||
+                    (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps))
+                {
+                    throw new InvalidOperationException($"MCP server '{server.Id}' endpoint must be an absolute HTTP or HTTPS URI.");
+                }
+            }
+            else
+            {
+                throw new InvalidOperationException($"MCP server '{server.Id}' uses unsupported transport '{server.Transport}'. Supported values are stdio, http, and sse.");
+            }
         }
+    }
+
+    private static bool IsStdioTransport(string transport)
+    {
+        return string.Equals(transport, "stdio", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsHttpTransport(string transport)
+    {
+        return string.Equals(transport, "http", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(transport, "sse", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void RequireNonEmpty(string value, string message)
