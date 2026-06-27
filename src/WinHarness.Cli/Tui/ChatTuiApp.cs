@@ -5,7 +5,6 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
-using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -81,7 +80,7 @@ internal sealed class ChatTuiApp
 
         using CancellationTokenSource shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using IApplication app = Application.Create();
-        app.Init(DriverRegistry.Names.ANSI);
+        app.Init();
         ChatTuiApp chat = new(app, services, session, shutdownCts);
         using Window window = chat.BuildWindow();
         using CancellationTokenRegistration registration = cancellationToken.Register(static state =>
@@ -90,13 +89,17 @@ internal sealed class ChatTuiApp
             application.Invoke(() => application.RequestStop());
         }, app);
 
-        chat.LoadTranscriptFromSession();
-        chat.AppendSystem("/help for commands · Ctrl+Q to quit · Enter to send");
-        app.AddTimeout(TimeSpan.Zero, () =>
+        chat.InitializeTranscript();
+        chat.AppendSystem("/help for commands · Ctrl+Q to quit · Enter to send · click › line to type");
+        bool initialFocusSet = false;
+        app.Iteration += (_, _) =>
         {
-            chat.FocusInput();
-            return false;
-        });
+            if (!initialFocusSet)
+            {
+                initialFocusSet = true;
+                chat.FocusInput();
+            }
+        };
         try
         {
             app.Run(window);
@@ -152,7 +155,9 @@ internal sealed class ChatTuiApp
             X = 0,
             Y = 1,
             Width = Dim.Percent(70),
-            Height = Dim.Fill()! - 6
+            Height = Dim.Fill()! - 4,
+            CanFocus = false,
+            TabStop = TabBehavior.NoStop
         };
         transcriptFrame.SetScheme(new Scheme
         {
@@ -178,7 +183,9 @@ internal sealed class ChatTuiApp
             X = Pos.Right(transcriptFrame),
             Y = 1,
             Width = Dim.Fill(),
-            Height = Dim.Fill()! - 6
+            Height = Dim.Fill()! - 4,
+            CanFocus = false,
+            TabStop = TabBehavior.NoStop
         };
         toolsFrame.SetScheme(new Scheme
         {
@@ -200,26 +207,25 @@ internal sealed class ChatTuiApp
         });
         toolsFrame.Add(_toolStatus);
 
-        FrameView inputFrame = new()
+        Label inputLabel = new()
         {
-            Title = "Input",
+            Text = "›",
             X = 0,
-            Y = Pos.AnchorEnd(1),
-            Width = Dim.Fill(),
-            Height = 3,
+            Y = Pos.AnchorEnd(2),
+            Width = 2,
+            Height = 1,
             CanFocus = false,
             TabStop = TabBehavior.NoStop
         };
-        inputFrame.SetScheme(new Scheme
+        inputLabel.SetScheme(new Scheme
         {
-            Normal = new Attribute(Color.BrightGreen, Color.Black),
-            Focus = new Attribute(Color.Black, Color.BrightGreen)
+            Normal = new Attribute(Color.BrightGreen, Color.Black)
         });
 
         _input = new TextField
         {
-            X = 1,
-            Y = 0,
+            X = 2,
+            Y = Pos.AnchorEnd(2),
             Width = Dim.Fill()! - 2,
             Height = 1,
             CanFocus = true,
@@ -227,16 +233,15 @@ internal sealed class ChatTuiApp
         };
         _input.SetScheme(new Scheme
         {
-            Normal = new Attribute(Color.BrightGreen, Color.Black),
+            Normal = new Attribute(Color.White, Color.Black),
             Focus = new Attribute(Color.Black, Color.BrightGreen),
-            Editable = new Attribute(Color.BrightGreen, Color.Black)
+            Editable = new Attribute(Color.White, Color.Black)
         });
         _input.Accepting += (_, args) =>
         {
             args.Handled = true;
             _ = SubmitCurrentInputAsync();
         };
-        inputFrame.Add(_input);
 
         Bar statusBar = new()
         {
@@ -260,15 +265,26 @@ internal sealed class ChatTuiApp
             Action = RequestQuit
         });
 
-        window.Add(_status, transcriptFrame, toolsFrame, inputFrame, statusBar);
+        window.Add(_status, transcriptFrame, toolsFrame, inputLabel, _input, statusBar);
         UpdateStatus();
         return window;
     }
 
     private void FocusInput()
     {
+        if (!_input.Enabled)
+        {
+            return;
+        }
+
         _input.SetFocus();
         _input.SetNeedsDraw();
+    }
+
+    private void InitializeTranscript()
+    {
+        PopulateTranscriptRowsFromSession();
+        RefreshTranscript();
     }
 
     private void LoadTranscriptFromSession()
