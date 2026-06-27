@@ -1,7 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
+using WinHarness.Context;
 using WinHarness.Diagnostics;
 using WinHarness.Infrastructure.Configuration;
+using WinHarness.Infrastructure.Context;
 using WinHarness.Infrastructure.Diagnostics;
+using WinHarness.Infrastructure.Sessions;
+using WinHarness.Sessions;
 
 namespace WinHarness.Infrastructure;
 
@@ -17,6 +21,9 @@ public static class InfrastructureServiceCollectionExtensions
     {
         services.AddSingleton<IDiagnosticSink, JsonlDiagnosticSink>();
         services.AddSingleton(static _ => new ConfigStore());
+        services.AddSingleton<IContextFileLoader, ContextFileLoader>();
+        services.AddSingleton<ISessionStore, JsonlSessionStore>();
+        services.AddSingleton<SessionManagerFactory>();
         services.AddSingleton<ProviderConfigurator>();
         services.AddSingleton<McpConfigurator>();
         return services;

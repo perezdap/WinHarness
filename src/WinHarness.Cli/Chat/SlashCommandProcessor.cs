@@ -1,10 +1,18 @@
 using WinHarness.Configuration;
+using WinHarness.Sessions;
 
 namespace WinHarness.Cli.Chat;
 
 internal static class SlashCommandProcessor
 {
-    public static SlashCommandResult Execute(WinHarnessOptions options, ChatSession session, string input)
+    public static SlashCommandResult Execute(WinHarnessOptions options, ChatSession session, string input) =>
+        ExecuteAsync(options, session, input, context: null).AsTask().GetAwaiter().GetResult();
+
+    public static async ValueTask<SlashCommandResult> ExecuteAsync(
+        WinHarnessOptions options,
+        ChatSession session,
+        string input,
+        SlashCommandContext? context = null)
     {
         string[] parts = input.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         string command = parts.Length > 0 ? parts[0].ToLowerInvariant() : string.Empty;
@@ -14,23 +22,73 @@ internal static class SlashCommandProcessor
         {
             "/exit" or "/quit" => SlashCommandResult.Exit(),
             "/help" => SlashCommandResult.Handled(CreateHelpLines()),
+            "/session" => SlashCommandResult.Handled(CreateSessionLines(session)),
+            "/name" => await SetSessionNameAsync(session, argument, context).ConfigureAwait(false),
+            "/new" => await CreateNewSessionAsync(session, context).ConfigureAwait(false),
+            "/resume" => await ResumeSessionAsync(session, context).ConfigureAwait(false),
             "/providers" => SlashCommandResult.Handled(CreateProviderLines(options, session.ProviderId)),
-            "/models" => SlashCommandResult.Handled(CreateModelLines(options, argument.Length > 0 ? argument : session.ProviderId, session.ModelId)),
-            "/provider" => SwitchProvider(options, session, argument),
-            "/model" => SwitchModel(options, session, argument),
+            "/models" => SlashCommandResult.Handled(CreateModelLines(
+                options,
+                argument.Length > 0 ? argument : session.ProviderId,
+                session.ModelId)),
+            "/provider" => await SwitchProviderAsync(options, session, argument, context).ConfigureAwait(false),
+            "/model" => await SwitchModelAsync(options, session, argument, context).ConfigureAwait(false),
             "/skills" => SlashCommandResult.Handled(CreateSkillLines(session)),
             "/skill" => SelectSkill(session, argument),
             "/markdown" => ToggleMarkdown(session),
-            "/new" or "/clear" => Clear(session),
+            "/clear" => Clear(session),
+            "/tree" => await ExecuteTreeAsync(session, context).ConfigureAwait(false),
+            "/fork" => await ExecuteForkAsync(session, context).ConfigureAwait(false),
+            "/compact" => await ExecuteCompactAsync(session, argument, context).ConfigureAwait(false),
             _ => SlashCommandResult.Handled([$"Unknown command '{command}'. Try /help."])
         };
     }
+
+    private static async ValueTask<SlashCommandResult> ExecuteTreeAsync(ChatSession session, SlashCommandContext? context)
+    {
+        if (context is null)
+        {
+            return MissingContext("/tree");
+        }
+
+        return await SlashCommandAdvanced.TreeAsync(session, context).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<SlashCommandResult> ExecuteForkAsync(ChatSession session, SlashCommandContext? context)
+    {
+        if (context is null)
+        {
+            return MissingContext("/fork");
+        }
+
+        return await SlashCommandAdvanced.ForkAsync(session, context).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<SlashCommandResult> ExecuteCompactAsync(
+        ChatSession session,
+        string instructions,
+        SlashCommandContext? context)
+    {
+        if (context is null)
+        {
+            return MissingContext("/compact");
+        }
+
+        return await SlashCommandAdvanced.CompactAsync(session, instructions, context).ConfigureAwait(false);
+    }
+
+    private static SlashCommandResult MissingContext(string command) =>
+        SlashCommandResult.Handled([$"'{command}' is only available in an active chat session."]);
 
     private static IReadOnlyList<string> CreateHelpLines()
     {
         return
         [
             "/help                 Show this help",
+            "/session              Show session file, id, name, and status",
+            "/name <name>          Set session display name (persisted sessions)",
+            "/new                  Start a new persisted session file",
+            "/resume               Pick a saved session to open",
             "/providers            List configured providers",
             "/models [provider]    List models for a provider",
             "/provider <id>        Switch active provider",
@@ -38,9 +96,107 @@ internal static class SlashCommandProcessor
             "/skills               List discovered skills",
             "/skill <name|off>     Select a skill for the session (or clear it)",
             "/markdown             Toggle markdown rendering",
-            "/new, /clear          Reset the conversation",
+            "/tree                 Navigate session branch",
+            "/fork                 Copy active branch to a new session file",
+            "/compact [text]       Summarize older context and keep recent messages",
+            "/clear                Clear the in-memory conversation view",
             "/exit, /quit          Leave the session"
         ];
+    }
+
+    private static IReadOnlyList<string> CreateSessionLines(ChatSession session)
+    {
+        ISessionManager manager = session.SessionManager;
+        return
+        [
+            $"persisted: {(session.IsEphemeral ? "no (in-memory)" : "yes")}",
+            $"file: {manager.SessionFilePath ?? "(none)"}",
+            $"id: {manager.Header.Id}",
+            $"name: {manager.DisplayName ?? "(none)"}",
+            $"leaf: {manager.LeafEntryId ?? "(none)"}",
+            $"messages: {session.CountActiveBranchMessages()}",
+            $"provider/model: {session.ProviderId}/{session.ModelId}"
+        ];
+    }
+
+    private static async ValueTask<SlashCommandResult> SetSessionNameAsync(
+        ChatSession session,
+        string name,
+        SlashCommandContext? context)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return SlashCommandResult.Handled(["Usage: /name <display name>"]);
+        }
+
+        if (session.IsEphemeral)
+        {
+            return SlashCommandResult.Handled(
+                ["Session names require a persisted session. Use /new or start without --no-session."]);
+        }
+
+        CancellationToken cancellationToken = context?.CancellationToken ?? CancellationToken.None;
+        await session.SessionManager.AppendSessionInfoAsync(name, cancellationToken).ConfigureAwait(false);
+        return SlashCommandResult.Handled([$"Session name set to '{name}'."]);
+    }
+
+    private static async ValueTask<SlashCommandResult> CreateNewSessionAsync(
+        ChatSession session,
+        SlashCommandContext? context)
+    {
+        if (context is null)
+        {
+            return MissingContext("/new");
+        }
+
+        ISessionManager created = await context.SessionFactory.CreateAsync(
+            session.WorkspaceRoot,
+            context.CancellationToken).ConfigureAwait(false);
+        session.ReplaceSessionManager(created);
+        return SlashCommandResult.Handled(
+        [
+            "New session file created.",
+            $"file: {created.SessionFilePath}"
+        ]);
+    }
+
+    private static async ValueTask<SlashCommandResult> ResumeSessionAsync(
+        ChatSession session,
+        SlashCommandContext? context)
+    {
+        if (context is null)
+        {
+            return MissingContext("/resume");
+        }
+
+        ISessionManager? opened = await ChatSessionBootstrap.PickSessionAsync(
+            context.SessionFactory,
+            session.WorkspaceRoot,
+            nameForNewSession: null,
+            context.CancellationToken).ConfigureAwait(false);
+        if (opened is null)
+        {
+            return SlashCommandResult.Handled(["No saved sessions for this workspace."]);
+        }
+
+        (string? providerId, string? modelId) = ChatSessionBootstrap.TryRestoreModelChange(opened);
+        session.ReplaceSessionManager(opened);
+        if (providerId is not null)
+        {
+            session.ProviderId = providerId;
+        }
+
+        if (modelId is not null)
+        {
+            session.ModelId = modelId;
+        }
+
+        return SlashCommandResult.Handled(
+        [
+            "Session resumed.",
+            $"file: {opened.SessionFilePath}",
+            $"name: {opened.DisplayName ?? "(none)"}"
+        ]);
     }
 
     private static IReadOnlyList<string> CreateSkillLines(ChatSession session)
@@ -132,7 +288,11 @@ internal static class SlashCommandProcessor
         return lines;
     }
 
-    private static SlashCommandResult SwitchProvider(WinHarnessOptions options, ChatSession session, string providerId)
+    private static async ValueTask<SlashCommandResult> SwitchProviderAsync(
+        WinHarnessOptions options,
+        ChatSession session,
+        string providerId,
+        SlashCommandContext? context)
     {
         if (providerId.Length == 0)
         {
@@ -151,10 +311,15 @@ internal static class SlashCommandProcessor
             session.ModelId = provider.Models.Count > 0 ? provider.Models[0].Id : string.Empty;
         }
 
+        await AppendModelChangeIfPersistedAsync(session, context).ConfigureAwait(false);
         return SlashCommandResult.Handled([$"Provider {session.ProviderId}, model {session.ModelId}."]);
     }
 
-    private static SlashCommandResult SwitchModel(WinHarnessOptions options, ChatSession session, string modelId)
+    private static async ValueTask<SlashCommandResult> SwitchModelAsync(
+        WinHarnessOptions options,
+        ChatSession session,
+        string modelId,
+        SlashCommandContext? context)
     {
         ProviderOptions? provider = FindProvider(options, session.ProviderId);
         if (provider is null)
@@ -175,7 +340,24 @@ internal static class SlashCommandProcessor
         }
 
         session.ModelId = model.Id;
+        await AppendModelChangeIfPersistedAsync(session, context).ConfigureAwait(false);
         return SlashCommandResult.Handled([$"Model {session.ModelId}."]);
+    }
+
+    private static async ValueTask AppendModelChangeIfPersistedAsync(
+        ChatSession session,
+        SlashCommandContext? context)
+    {
+        if (!session.SessionManager.IsPersisted)
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = context?.CancellationToken ?? CancellationToken.None;
+        await session.SessionManager.AppendModelChangeAsync(
+            session.ProviderId,
+            session.ModelId,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static SlashCommandResult ToggleMarkdown(ChatSession session)
@@ -187,7 +369,7 @@ internal static class SlashCommandProcessor
     private static SlashCommandResult Clear(ChatSession session)
     {
         session.Conversation.Clear();
-        return SlashCommandResult.Handled(["Conversation cleared."]);
+        return SlashCommandResult.Handled(["Conversation view cleared."]);
     }
 
     private static ProviderOptions? FindProvider(WinHarnessOptions options, string providerId)

@@ -32,7 +32,38 @@ public sealed class Conversation
 /// <summary>
 /// A conversation message.
 /// </summary>
-public sealed record ConversationMessage(ConversationRole Role, string Content);
+public sealed record ConversationMessage(
+    ConversationRole Role,
+    IReadOnlyList<ContentBlock> Content,
+    string? ProviderId = null,
+    string? ModelId = null,
+    MessageUsage? Usage = null)
+{
+    /// <summary>
+    /// Creates a text-only message.
+    /// </summary>
+    public static ConversationMessage FromText(ConversationRole role, string text) =>
+        new(role, [ContentBlock.CreateText(text)]);
+
+    /// <summary>
+    /// Gets concatenated text from all text blocks.
+    /// </summary>
+    public string Text
+    {
+        get
+        {
+            if (Content.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            return string.Concat(
+                Content
+                    .Where(static block => block.Kind == ContentBlockKind.Text && block.Text is not null)
+                    .Select(static block => block.Text));
+        }
+    }
+}
 
 /// <summary>
 /// Conversation roles.

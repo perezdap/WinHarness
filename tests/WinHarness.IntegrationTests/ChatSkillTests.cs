@@ -47,8 +47,8 @@ Write a failing test first.
             CollectionAssert.AreEqual(
                 new[] { ConversationRole.System, ConversationRole.User },
                 runConversation.Messages.Select(static message => message.Role).ToArray());
-            StringAssert.Contains(runConversation.Messages[0].Content, "Skill selected: tdd");
-            StringAssert.Contains(runConversation.Messages[0].Content, "Write a failing test first.");
+            StringAssert.Contains(runConversation.Messages[0].Text, "Skill selected: tdd");
+            StringAssert.Contains(runConversation.Messages[0].Text, "Write a failing test first.");
         }
         finally
         {

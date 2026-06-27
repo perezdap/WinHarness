@@ -14,14 +14,17 @@ using WinHarness.Cli.Configuration;
 using WinHarness.Cli.Rendering;
 using WinHarness.Cli.Tui;
 using WinHarness.Configuration;
+using WinHarness.Context;
 using WinHarness.Conversation;
 using WinHarness.Diagnostics;
 using WinHarness.Infrastructure;
+using WinHarness.Infrastructure.Sessions;
 using WinHarness.Infrastructure.Configuration;
 using WinHarness.Mcp;
 using WinHarness.Platform;
 using WinHarness.Providers;
 using WinHarness.Runtime;
+using WinHarness.Sessions;
 using WinHarness.Serialization;
 using WinHarness.Tools;
 
@@ -178,7 +181,18 @@ app.Add("models add", async (
     Console.WriteLine($"Model '{model.Id}' ({model.ProviderModelId}) saved under '{providerId}'.");
 });
 
-app.Add("chat", async (string? prompt = null, string? providerId = null, string? modelId = null, bool renderMarkdown = false, bool tui = false, CancellationToken cancellationToken = default) =>
+app.Add("chat", async (
+    string? prompt = null,
+    string? providerId = null,
+    string? modelId = null,
+    bool renderMarkdown = false,
+    bool tui = false,
+    bool noSession = false,
+    bool continueSession = false,
+    bool resume = false,
+    string? session = null,
+    string? name = null,
+    CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
     string resolvedProviderId = providerId ?? options.DefaultProvider;
@@ -189,16 +203,36 @@ app.Add("chat", async (string? prompt = null, string? providerId = null, string?
         throw new InvalidOperationException("Configure defaultProvider/defaultModel or pass --provider-id and --model-id.");
     }
 
+    ChatSessionBootstrapRequest bootstrapRequest = new(
+        IsOneShot: !string.IsNullOrWhiteSpace(prompt),
+        NoSession: noSession,
+        ContinueSession: continueSession,
+        Resume: resume,
+        Session: session,
+        Name: name);
+
     if (string.IsNullOrWhiteSpace(prompt))
     {
         if (tui)
         {
-            await ChatTuiApp.RunAsync(host.Services, resolvedProviderId, resolvedModelId, renderMarkdown, cancellationToken)
+            await ChatTuiApp.RunAsync(
+                    host.Services,
+                    resolvedProviderId,
+                    resolvedModelId,
+                    renderMarkdown,
+                    bootstrapRequest,
+                    cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
-        await ChatRepl.RunAsync(host.Services, resolvedProviderId, resolvedModelId, renderMarkdown, cancellationToken)
+        await ChatRepl.RunAsync(
+                host.Services,
+                resolvedProviderId,
+                resolvedModelId,
+                renderMarkdown,
+                bootstrapRequest,
+                cancellationToken)
             .ConfigureAwait(false);
         return;
     }
@@ -209,6 +243,7 @@ app.Add("chat", async (string? prompt = null, string? providerId = null, string?
         resolvedModelId,
         prompt,
         renderMarkdown,
+        bootstrapRequest,
         cancellationToken).ConfigureAwait(false);
 });
 
@@ -685,12 +720,25 @@ internal static class ChatRepl
         string providerId,
         string modelId,
         bool renderMarkdown,
+        ChatSessionBootstrapRequest bootstrapRequest,
         CancellationToken cancellationToken)
     {
         WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
-        ChatSession session = new(providerId, modelId, renderMarkdown);
+        ChatSession session = await CreateSessionAsync(
+            services,
+            providerId,
+            modelId,
+            renderMarkdown,
+            bootstrapRequest,
+            cancellationToken).ConfigureAwait(false);
 
-        WriteBanner(session.ProviderId, session.ModelId, session.RenderMarkdown);
+        WriteBanner(session);
+
+        SlashCommandContext slashContext = new(
+            services,
+            services.GetRequiredService<SessionManagerFactory>(),
+            services.GetRequiredService<IAgentRuntime>(),
+            cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -709,7 +757,11 @@ internal static class ChatRepl
 
             if (input.StartsWith('/'))
             {
-                SlashCommandResult result = SlashCommandProcessor.Execute(options, session, input);
+                SlashCommandResult result = await SlashCommandProcessor.ExecuteAsync(
+                    options,
+                    session,
+                    input,
+                    slashContext).ConfigureAwait(false);
                 WriteSlashCommandMessages(result.Messages);
                 if (result.ShouldExit)
                 {
@@ -727,11 +779,52 @@ internal static class ChatRepl
         }
     }
 
-    private static void WriteBanner(string providerId, string modelId, bool renderMarkdown)
+    private static async ValueTask<ChatSession> CreateSessionAsync(
+        IServiceProvider services,
+        string providerId,
+        string modelId,
+        bool renderMarkdown,
+        ChatSessionBootstrapRequest bootstrapRequest,
+        CancellationToken cancellationToken)
+    {
+        SessionManagerFactory factory = services.GetRequiredService<SessionManagerFactory>();
+        IContextFileLoader contextFileLoader = services.GetRequiredService<IContextFileLoader>();
+        ISessionManager sessionManager = await ChatSessionBootstrap.ResolveAsync(
+            factory,
+            bootstrapRequest,
+            cancellationToken).ConfigureAwait(false);
+
+        return ChatSessionBootstrap.CreateChatSession(
+            sessionManager,
+            contextFileLoader,
+            providerId,
+            modelId,
+            renderMarkdown);
+    }
+
+    private static void WriteBanner(ChatSession session)
     {
         AnsiConsole.Write(new Rule("[bold]WinHarness chat[/]").LeftJustified());
         AnsiConsole.MarkupLine(
-            $"[dim]provider[/] [bold]{Markup.Escape(providerId)}[/]  [dim]model[/] [bold]{Markup.Escape(modelId)}[/]  [dim]markdown[/] {(renderMarkdown ? "[green]on[/]" : "[grey]off[/]")}");
+            $"[dim]provider[/] [bold]{Markup.Escape(session.ProviderId)}[/]  [dim]model[/] [bold]{Markup.Escape(session.ModelId)}[/]  [dim]markdown[/] {(session.RenderMarkdown ? "[green]on[/]" : "[grey]off[/]")}");
+
+        if (session.IsEphemeral)
+        {
+            AnsiConsole.MarkupLine("[dim]session[/] [grey]ephemeral[/]");
+        }
+        else
+        {
+            string display = session.SessionManager.DisplayName ?? session.SessionManager.Header.Id;
+            AnsiConsole.MarkupLine(
+                $"[dim]session[/] [bold]{Markup.Escape(display)}[/]  [dim]file[/] {Markup.Escape(session.SessionManager.SessionFilePath ?? string.Empty)}");
+        }
+
+        string? contextLine = ContextBannerFormatter.Format(session.ProjectContext);
+        if (contextLine is not null)
+        {
+            AnsiConsole.MarkupLine("[dim]" + Markup.Escape(contextLine) + "[/]");
+        }
+
         AnsiConsole.MarkupLine("[dim]/help for commands · /exit to quit[/]");
         AnsiConsole.WriteLine();
     }
@@ -750,9 +843,16 @@ internal static class ChatRepl
         string modelId,
         string prompt,
         bool renderMarkdown,
+        ChatSessionBootstrapRequest bootstrapRequest,
         CancellationToken cancellationToken)
     {
-        ChatSession session = new(providerId, modelId, renderMarkdown);
+        ChatSession session = await CreateSessionAsync(
+            services,
+            providerId,
+            modelId,
+            renderMarkdown,
+            bootstrapRequest,
+            cancellationToken).ConfigureAwait(false);
         await RunTurnAsync(
             services,
             session,
@@ -777,7 +877,12 @@ internal static class ChatRepl
         bool wroteAssistantLabel = false;
 
         await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                           new AgentRunRequest(session.ProviderId, session.ModelId, runConversation),
+                           new AgentRunRequest(
+                               session.ProviderId,
+                               session.ModelId,
+                               runConversation,
+                               session.WorkspaceRoot,
+                               session.ProjectContext),
                            cancellationToken).ConfigureAwait(false))
         {
             if (agentEvent.Kind == AgentEventKind.ToolActivity)
@@ -795,10 +900,10 @@ internal static class ChatRepl
 
             if (agentEvent.Kind == AgentEventKind.Completed)
             {
-                if (agentEvent.AssistantMessage is not null)
+                if (agentEvent.TurnArtifacts is not null)
                 {
-                    session.Conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
-                    session.Conversation.Add(agentEvent.AssistantMessage);
+                    await session.AppendTurnAsync(agentEvent.TurnArtifacts, cancellationToken)
+                        .ConfigureAwait(false);
                 }
 
                 continue;

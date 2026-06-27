@@ -1,4 +1,7 @@
+using WinHarness.Context;
 using WinHarness.Conversation;
+using WinHarness.Runtime;
+using WinHarness.Sessions;
 using ConversationState = WinHarness.Conversation.Conversation;
 
 namespace WinHarness.Cli.Chat;
@@ -6,12 +9,46 @@ namespace WinHarness.Cli.Chat;
 internal sealed class ChatSession
 {
     public ChatSession(string providerId, string modelId, bool renderMarkdown)
+        : this(
+            Infrastructure.Sessions.SessionManager.InMemory(Environment.CurrentDirectory),
+            new EmptyContextFileLoader(),
+            Environment.CurrentDirectory,
+            providerId,
+            modelId,
+            renderMarkdown)
     {
+    }
+
+    public ChatSession(ISessionManager sessionManager, string providerId, string modelId, bool renderMarkdown)
+        : this(sessionManager, new EmptyContextFileLoader(), Environment.CurrentDirectory, providerId, modelId, renderMarkdown)
+    {
+    }
+
+    public ChatSession(
+        ISessionManager sessionManager,
+        IContextFileLoader? contextFileLoader,
+        string workspaceRoot,
+        string providerId,
+        string modelId,
+        bool renderMarkdown)
+    {
+        SessionManager = sessionManager;
+        ContextFileLoader = contextFileLoader ?? new EmptyContextFileLoader();
+        WorkspaceRoot = workspaceRoot;
+        ProjectContext = ContextFileLoader.Load(workspaceRoot);
         ProviderId = providerId;
         ModelId = modelId;
         RenderMarkdown = renderMarkdown;
-        Skills = SkillRegistry.Discover(Environment.CurrentDirectory);
+        Skills = SkillRegistry.Discover(workspaceRoot);
     }
+
+    public ISessionManager SessionManager { get; private set; }
+
+    public IContextFileLoader ContextFileLoader { get; }
+
+    public string WorkspaceRoot { get; }
+
+    public ProjectContext ProjectContext { get; private set; }
 
     public string ProviderId { get; set; }
 
@@ -25,20 +62,59 @@ internal sealed class ChatSession
 
     public ConversationState Conversation { get; } = new();
 
-    public ConversationState CreateRunConversation(string prompt)
+    public bool IsEphemeral => !SessionManager.IsPersisted;
+
+    public int CountActiveBranchMessages() =>
+        SessionManager.GetActiveBranch().Count(static entry => entry is MessageSessionEntry);
+
+    public void ReplaceSessionManager(ISessionManager sessionManager)
     {
-        ConversationState conversation = new();
-        if (SelectedSkill is not null)
-        {
-            conversation.Add(new ConversationMessage(ConversationRole.System, SelectedSkill.SystemPrompt));
-        }
+        ArgumentNullException.ThrowIfNull(sessionManager);
+        SessionManager = sessionManager;
+        SyncConversationFromSession();
+    }
 
-        foreach (ConversationMessage message in Conversation.Messages)
+    public void SyncConversationFromSession()
+    {
+        ConversationState built = SessionManager.BuildConversation(skillSystemPrompt: null);
+        Conversation.Clear();
+        foreach (ConversationMessage message in built.Messages)
         {
-            conversation.Add(message);
+            Conversation.Add(message);
         }
+    }
 
-        conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
+    public ConversationState BuildRunConversation(string prompt)
+    {
+        ConversationState conversation = SessionManager.BuildConversation(SelectedSkill?.SystemPrompt);
+        conversation.Add(ConversationMessage.FromText(ConversationRole.User, prompt));
         return conversation;
+    }
+
+    public ConversationState CreateRunConversation(string prompt) => BuildRunConversation(prompt);
+
+    public async ValueTask AppendTurnAsync(TurnArtifacts? turnArtifacts, CancellationToken cancellationToken)
+    {
+        if (turnArtifacts is null || turnArtifacts.Messages.Count == 0)
+        {
+            return;
+        }
+
+        await SessionManager.AppendMessagesAsync(turnArtifacts.Messages, cancellationToken).ConfigureAwait(false);
+        SyncConversationFromSession();
+    }
+
+    public void ReloadProjectContext()
+    {
+        ProjectContext = ContextFileLoader.Load(WorkspaceRoot);
+    }
+}
+
+internal sealed class EmptyContextFileLoader : IContextFileLoader
+{
+    public ProjectContext Load(string workspaceRoot)
+    {
+        _ = workspaceRoot;
+        return new ProjectContext(null, null, string.Empty);
     }
 }

@@ -10,8 +10,11 @@ using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using WinHarness.Cli.Chat;
 using WinHarness.Configuration;
+using WinHarness.Context;
 using WinHarness.Conversation;
+using WinHarness.Infrastructure.Sessions;
 using WinHarness.Runtime;
+using WinHarness.Sessions;
 
 using Attribute = Terminal.Gui.Drawing.Attribute;
 
@@ -23,6 +26,7 @@ internal sealed class ChatTuiApp
     private readonly IServiceProvider _services;
     private readonly WinHarnessOptions _options;
     private readonly ChatSession _session;
+    private readonly SlashCommandContext _slashContext;
     private readonly ObservableCollection<TranscriptRow> _transcriptRows = [];
     private readonly CancellationTokenSource _shutdownCts;
 
@@ -37,16 +41,20 @@ internal sealed class ChatTuiApp
     private ChatTuiApp(
         IApplication app,
         IServiceProvider services,
-        string providerId,
-        string modelId,
-        bool renderMarkdown,
+        ChatSession session,
         CancellationTokenSource shutdownCts)
     {
         _app = app;
         _services = services;
         _options = services.GetRequiredService<WinHarnessOptions>();
-        _session = new ChatSession(providerId, modelId, renderMarkdown);
+        _session = session;
         _shutdownCts = shutdownCts;
+        _slashContext = new SlashCommandContext(
+            services,
+            services.GetRequiredService<SessionManagerFactory>(),
+            services.GetRequiredService<IAgentRuntime>(),
+            shutdownCts.Token,
+            TreePickerAsync: PickTreeAsync);
     }
 
     public static async ValueTask RunAsync(
@@ -54,12 +62,26 @@ internal sealed class ChatTuiApp
         string providerId,
         string modelId,
         bool renderMarkdown,
+        ChatSessionBootstrapRequest bootstrapRequest,
         CancellationToken cancellationToken)
     {
+        SessionManagerFactory factory = services.GetRequiredService<SessionManagerFactory>();
+        IContextFileLoader contextFileLoader = services.GetRequiredService<IContextFileLoader>();
+        ISessionManager sessionManager = await ChatSessionBootstrap.ResolveAsync(
+            factory,
+            bootstrapRequest,
+            cancellationToken).ConfigureAwait(false);
+        ChatSession session = ChatSessionBootstrap.CreateChatSession(
+            sessionManager,
+            contextFileLoader,
+            providerId,
+            modelId,
+            renderMarkdown);
+
         using CancellationTokenSource shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using IApplication app = Application.Create();
         app.Init();
-        ChatTuiApp chat = new(app, services, providerId, modelId, renderMarkdown, shutdownCts);
+        ChatTuiApp chat = new(app, services, session, shutdownCts);
         using Window window = chat.BuildWindow();
         using CancellationTokenRegistration registration = cancellationToken.Register(static state =>
         {
@@ -67,6 +89,7 @@ internal sealed class ChatTuiApp
             application.Invoke(() => application.RequestStop());
         }, app);
 
+        chat.LoadTranscriptFromSession();
         chat.AppendSystem("/help for commands · Ctrl+Q to quit · Enter to send");
         try
         {
@@ -200,10 +223,10 @@ internal sealed class ChatTuiApp
         });
         statusBar.Add(new Shortcut
         {
-            Title = "_Clear",
-            HelpText = "Clear conversation",
+            Title = "_Reload",
+            HelpText = "Reload transcript from session",
             Key = Key.L.WithCtrl,
-            Action = ClearConversation
+            Action = ReloadTranscriptFromSession
         });
         statusBar.Add(new Shortcut
         {
@@ -216,6 +239,45 @@ internal sealed class ChatTuiApp
         window.Add(_status, transcriptFrame, toolsFrame, _input, statusBar);
         UpdateStatus();
         return window;
+    }
+
+    private void LoadTranscriptFromSession()
+    {
+        InvokeUi(() =>
+        {
+            PopulateTranscriptRowsFromSession();
+            RefreshTranscript();
+        });
+    }
+
+    private void ReloadTranscriptFromSession()
+    {
+        if (_turnRunning)
+        {
+            AppendSystem("Wait for the current turn to finish before reloading.");
+            return;
+        }
+
+        InvokeUi(() =>
+        {
+            _transcriptRows.Clear();
+            PopulateTranscriptRowsFromSession();
+            RefreshTranscript();
+        });
+    }
+
+    private void PopulateTranscriptRowsFromSession()
+    {
+        foreach (ConversationMessage message in _session.Conversation.Messages)
+        {
+            TranscriptRole role = message.Role switch
+            {
+                ConversationRole.User => TranscriptRole.User,
+                ConversationRole.Assistant => TranscriptRole.Assistant,
+                _ => TranscriptRole.System
+            };
+            _transcriptRows.Add(new TranscriptRow(role, message.Text));
+        }
     }
 
     private async Task SubmitCurrentInputAsync()
@@ -236,7 +298,17 @@ internal sealed class ChatTuiApp
 
         if (input.StartsWith('/'))
         {
-            SlashCommandResult result = SlashCommandProcessor.Execute(_options, _session, input);
+            SlashCommandResult result = await SlashCommandProcessor.ExecuteAsync(
+                _options,
+                _session,
+                input,
+                _slashContext).ConfigureAwait(false);
+
+            if (ShouldReloadTranscriptAfterSlashCommand(input))
+            {
+                ReloadTranscriptFromSession();
+            }
+
             foreach (string message in result.Messages)
             {
                 AppendSystem(message);
@@ -267,7 +339,12 @@ internal sealed class ChatTuiApp
         {
             IAgentRuntime runtime = _services.GetRequiredService<IAgentRuntime>();
             await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                               new AgentRunRequest(_session.ProviderId, _session.ModelId, runConversation),
+                               new AgentRunRequest(
+                                   _session.ProviderId,
+                                   _session.ModelId,
+                                   runConversation,
+                                   _session.WorkspaceRoot,
+                                   _session.ProjectContext),
                                _shutdownCts.Token).ConfigureAwait(false))
             {
                 switch (agentEvent.Kind)
@@ -280,10 +357,10 @@ internal sealed class ChatTuiApp
                         AppendSystem("Error: " + agentEvent.Message);
                         break;
                     case AgentEventKind.Completed:
-                        if (agentEvent.AssistantMessage is not null)
+                        if (agentEvent.TurnArtifacts is not null)
                         {
-                            _session.Conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
-                            _session.Conversation.Add(agentEvent.AssistantMessage);
+                            await _session.AppendTurnAsync(agentEvent.TurnArtifacts, _shutdownCts.Token)
+                                .ConfigureAwait(false);
                         }
 
                         break;
@@ -305,23 +382,38 @@ internal sealed class ChatTuiApp
         }
     }
 
-    private void ClearConversation()
+    private async ValueTask<IReadOnlyList<string>> PickTreeAsync(ISessionManager sessionManager)
     {
-        if (_turnRunning)
+        TaskCompletionSource<IReadOnlyList<string>> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _app.Invoke(() =>
         {
-            AppendSystem("Wait for the current turn to finish before clearing.");
-            return;
-        }
-
-        InvokeUi(() =>
-        {
-            _session.Conversation.Clear();
-            _transcriptRows.Clear();
-            UpdateToolStatus("idle");
-            RefreshTranscript();
-            _transcriptRows.Add(new TranscriptRow(TranscriptRole.System, "Conversation cleared."));
-            RefreshTranscript();
+            try
+            {
+                IReadOnlyList<string> messages = SessionTreeDialog.Show(
+                    _app,
+                    sessionManager,
+                    entryId =>
+                    {
+                        sessionManager.BranchTo(entryId);
+                        _session.SyncConversationFromSession();
+                    });
+                completion.SetResult(messages);
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
         });
+
+        return await completion.Task.ConfigureAwait(false);
+    }
+
+    private static bool ShouldReloadTranscriptAfterSlashCommand(string input)
+    {
+        string command = input.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault()
+            ?.ToLowerInvariant() ?? string.Empty;
+        return command is "/tree" or "/new" or "/resume" or "/fork" or "/compact";
     }
 
     private void AppendSystem(string message)
@@ -379,7 +471,42 @@ internal sealed class ChatTuiApp
     private string BuildStatusText()
     {
         string skill = _session.SelectedSkill is null ? "none" : _session.SelectedSkill.Name;
-        return $"provider {_session.ProviderId} · model {_session.ModelId} · markdown {(_session.RenderMarkdown ? "on" : "off")} · skill {skill}";
+        List<string> parts =
+        [
+            $"provider {_session.ProviderId}",
+            $"model {_session.ModelId}",
+            $"markdown {(_session.RenderMarkdown ? "on" : "off")}",
+            $"skill {skill}",
+            BuildSessionStatusLabel(),
+        ];
+
+        string? contextLine = ContextBannerFormatter.Format(_session.ProjectContext);
+        if (contextLine is not null)
+        {
+            parts.Add(contextLine);
+        }
+
+        return string.Join(" · ", parts);
+    }
+
+    private string BuildSessionStatusLabel()
+    {
+        if (_session.IsEphemeral)
+        {
+            return "session ephemeral";
+        }
+
+        string shortId = FormatShortSessionId(_session.SessionManager.Header.Id);
+        string? displayName = _session.SessionManager.DisplayName;
+        return displayName is null
+            ? $"session persisted {shortId}"
+            : $"session persisted {shortId} · {displayName}";
+    }
+
+    private static string FormatShortSessionId(string headerId)
+    {
+        string normalized = headerId.Replace("-", string.Empty, StringComparison.Ordinal);
+        return normalized.Length <= 8 ? normalized : normalized[..8];
     }
 
     private void SetInputEnabled(bool enabled)
