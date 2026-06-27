@@ -305,7 +305,12 @@ public sealed class BuiltinToolProvider : IToolProvider
             string workspaceRoot,
             ICommandExecutor commandExecutor,
             ILongPathService longPathService)
-            : base(workspaceRoot, longPathService, "run_command", "Run a command with captured output by default.", """{"type":"object","properties":{"command":{"type":"string"},"arguments":{"type":"array","items":{"type":"string"}},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"maxOutputBytes":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]}},"required":["command"]}""")
+            : base(
+                workspaceRoot,
+                longPathService,
+                "run_command",
+                "Run a Windows command with captured output by default. The command field must be only the executable name/path; put flags and parameters in the arguments array. This host is Windows: prefer PowerShell/cmd-native commands (where.exe, pwsh -NoProfile -Command Get-Command <name>, Get-ChildItem, Get-Content). Do not use Unix shell builtins such as command -v, which, bash, sh, ls, or cat unless the executable is known to exist.",
+                """{"type":"object","properties":{"command":{"type":"string","description":"Executable name or path only, for example pwsh, cmd.exe, where.exe, dotnet, or git. Do not include spaces, flags, pipes, redirection, or shell builtins."},"arguments":{"type":"array","items":{"type":"string"},"description":"Each command-line argument as a separate string. For shell syntax, invoke pwsh with ['-NoProfile','-Command','...'] or cmd.exe with ['/c','...']."},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"maxOutputBytes":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]}},"required":["command"]}""")
         {
             _commandExecutor = commandExecutor;
         }
@@ -387,9 +392,22 @@ public sealed class BuiltinToolProvider : IToolProvider
                 startInfo.ArgumentList.Add(argument);
             }
 
-            using System.Diagnostics.Process process = System.Diagnostics.Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Failed to start process.");
+            System.Diagnostics.Process? startedProcess;
+            try
+            {
+                startedProcess = System.Diagnostics.Process.Start(startInfo);
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException)
+            {
+                return CommandStartFailure.Create(request, ex);
+            }
 
+            if (startedProcess is null)
+            {
+                return CommandStartFailure.Create(request, null);
+            }
+
+            using System.Diagnostics.Process process = startedProcess;
             Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
             Task<string> stderrTask = process.StandardError.ReadToEndAsync();
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

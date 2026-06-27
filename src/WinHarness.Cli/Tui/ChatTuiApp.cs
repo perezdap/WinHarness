@@ -1,6 +1,10 @@
+using System.Collections;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Terminal.Gui.App;
+using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -8,6 +12,8 @@ using WinHarness.Cli.Chat;
 using WinHarness.Configuration;
 using WinHarness.Conversation;
 using WinHarness.Runtime;
+
+using Attribute = Terminal.Gui.Drawing.Attribute;
 
 namespace WinHarness.Cli.Tui;
 
@@ -17,16 +23,15 @@ internal sealed class ChatTuiApp
     private readonly IServiceProvider _services;
     private readonly WinHarnessOptions _options;
     private readonly ChatSession _session;
-    private readonly ObservableCollection<string> _transcriptLines = [];
-    private readonly ObservableCollection<string> _toolLines = [];
+    private readonly ObservableCollection<TranscriptRow> _transcriptRows = [];
     private readonly CancellationTokenSource _shutdownCts;
 
     private Label _status = null!;
     private ListView _transcript = null!;
-    private ListView _tools = null!;
+    private Label _toolStatus = null!;
     private TextField _input = null!;
     private bool _turnRunning;
-    private int _activeAssistantLineIndex = -1;
+    private int _activeAssistantRowIndex = -1;
     private Task _activeTurn = Task.CompletedTask;
 
     private ChatTuiApp(
@@ -106,6 +111,10 @@ internal sealed class ChatTuiApp
             Y = 0,
             Width = Dim.Fill()! - 2
         };
+        _status.SetScheme(new Scheme
+        {
+            Normal = new Attribute(Color.BrightYellow, Color.Black)
+        });
 
         FrameView transcriptFrame = new()
         {
@@ -115,14 +124,20 @@ internal sealed class ChatTuiApp
             Width = Dim.Percent(70),
             Height = Dim.Fill()! - 4
         };
+        transcriptFrame.SetScheme(new Scheme
+        {
+            Normal = new Attribute(Color.BrightCyan, Color.Black),
+            Focus = new Attribute(Color.Black, Color.BrightCyan)
+        });
+
         _transcript = new ListView
         {
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
-            Height = Dim.Fill()
+            Height = Dim.Fill(),
+            Source = new TranscriptDataSource(_transcriptRows)
         };
-        _transcript.SetSource(_transcriptLines);
         transcriptFrame.Add(_transcript);
 
         FrameView toolsFrame = new()
@@ -133,15 +148,25 @@ internal sealed class ChatTuiApp
             Width = Dim.Fill(),
             Height = Dim.Fill()! - 4
         };
-        _tools = new ListView
+        toolsFrame.SetScheme(new Scheme
         {
-            X = 0,
+            Normal = new Attribute(Color.BrightMagenta, Color.Black),
+            Focus = new Attribute(Color.Black, Color.BrightMagenta)
+        });
+
+        _toolStatus = new Label
+        {
+            X = 1,
             Y = 0,
-            Width = Dim.Fill(),
-            Height = Dim.Fill()
+            Width = Dim.Fill()! - 2,
+            Height = Dim.Fill(),
+            Text = "idle"
         };
-        _tools.SetSource(_toolLines);
-        toolsFrame.Add(_tools);
+        _toolStatus.SetScheme(new Scheme
+        {
+            Normal = new Attribute(Color.Gray, Color.Black)
+        });
+        toolsFrame.Add(_toolStatus);
 
         _input = new TextField
         {
@@ -149,6 +174,12 @@ internal sealed class ChatTuiApp
             Y = Pos.AnchorEnd(2),
             Width = Dim.Fill()! - 2
         };
+        _input.SetScheme(new Scheme
+        {
+            Normal = new Attribute(Color.BrightGreen, Color.Black),
+            Focus = new Attribute(Color.Black, Color.BrightGreen),
+            Editable = new Attribute(Color.BrightGreen, Color.Black)
+        });
         _input.Accepting += (_, args) =>
         {
             args.Handled = true;
@@ -229,27 +260,29 @@ internal sealed class ChatTuiApp
         _turnRunning = true;
         SetInputEnabled(false);
         AppendUser(prompt);
-        _session.Conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
-        _activeAssistantLineIndex = -1;
+        WinHarness.Conversation.Conversation runConversation = _session.CreateRunConversation(prompt);
+        _activeAssistantRowIndex = -1;
 
         try
         {
             IAgentRuntime runtime = _services.GetRequiredService<IAgentRuntime>();
             await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                               new AgentRunRequest(_session.ProviderId, _session.ModelId, _session.Conversation),
+                               new AgentRunRequest(_session.ProviderId, _session.ModelId, runConversation),
                                _shutdownCts.Token).ConfigureAwait(false))
             {
                 switch (agentEvent.Kind)
                 {
                     case AgentEventKind.ToolActivity:
-                        AppendTool(agentEvent.Message);
+                        UpdateToolStatus(agentEvent.Message);
                         break;
                     case AgentEventKind.Failed:
+                        UpdateToolStatus("idle");
                         AppendSystem("Error: " + agentEvent.Message);
                         break;
                     case AgentEventKind.Completed:
                         if (agentEvent.AssistantMessage is not null)
                         {
+                            _session.Conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
                             _session.Conversation.Add(agentEvent.AssistantMessage);
                         }
 
@@ -261,10 +294,12 @@ internal sealed class ChatTuiApp
                         break;
                 }
             }
+
+            UpdateToolStatus("idle");
         }
         finally
         {
-            _activeAssistantLineIndex = -1;
+            _activeAssistantRowIndex = -1;
             _turnRunning = false;
             SetInputEnabled(true);
         }
@@ -281,10 +316,10 @@ internal sealed class ChatTuiApp
         InvokeUi(() =>
         {
             _session.Conversation.Clear();
-            _transcriptLines.Clear();
-            _toolLines.Clear();
-            RefreshLists();
-            _transcriptLines.Add("system: Conversation cleared.");
+            _transcriptRows.Clear();
+            UpdateToolStatus("idle");
+            RefreshTranscript();
+            _transcriptRows.Add(new TranscriptRow(TranscriptRole.System, "Conversation cleared."));
             RefreshTranscript();
         });
     }
@@ -293,7 +328,7 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            _transcriptLines.Add("system: " + message);
+            _transcriptRows.Add(new TranscriptRow(TranscriptRole.System, message));
             RefreshTranscript();
         });
     }
@@ -302,7 +337,7 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            _transcriptLines.Add("user: " + message);
+            _transcriptRows.Add(new TranscriptRow(TranscriptRole.User, message));
             RefreshTranscript();
         });
     }
@@ -311,23 +346,25 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            if (_activeAssistantLineIndex < 0)
+            if (_activeAssistantRowIndex < 0)
             {
-                _transcriptLines.Add("assistant: ");
-                _activeAssistantLineIndex = _transcriptLines.Count - 1;
+                _transcriptRows.Add(new TranscriptRow(TranscriptRole.Assistant, string.Empty));
+                _activeAssistantRowIndex = _transcriptRows.Count - 1;
             }
 
-            _transcriptLines[_activeAssistantLineIndex] += delta.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\n', ' ');
+            TranscriptRow row = _transcriptRows[_activeAssistantRowIndex];
+            string cleaned = delta.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\n', ' ');
+            _transcriptRows[_activeAssistantRowIndex] = row with { Text = row.Text + cleaned };
             RefreshTranscript();
         });
     }
 
-    private void AppendTool(string message)
+    private void UpdateToolStatus(string message)
     {
         InvokeUi(() =>
         {
-            _toolLines.Add(message);
-            RefreshTools();
+            _toolStatus.Text = message;
+            _toolStatus.SetNeedsDraw();
         });
     }
 
@@ -335,8 +372,14 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            _status.Text = $"provider {_session.ProviderId} · model {_session.ModelId} · markdown {(_session.RenderMarkdown ? "on" : "off")}";
+            _status.Text = BuildStatusText();
         });
+    }
+
+    private string BuildStatusText()
+    {
+        string skill = _session.SelectedSkill is null ? "none" : _session.SelectedSkill.Name;
+        return $"provider {_session.ProviderId} · model {_session.ModelId} · markdown {(_session.RenderMarkdown ? "on" : "off")} · skill {skill}";
     }
 
     private void SetInputEnabled(bool enabled)
@@ -345,30 +388,132 @@ internal sealed class ChatTuiApp
         {
             _input.Enabled = enabled;
             _input.Text = enabled ? string.Empty : "running...";
-            _status.Text = $"provider {_session.ProviderId} · model {_session.ModelId} · markdown {(_session.RenderMarkdown ? "on" : "off")}";
+            _status.Text = BuildStatusText();
         });
-    }
-
-    private void RefreshLists()
-    {
-        RefreshTranscript();
-        RefreshTools();
     }
 
     private void RefreshTranscript()
     {
-        _transcript.SetSource(_transcriptLines);
         _transcript.SetNeedsDraw();
-    }
-
-    private void RefreshTools()
-    {
-        _tools.SetSource(_toolLines);
-        _tools.SetNeedsDraw();
     }
 
     private void InvokeUi(Action action)
     {
         _app.Invoke(action);
+    }
+
+    /// <summary>A single transcript line tagged with the role that produced it, used for color-coded rendering.</summary>
+    private sealed record TranscriptRow(TranscriptRole Role, string Text);
+
+    /// <summary>Identifies the source of a transcript line so it can be colored distinctly.</summary>
+    private enum TranscriptRole
+    {
+        System,
+        User,
+        Assistant
+    }
+
+    /// <summary>
+    /// Custom <see cref="IListDataSource"/> that renders each transcript row with a color and prefix
+    /// appropriate to its role, improving readability over the plain black-and-white list.
+    /// </summary>
+    private sealed class TranscriptDataSource : IListDataSource, IDisposable
+    {
+        private readonly ObservableCollection<TranscriptRow> _rows;
+        private readonly Attribute _systemAttr;
+        private readonly Attribute _userAttr;
+        private readonly Attribute _assistantAttr;
+        private readonly Attribute _selectedAttr;
+        private bool _disposed;
+
+        public TranscriptDataSource(ObservableCollection<TranscriptRow> rows)
+        {
+            _rows = rows;
+            _systemAttr = new Attribute(Color.Gray, Color.Black);
+            _userAttr = new Attribute(Color.BrightCyan, Color.Black);
+            _assistantAttr = new Attribute(Color.BrightGreen, Color.Black);
+            _selectedAttr = new Attribute(Color.Black, Color.BrightYellow);
+        }
+
+        public int Count => _rows.Count;
+
+        public int MaxItemLength => _rows.Count == 0 ? 0 : _rows.Max(static r => r.Text.Length);
+
+        public bool SuspendCollectionChangedEvent { get; set; }
+
+        public event NotifyCollectionChangedEventHandler? CollectionChanged
+        {
+            add => _rows.CollectionChanged += value;
+            remove => _rows.CollectionChanged -= value;
+        }
+
+        public bool IsMarked(int item) => false;
+
+        public void SetMark(int item, bool value)
+        {
+        }
+
+        public IList ToList() => _rows.ToList();
+
+        public void Render(ListView container, bool selected, int item, int col, int line, int width, int start)
+        {
+            if ((uint)item >= (uint)_rows.Count)
+            {
+                return;
+            }
+
+            TranscriptRow row = _rows[item];
+            container.Move(col, line);
+
+            Attribute attr = selected
+                ? _selectedAttr
+                : row.Role switch
+                {
+                    TranscriptRole.System => _systemAttr,
+                    TranscriptRole.User => _userAttr,
+                    TranscriptRole.Assistant => _assistantAttr,
+                    _ => _systemAttr
+                };
+
+            container.SetAttribute(attr);
+
+            string prefix = row.Role switch
+            {
+                TranscriptRole.System => "system › ",
+                TranscriptRole.User => "you › ",
+                TranscriptRole.Assistant => "ai › ",
+                _ => string.Empty
+            };
+
+            string text = prefix + row.Text;
+            if (text.Length > width)
+            {
+                text = width <= 1 ? text[..width] : string.Concat(text.AsSpan(0, width - 1), "…");
+            }
+
+            container.AddStr(text);
+
+            int remaining = width - text.Length;
+            if (remaining > 0)
+            {
+                container.AddStr(new string(' ', remaining));
+            }
+        }
+
+        public bool RenderMark(ListView container, int item, int col, int line, bool marked, bool selected)
+        {
+            // No mark column is rendered; marks are unused in the chat transcript.
+            return false;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+        }
     }
 }

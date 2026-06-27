@@ -57,7 +57,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness config init`
 - `winharness config wizard` for guided, interactive provider/model setup
 - `winharness chat --prompt "..." [--render-markdown true]`
-- `winharness chat` for the terminal REPL (`/help`, `/providers`, `/models`, `/provider <id>`, `/model <id>`, `/markdown`, `/new`, `/exit`)
+- `winharness chat` for the terminal REPL (`/help`, `/providers`, `/models`, `/provider <id>`, `/model <id>`, `/skills`, `/skill <name|off>`, `/markdown`, `/new`, `/exit`)
 - `winharness chat --tui` for the full-screen terminal UI with a scrollback pane, persistent input box, tool activity panel, status bar, and the same slash commands
 - `winharness providers list`
 - `winharness providers add --id openai-main --base-url https://api.openai.com/v1 [--api-key sk-... --set-default]`
@@ -87,7 +87,30 @@ Launch the full-screen chat UI with:
 winharness chat --tui
 ```
 
-The TUI keeps conversation scrollback visible, shows live tool activity, and provides a persistent input box. Press `Enter` to submit, `Ctrl+L` to clear the current conversation, and `Ctrl+Q` to quit. Slash commands such as `/provider <id>`, `/model <id>`, `/markdown`, and `/help` work in both the TUI and the line-based REPL.
+The TUI keeps conversation scrollback visible, shows live tool activity, and provides a persistent input box. Press `Enter` to submit, `Ctrl+L` to clear the current conversation, and `Ctrl+Q` to quit. Slash commands such as `/provider <id>`, `/model <id>`, `/skills`, `/skill <name|off>`, `/markdown`, and `/help` work in both the TUI and the line-based REPL.
+
+### Skills
+
+WinHarness can load Markdown skill instructions and apply one selected skill to each chat turn. Skills are discovered from:
+
+- `.winharness/skills/**/SKILL.md` under the current workspace
+- `.agents/skills/**/SKILL.md` under the current workspace
+- `%APPDATA%\WinHarness\skills/**/SKILL.md`
+- `%USERPROFILE%\.agents\skills/**/SKILL.md`
+
+A skill can use optional YAML frontmatter:
+
+```markdown
+---
+name: tdd
+description: Test-driven development workflow
+---
+# TDD
+
+Write a failing test first, then implement the minimum code to pass it.
+```
+
+Use `/skills` to list discovered skills, `/skill <name>` to activate one for the session, and `/skill off` to clear it. The selected skill is injected as an additional system message for each turn; it does not rewrite the saved conversation history.
 
 ## Configuration
 

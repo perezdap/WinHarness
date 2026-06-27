@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace WinHarness.Platform;
 
@@ -13,6 +14,10 @@ public sealed partial class WindowsAnsiConsoleConfigurator : IAnsiConsoleConfigu
     /// <inheritdoc />
     public void EnableAnsi()
     {
+        // Ensure Unicode (emoji, box-drawing, etc.) renders instead of "??".
+        // The legacy OEM code page mangles non-ASCII output regardless of VT processing.
+        TryEnableUtf8();
+
         if (!OperatingSystem.IsWindows())
         {
             return;
@@ -30,6 +35,27 @@ public sealed partial class WindowsAnsiConsoleConfigurator : IAnsiConsoleConfigu
         }
 
         _ = SetConsoleMode(handle, mode | EnableVirtualTerminalProcessing);
+    }
+
+    private static void TryEnableUtf8()
+    {
+        try
+        {
+            UTF8Encoding utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+            Console.OutputEncoding = utf8NoBom;
+            if (!Console.IsInputRedirected)
+            {
+                Console.InputEncoding = utf8NoBom;
+            }
+        }
+        catch (IOException)
+        {
+            // Output redirected to a non-console stream; encoding stays as-is.
+        }
+        catch (PlatformNotSupportedException)
+        {
+            // Encoding override unavailable on this host.
+        }
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]

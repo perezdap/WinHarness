@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace WinHarness.Platform;
@@ -29,8 +30,22 @@ public sealed class CapturedCommandExecutor : ICommandExecutor
             startInfo.ArgumentList.Add(argument);
         }
 
-        using Process process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException($"Failed to start '{request.FileName}'.");
+        Process? startedProcess;
+        try
+        {
+            startedProcess = Process.Start(startInfo);
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or System.IO.FileNotFoundException)
+        {
+            return CommandStartFailure.Create(request, ex);
+        }
+
+        if (startedProcess is null)
+        {
+            return CommandStartFailure.Create(request, null);
+        }
+
+        using Process process = startedProcess;
 
         Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = process.StandardError.ReadToEndAsync();

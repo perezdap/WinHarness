@@ -95,6 +95,26 @@ public sealed class BuiltinToolProviderTests
     }
 
     [TestMethod]
+    public async Task RunCommandReturnsGracefulFailureForMissingExecutable()
+    {
+        string root = CreateTempDirectory();
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        // Mimics an agent emitting the Unix shell builtin "command -v firecrawl",
+        // which previously surfaced as an unhandled Win32Exception.
+        ToolResult result = await tools.Single(static tool => tool.Name == "run_command")
+            .ExecuteAsync(
+                new ToolInvocation("run_command", Json("""{"command":"command","arguments":["-v","firecrawl"],"timeoutSeconds":10}""")),
+                CancellationToken.None);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual("nonzero_exit", result.ErrorCode);
+        StringAssert.Contains(result.Content, "Failed to start 'command'");
+        StringAssert.Contains(result.Content, "where.exe");
+    }
+
+    [TestMethod]
     public async Task RejectsSiblingPathEscape()
     {
         string parent = Path.Combine(Path.GetTempPath(), "WinHarnessTests", Guid.NewGuid().ToString("N"));

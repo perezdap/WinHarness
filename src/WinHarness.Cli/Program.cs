@@ -721,11 +721,8 @@ internal static class ChatRepl
 
             await RunTurnAsync(
                 services,
-                session.ProviderId,
-                session.ModelId,
-                session.Conversation,
+                session,
                 input,
-                session.RenderMarkdown,
                 cancellationToken).ConfigureAwait(false);
         }
     }
@@ -755,43 +752,43 @@ internal static class ChatRepl
         bool renderMarkdown,
         CancellationToken cancellationToken)
     {
+        ChatSession session = new(providerId, modelId, renderMarkdown);
         await RunTurnAsync(
             services,
-            providerId,
-            modelId,
-            new Conversation(),
+            session,
             prompt,
-            renderMarkdown,
             cancellationToken).ConfigureAwait(false);
     }
 
     private static async ValueTask RunTurnAsync(
         IServiceProvider services,
-        string providerId,
-        string modelId,
-        Conversation conversation,
+        ChatSession session,
         string prompt,
-        bool renderMarkdown,
         CancellationToken cancellationToken)
     {
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
-        StringBuilder? markdownBuffer = renderMarkdown ? new StringBuilder() : null;
+        StringBuilder? markdownBuffer = session.RenderMarkdown ? new StringBuilder() : null;
+        Conversation runConversation = session.CreateRunConversation(prompt);
+
+        // Tracks a transient, single-line tool status that overwrites itself in
+        // place (via carriage return) so tool activity never adds scrollback lines.
+        // Only real assistant output is allowed to advance to new lines.
+        TransientStatusLine status = new();
         bool wroteAssistantLabel = false;
 
-        conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
-
         await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                           new AgentRunRequest(providerId, modelId, conversation),
+                           new AgentRunRequest(session.ProviderId, session.ModelId, runConversation),
                            cancellationToken).ConfigureAwait(false))
         {
             if (agentEvent.Kind == AgentEventKind.ToolActivity)
             {
-                AnsiConsole.MarkupLine("[dim]" + Markup.Escape(agentEvent.Message) + "[/]");
+                status.Show(agentEvent.Message);
                 continue;
             }
 
             if (agentEvent.Kind == AgentEventKind.Failed)
             {
+                status.Clear();
                 AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
                 continue;
             }
@@ -800,7 +797,8 @@ internal static class ChatRepl
             {
                 if (agentEvent.AssistantMessage is not null)
                 {
-                    conversation.Add(agentEvent.AssistantMessage);
+                    session.Conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
+                    session.Conversation.Add(agentEvent.AssistantMessage);
                 }
 
                 continue;
@@ -810,6 +808,8 @@ internal static class ChatRepl
             {
                 continue;
             }
+
+            status.Clear();
 
             if (markdownBuffer is null)
             {
@@ -827,11 +827,79 @@ internal static class ChatRepl
             }
         }
 
+        status.Clear();
+
         if (markdownBuffer is not null)
         {
             MarkdownConsoleRenderer.Write(markdownBuffer.ToString());
         }
 
         Console.WriteLine();
+    }
+
+    /// <summary>
+    /// Renders a single, self-overwriting status line for transient tool activity.
+    /// The line is updated in place using a carriage return and is wiped before any
+    /// real output is written, so tool messages never accumulate as scrollback.
+    /// </summary>
+    private sealed class TransientStatusLine
+    {
+        private int _renderedWidth;
+        private bool _active;
+
+        public void Show(string message)
+        {
+            if (Console.IsOutputRedirected)
+            {
+                return;
+            }
+
+            string text = Truncate(message);
+            Console.Write('\r');
+            AnsiConsole.Markup("[dim]" + Markup.Escape(text) + "[/]");
+
+            if (text.Length < _renderedWidth)
+            {
+                Console.Write(new string(' ', _renderedWidth - text.Length));
+            }
+
+            _renderedWidth = text.Length;
+            _active = true;
+        }
+
+        public void Clear()
+        {
+            if (!_active || Console.IsOutputRedirected)
+            {
+                _active = false;
+                return;
+            }
+
+            Console.Write('\r');
+            Console.Write(new string(' ', _renderedWidth));
+            Console.Write('\r');
+            _renderedWidth = 0;
+            _active = false;
+        }
+
+        private static string Truncate(string message)
+        {
+            int max;
+            try
+            {
+                max = Console.WindowWidth - 1;
+            }
+            catch (IOException)
+            {
+                return message;
+            }
+
+            if (max <= 0 || message.Length <= max)
+            {
+                return message;
+            }
+
+            return max <= 1 ? message[..max] : string.Concat(message.AsSpan(0, max - 1), "…");
+        }
     }
 }

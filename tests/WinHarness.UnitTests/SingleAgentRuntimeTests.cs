@@ -170,11 +170,50 @@ public sealed class SingleAgentRuntimeTests
         }
 
         CollectionAssert.AreEqual(
-            new[] { ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User },
+            new[] { ChatRole.System, ChatRole.System, ChatRole.User, ChatRole.Assistant, ChatRole.User },
             providerFactory.LastMessages.Select(static message => message.Role).ToArray());
+        StringAssert.Contains(providerFactory.LastMessages[0].Text, "Windows/PowerShell");
         CollectionAssert.AreEqual(
             new[] { "system instructions", "remember my name", "ok", "what is my name?" },
-            providerFactory.LastMessages.Select(static message => message.Text).ToArray());
+            providerFactory.LastMessages.Skip(1).Select(static message => message.Text).ToArray());
+    }
+
+    [TestMethod]
+    public async Task InjectsWindowsSystemPromptWhenConversationHasNone()
+    {
+        FakeProviderFactory providerFactory = new(["ok"]);
+        SingleAgentRuntime runtime = new(providerFactory, NullLogger<SingleAgentRuntime>.Instance);
+
+        await foreach (AgentEvent _ in runtime.RunAsync(CreateRequest("check firecrawl"), CancellationToken.None))
+        {
+        }
+
+        Assert.AreEqual(ChatRole.System, providerFactory.LastMessages[0].Role);
+        StringAssert.Contains(providerFactory.LastMessages[0].Text, "Windows/PowerShell");
+        StringAssert.Contains(providerFactory.LastMessages[0].Text, "where.exe");
+        CollectionAssert.AreEqual(
+            new[] { ChatRole.System, ChatRole.User },
+            providerFactory.LastMessages.Select(static message => message.Role).ToArray());
+    }
+
+    [TestMethod]
+    public async Task PrependsBaseSystemPromptEvenWhenConversationHasSystemMessage()
+    {
+        Conversation.Conversation conversation = new();
+        conversation.Add(new ConversationMessage(ConversationRole.System, "skill instructions"));
+        conversation.Add(new ConversationMessage(ConversationRole.User, "go"));
+        FakeProviderFactory providerFactory = new(["ok"]);
+        SingleAgentRuntime runtime = new(providerFactory, NullLogger<SingleAgentRuntime>.Instance);
+
+        await foreach (AgentEvent _ in runtime.RunAsync(
+                           new AgentRunRequest("test-provider", "test-model", conversation),
+                           CancellationToken.None))
+        {
+        }
+
+        Assert.AreEqual(ChatRole.System, providerFactory.LastMessages[0].Role);
+        StringAssert.Contains(providerFactory.LastMessages[0].Text, "Windows/PowerShell");
+        Assert.AreEqual("skill instructions", providerFactory.LastMessages[1].Text);
     }
 
     [TestMethod]

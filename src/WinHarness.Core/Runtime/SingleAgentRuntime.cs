@@ -18,6 +18,18 @@ namespace WinHarness.Runtime;
 /// </summary>
 public sealed class SingleAgentRuntime : IAgentRuntime
 {
+    private const string RuntimeSystemPrompt = """
+You are WinHarness, a Windows-first coding agent running in a developer workstation environment.
+
+Command execution rules:
+- The host shell is Windows/PowerShell, not bash.
+- When using run_command, set command to the executable only and put flags in the arguments array.
+- Prefer Windows-native commands: where.exe, cmd.exe /c, or pwsh -NoProfile -Command.
+- To check whether a CLI exists, use where.exe <name> or pwsh -NoProfile -Command "Get-Command <name>".
+- Do not use Unix shell builtins or POSIX-only commands such as command -v, which, bash, sh, ls, cat, rm -rf, chmod, or sudo unless the user explicitly asks for WSL/POSIX and the executable is known to exist.
+- Prefer PowerShell equivalents: Get-ChildItem, Get-Content, Remove-Item, New-Item, Set-Content, Join-Path.
+""";
+
     private static readonly IDiagnosticSink NoDiagnostics = new NullDiagnosticSink();
 
     private readonly IDiagnosticSink _diagnosticSink;
@@ -169,7 +181,11 @@ public sealed class SingleAgentRuntime : IAgentRuntime
             throw new InvalidOperationException("Conversation must end with a user message before running a turn.");
         }
 
-        List<ChatMessage> messages = new(conversation.Messages.Count);
+        List<ChatMessage> messages = new(conversation.Messages.Count + 1)
+        {
+            new(ChatRole.System, RuntimeSystemPrompt)
+        };
+
         foreach (ConversationMessage message in conversation.Messages)
         {
             messages.Add(new ChatMessage(ProjectRole(message.Role), message.Content));

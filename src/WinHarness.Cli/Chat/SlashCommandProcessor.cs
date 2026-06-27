@@ -18,6 +18,8 @@ internal static class SlashCommandProcessor
             "/models" => SlashCommandResult.Handled(CreateModelLines(options, argument.Length > 0 ? argument : session.ProviderId, session.ModelId)),
             "/provider" => SwitchProvider(options, session, argument),
             "/model" => SwitchModel(options, session, argument),
+            "/skills" => SlashCommandResult.Handled(CreateSkillLines(session)),
+            "/skill" => SelectSkill(session, argument),
             "/markdown" => ToggleMarkdown(session),
             "/new" or "/clear" => Clear(session),
             _ => SlashCommandResult.Handled([$"Unknown command '{command}'. Try /help."])
@@ -33,10 +35,61 @@ internal static class SlashCommandProcessor
             "/models [provider]    List models for a provider",
             "/provider <id>        Switch active provider",
             "/model <id>           Switch active model",
+            "/skills               List discovered skills",
+            "/skill <name|off>     Select a skill for the session (or clear it)",
             "/markdown             Toggle markdown rendering",
             "/new, /clear          Reset the conversation",
             "/exit, /quit          Leave the session"
         ];
+    }
+
+    private static IReadOnlyList<string> CreateSkillLines(ChatSession session)
+    {
+        if (session.Skills.Count == 0)
+        {
+            return ["No skills found. Add SKILL.md files under .winharness/skills, .agents/skills, or %APPDATA%/WinHarness/skills."];
+        }
+
+        List<string> lines = new(session.Skills.Count + 1);
+        foreach (SkillDefinition skill in session.Skills)
+        {
+            string marker = ReferenceEquals(skill, session.SelectedSkill) ? "*" : " ";
+            lines.Add($"{marker} {skill.Name} - {Summarize(skill.Description)}");
+        }
+
+        lines.Add("Use /skill <name> to activate, /skill off to clear.");
+        return lines;
+    }
+
+    private static SlashCommandResult SelectSkill(ChatSession session, string argument)
+    {
+        if (argument.Length == 0)
+        {
+            return SlashCommandResult.Handled(CreateSkillLines(session));
+        }
+
+        if (string.Equals(argument, "off", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(argument, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            session.SelectedSkill = null;
+            return SlashCommandResult.Handled(["Skill cleared."]);
+        }
+
+        SkillDefinition? skill = session.Skills.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, argument, StringComparison.OrdinalIgnoreCase));
+        if (skill is null)
+        {
+            return SlashCommandResult.Handled([$"Skill '{argument}' not found. Try /skills."]);
+        }
+
+        session.SelectedSkill = skill;
+        return SlashCommandResult.Handled([$"Skill '{skill.Name}' activated."]);
+    }
+
+    private static string Summarize(string description)
+    {
+        string single = description.ReplaceLineEndings(" ").Trim();
+        return single.Length <= 80 ? single : single[..77] + "...";
     }
 
     private static IReadOnlyList<string> CreateProviderLines(WinHarnessOptions options, string currentProviderId)

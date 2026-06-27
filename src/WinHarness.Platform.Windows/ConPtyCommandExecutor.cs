@@ -83,7 +83,9 @@ public static partial class ConPtyCommandExecutor
 
             if (!created)
             {
-                throw new Win32Exception(Marshal.GetLastPInvokeError(), $"CreateProcess failed for '{request.FileName}'.");
+                return CommandStartFailure.Create(
+                    request,
+                    new Win32Exception(Marshal.GetLastPInvokeError(), $"CreateProcess failed for '{request.FileName}'."));
             }
 
             await using FileStream output = new(outputReadSide, FileAccess.Read, bufferSize: 4096, isAsync: false);
