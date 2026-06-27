@@ -2,9 +2,11 @@
 
 WinHarness is a Windows-native, terminal-first AI coding harness designed around Native AOT, MCP stdio tools, and OpenAI-compatible model endpoints.
 
-## v0.1 scope
+## v0.1 and v0.2 scope
 
-WinHarness v0.1 focuses on OpenAI-compatible endpoints only:
+**v0.2** adds persistent tree-structured sessions, full turn artifacts (including tool calls and results), project context files (`AGENTS.md`, `SYSTEM.md`), and manual compaction. Interactive `winharness chat` continues the most recent workspace session by default.
+
+**v0.1** provider scope is unchanged — OpenAI-compatible endpoints only:
 
 - OpenAI
 - Ollama `/v1`
@@ -56,8 +58,8 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness diagnostics write --message "..."`
 - `winharness config init`
 - `winharness config wizard` for guided, interactive provider/model setup
-- `winharness chat --prompt "..." [--render-markdown true]`
-- `winharness chat` for the terminal REPL (`/help`, `/providers`, `/models`, `/provider <id>`, `/model <id>`, `/skills`, `/skill <name|off>`, `/markdown`, `/new`, `/exit`)
+- `winharness chat --prompt "..." [--render-markdown true] [--continue-session]`
+- `winharness chat` for the terminal REPL (continues the most recent workspace session by default; see [Sessions](#sessions))
 - `winharness chat --tui` for the full-screen terminal UI with a scrollback pane, persistent input box, tool activity panel, status bar, and the same slash commands
 - `winharness providers list`
 - `winharness providers add --id openai-main --base-url https://api.openai.com/v1 [--api-key sk-... --set-default]`
@@ -79,6 +81,60 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness mcp tools`
 - `winharness credentials set|get|list|delete`
 
+### Sessions
+
+WinHarness persists multi-turn work as append-only JSONL files with a tree structure (`id` / `parentId`). Each turn stores full artifacts — user messages, assistant text, tool calls, and tool results — not just the final assistant reply.
+
+**Storage path:**
+
+```text
+%APPDATA%\WinHarness\sessions\{workspaceKey}\
+```
+
+`workspaceKey` is the normalized absolute working directory (for example `c-users-dperez-documents-github-winharness`). Files are named `{yyyyMMdd-HHmmss}_{sessionId}.jsonl`. See `samples/session.example.jsonl` for the on-disk JSON shape.
+
+**`winharness chat` session flags:**
+
+| Flag | Short | Behavior |
+|------|-------|----------|
+| *(default)* | | Continue the most recent session for the current directory, or create a new file if none exist |
+| `--no-session` | | Ephemeral in-memory session (v0.1 behavior) |
+| `--continue-session` | `-c` | Persist the chat (required for one-shot `--prompt` to write a session file) |
+| `--resume` | `-r` | Interactive session picker for this workspace |
+| `--session <path\|id>` | | Open a specific file path or match by session id suffix |
+| `--name <name>` | `-n` | Set the display name on a newly created session (`session_info` entry) |
+
+The published CLI registers the long option names; use `--continue-session`, `--resume`, and `--name` in scripts.
+
+One-shot `winharness chat --prompt "..."` is **ephemeral by default**. Pass `--continue-session` (or `--session`) to append that turn to a persisted session.
+
+**Slash commands (sessions):**
+
+| Command | Behavior |
+|---------|----------|
+| `/session` | Show file path, id, display name, leaf id, message count, provider/model |
+| `/name <name>` | Append a `session_info` display name |
+| `/new` | Create a new session file (previous file remains on disk) |
+| `/resume` | In-session picker (same as `--resume`) |
+| `/tree` | Navigate session branches (numbered picker; `*` marks the active branch) |
+| `/fork` | Copy the active branch into a new session file in the same workspace folder |
+| `/compact [instructions]` | Summarize older context; recent messages stay in the active branch |
+
+Existing commands still work: `/provider`, `/model`, `/skills`, `/skill`, `/markdown`, `/clear`, `/help`, `/exit`. `/provider` and `/model` append `model_change` entries when the session is persisted.
+
+### Context files
+
+Project instructions are loaded at startup and injected into the system prompt chain (not written to the session file):
+
+| File | Scope |
+|------|-------|
+| `AGENTS.md` | Global (`%APPDATA%\WinHarness\`), then each ancestor directory down to cwd |
+| `CLAUDE.md` | Same walk as `AGENTS.md` (both filenames are supported) |
+| `.winharness/SYSTEM.md` | Replaces the built-in runtime system prompt (project first, then global) |
+| `.winharness/APPEND_SYSTEM.md` | Appended after the base system prompt (project first, then global) |
+
+The REPL/TUI startup banner includes a `context:` line when any of these files are loaded.
+
 ### Full-screen TUI
 
 Launch the full-screen chat UI with:
@@ -87,7 +143,7 @@ Launch the full-screen chat UI with:
 winharness chat --tui
 ```
 
-The TUI keeps conversation scrollback visible, shows live tool activity, and provides a persistent input box. Press `Enter` to submit, `Ctrl+L` to clear the current conversation, and `Ctrl+Q` to quit. Slash commands such as `/provider <id>`, `/model <id>`, `/skills`, `/skill <name|off>`, `/markdown`, and `/help` work in both the TUI and the line-based REPL.
+The TUI keeps conversation scrollback visible, shows live tool activity, and provides a persistent input box. The status bar shows provider, model, markdown mode, skill, and session name (or `ephemeral`). Press `Enter` to submit, `Ctrl+L` to clear the on-screen transcript (persisted session unchanged), and `Ctrl+Q` to quit. `/tree` runs the numbered branch picker (`*` marks the active branch); after branching, the transcript rebuilds from the new active path. Slash commands such as `/provider <id>`, `/model <id>`, `/skills`, `/skill <name|off>`, `/markdown`, `/session`, and `/help` work in both the TUI and the line-based REPL.
 
 ### Skills
 
@@ -123,7 +179,7 @@ Runtime configuration will live under:
 API keys must be stored in Windows Credential Manager, not configuration files.
 WinHarness credential target names must use the `WinHarness:` prefix, for example `WinHarness:openai-main`.
 
-Example configuration files are in `samples/`, including a separate `model-capabilities.example.json` shape for model capability metadata.
+Example configuration files are in `samples/`, including `session.example.jsonl` for the persisted session format and a separate `model-capabilities.example.json` shape for model capability metadata.
 
 Create a starter configuration:
 

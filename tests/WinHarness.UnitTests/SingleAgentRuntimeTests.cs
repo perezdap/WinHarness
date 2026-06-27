@@ -3,8 +3,10 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WinHarness.Context;
 using WinHarness.Conversation;
 using WinHarness.Diagnostics;
+using WinHarness.Infrastructure.Context;
 using WinHarness.Providers;
 using WinHarness.Runtime;
 using WinHarness.Tools;
@@ -34,9 +36,15 @@ public sealed class SingleAgentRuntimeTests
         Assert.AreEqual("hello ", events[0].Message);
         Assert.AreEqual("WinHarness", events[1].Message);
         Assert.AreEqual(AgentEventKind.Completed, events[2].Kind);
-        Assert.IsNotNull(events[2].AssistantMessage);
-        Assert.AreEqual(ConversationRole.Assistant, events[2].AssistantMessage!.Role);
-        Assert.AreEqual("hello WinHarness", events[2].AssistantMessage!.Content);
+        TurnArtifacts artifacts = events[2].TurnArtifacts!;
+        Assert.IsNotNull(artifacts);
+        Assert.AreEqual(2, artifacts.Messages.Count);
+        Assert.AreEqual(ConversationRole.User, artifacts.Messages[0].Role);
+        Assert.AreEqual("prompt", artifacts.Messages[0].Text);
+        Assert.AreEqual(ConversationRole.Assistant, artifacts.Messages[1].Role);
+        Assert.AreEqual("hello WinHarness", artifacts.Messages[1].Text);
+        Assert.AreEqual("test-provider", artifacts.Messages[1].ProviderId);
+        Assert.AreEqual("test-model", artifacts.Messages[1].ModelId);
     }
 
     [TestMethod]
@@ -102,6 +110,30 @@ public sealed class SingleAgentRuntimeTests
         Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "tool.completed"));
         DiagnosticRecord toolRecord = diagnostics.Records.Single(static record => record.EventName == "tool.completed");
         Assert.AreEqual("value", toolRecord.Properties["custom.metadata"]);
+
+        AgentEvent completed = events.Single(static agentEvent => agentEvent.Kind == AgentEventKind.Completed);
+        TurnArtifacts artifacts = completed.TurnArtifacts!;
+        Assert.IsTrue(artifacts.Messages.Count >= 4);
+        Assert.AreEqual(ConversationRole.User, artifacts.Messages[0].Role);
+        Assert.AreEqual("prompt", artifacts.Messages[0].Text);
+
+        ConversationMessage assistantWithToolCall = artifacts.Messages[1];
+        Assert.AreEqual(ConversationRole.Assistant, assistantWithToolCall.Role);
+        ContentBlock toolCall = assistantWithToolCall.Content.Single(static block => block.Kind == ContentBlockKind.ToolCall);
+        Assert.AreEqual("fake_tool", toolCall.ToolName);
+        Assert.IsTrue(toolCall.ArgumentsJson!.Contains("\"message\":\"ping\"", StringComparison.Ordinal));
+
+        ConversationMessage toolResult = artifacts.Messages[2];
+        Assert.AreEqual(ConversationRole.Tool, toolResult.Role);
+        ContentBlock resultBlock = toolResult.Content.Single();
+        Assert.AreEqual(ContentBlockKind.ToolResult, resultBlock.Kind);
+        Assert.AreEqual("fake_tool", resultBlock.ToolName);
+        Assert.AreEqual("pong", resultBlock.Text);
+        Assert.AreEqual(toolCall.ToolCallId, resultBlock.ToolCallId);
+
+        ConversationMessage finalAssistant = artifacts.Messages[^1];
+        Assert.AreEqual(ConversationRole.Assistant, finalAssistant.Role);
+        Assert.AreEqual("tool says pong", finalAssistant.Text);
     }
 
     [TestMethod]
@@ -125,6 +157,32 @@ public sealed class SingleAgentRuntimeTests
         Assert.AreEqual("5", completed.Properties["usage.output_tokens"]);
         Assert.AreEqual("8", completed.Properties["usage.total_tokens"]);
         Assert.AreEqual("0", completed.Properties["retry.count"]);
+    }
+
+    [TestMethod]
+    public async Task CompletedEventIncludesUsageOnAssistantMessage()
+    {
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory(["hello"]),
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        AgentEvent? completed = null;
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           CreateRequest("prompt"),
+                           CancellationToken.None))
+        {
+            if (agentEvent.Kind == AgentEventKind.Completed)
+            {
+                completed = agentEvent;
+            }
+        }
+
+        Assert.IsNotNull(completed?.TurnArtifacts);
+        ConversationMessage assistant = completed.TurnArtifacts!.Messages[^1];
+        Assert.IsNotNull(assistant.Usage);
+        Assert.AreEqual(3, assistant.Usage!.InputTokens);
+        Assert.AreEqual(5, assistant.Usage.OutputTokens);
+        Assert.AreEqual(8, assistant.Usage.TotalTokens);
     }
 
     [TestMethod]
@@ -155,10 +213,10 @@ public sealed class SingleAgentRuntimeTests
     public async Task SendsConversationMessagesToChatClient()
     {
         Conversation.Conversation conversation = new();
-        conversation.Add(new ConversationMessage(ConversationRole.System, "system instructions"));
-        conversation.Add(new ConversationMessage(ConversationRole.User, "remember my name"));
-        conversation.Add(new ConversationMessage(ConversationRole.Assistant, "ok"));
-        conversation.Add(new ConversationMessage(ConversationRole.User, "what is my name?"));
+        conversation.Add(ConversationMessage.FromText(ConversationRole.System, "system instructions"));
+        conversation.Add(ConversationMessage.FromText(ConversationRole.User, "remember my name"));
+        conversation.Add(ConversationMessage.FromText(ConversationRole.Assistant, "ok"));
+        conversation.Add(ConversationMessage.FromText(ConversationRole.User, "what is my name?"));
 
         FakeProviderFactory providerFactory = new(["Dave"]);
         SingleAgentRuntime runtime = new(providerFactory, NullLogger<SingleAgentRuntime>.Instance);
@@ -200,8 +258,8 @@ public sealed class SingleAgentRuntimeTests
     public async Task PrependsBaseSystemPromptEvenWhenConversationHasSystemMessage()
     {
         Conversation.Conversation conversation = new();
-        conversation.Add(new ConversationMessage(ConversationRole.System, "skill instructions"));
-        conversation.Add(new ConversationMessage(ConversationRole.User, "go"));
+        conversation.Add(ConversationMessage.FromText(ConversationRole.System, "skill instructions"));
+        conversation.Add(ConversationMessage.FromText(ConversationRole.User, "go"));
         FakeProviderFactory providerFactory = new(["ok"]);
         SingleAgentRuntime runtime = new(providerFactory, NullLogger<SingleAgentRuntime>.Instance);
 
@@ -217,10 +275,52 @@ public sealed class SingleAgentRuntimeTests
     }
 
     [TestMethod]
+    public async Task InjectsAgentsInstructionsFromContextLoader()
+    {
+        string tempRoot = Path.Combine(Path.GetTempPath(), "WinHarnessRuntimeContext", Guid.NewGuid().ToString("N"));
+        string globalConfigDirectory = Path.Combine(tempRoot, "global-config");
+        string workspaceRoot = Path.Combine(tempRoot, "workspace");
+        Directory.CreateDirectory(globalConfigDirectory);
+        Directory.CreateDirectory(workspaceRoot);
+        File.WriteAllText(Path.Combine(workspaceRoot, "AGENTS.md"), "Use the purple widget pattern.");
+
+        try
+        {
+            ContextFileLoader loader = new(globalConfigDirectory);
+            FakeProviderFactory providerFactory = new(["ok"]);
+            SingleAgentRuntime runtime = new(
+                providerFactory,
+                [],
+                new RecordingDiagnosticSink(),
+                loader,
+                NullLogger<SingleAgentRuntime>.Instance);
+
+            await foreach (AgentEvent _ in runtime.RunAsync(
+                               CreateRequest("go", workspaceRoot),
+                               CancellationToken.None))
+            {
+            }
+
+            Assert.IsTrue(providerFactory.LastMessages.Count >= 2);
+            Assert.AreEqual(ChatRole.System, providerFactory.LastMessages[0].Role);
+            StringAssert.Contains(providerFactory.LastMessages[0].Text, "Windows/PowerShell");
+            Assert.AreEqual(ChatRole.System, providerFactory.LastMessages[1].Role);
+            StringAssert.Contains(providerFactory.LastMessages[1].Text, "purple widget pattern");
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task RejectsConversationThatDoesNotEndWithUserMessage()
     {
         Conversation.Conversation conversation = new();
-        conversation.Add(new ConversationMessage(ConversationRole.Assistant, "not a user turn"));
+        conversation.Add(ConversationMessage.FromText(ConversationRole.Assistant, "not a user turn"));
         SingleAgentRuntime runtime = new(
             new FakeProviderFactory(["ignored"]),
             NullLogger<SingleAgentRuntime>.Instance);
@@ -243,11 +343,15 @@ public sealed class SingleAgentRuntimeTests
         StringAssert.Contains(exception.Message, "end with a user message");
     }
 
-    private static AgentRunRequest CreateRequest(string prompt)
+    private static AgentRunRequest CreateRequest(string prompt, string? workspaceRoot = null)
     {
         Conversation.Conversation conversation = new();
-        conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
-        return new AgentRunRequest("test-provider", "test-model", conversation);
+        conversation.Add(ConversationMessage.FromText(ConversationRole.User, prompt));
+        return new AgentRunRequest(
+            "test-provider",
+            "test-model",
+            conversation,
+            workspaceRoot ?? string.Empty);
     }
 
     private sealed class FakeProviderFactory : IProviderFactory
@@ -338,13 +442,21 @@ public sealed class SingleAgentRuntimeTests
                 throw new InvalidOperationException("provider exploded");
             }
 
+            bool hasToolResult = messages.Any(static message =>
+                message.Role == ChatRole.Tool &&
+                message.Contents.Any(static content => content is FunctionResultContent));
             AIFunction? function = options?.Tools?.OfType<AIFunction>().FirstOrDefault();
-            if (function is not null)
+            if (function is not null && !hasToolResult)
             {
-                object? result = await function.InvokeAsync(
-                    new AIFunctionArguments { ["message"] = "ping" },
-                    cancellationToken);
-                yield return new ChatResponseUpdate(ChatRole.Assistant, "tool says " + result);
+                yield return new ChatResponseUpdate(
+                    ChatRole.Assistant,
+                    [new FunctionCallContent("call_01", function.Name, new Dictionary<string, object?> { ["message"] = "ping" })]);
+                yield break;
+            }
+
+            if (function is not null && hasToolResult)
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, "tool says pong");
                 yield break;
             }
 

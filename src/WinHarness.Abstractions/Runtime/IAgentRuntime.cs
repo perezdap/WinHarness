@@ -1,4 +1,5 @@
 using ConversationState = WinHarness.Conversation.Conversation;
+using WinHarness.Context;
 using WinHarness.Conversation;
 
 namespace WinHarness.Runtime;
@@ -16,17 +17,22 @@ public interface IAgentRuntime
 
 /// <summary>
 /// Input for one turn. The conversation must end with a user message; the
-/// runtime never mutates it. On completion the caller appends the assistant
-/// message carried by the terminal <see cref="AgentEventKind.Completed"/> event.
+/// runtime never mutates it. On completion the caller appends the turn
+/// artifacts carried by the terminal <see cref="AgentEventKind.Completed"/> event.
 /// </summary>
-public sealed record AgentRunRequest(string ProviderId, string ModelId, ConversationState Conversation);
+public sealed record AgentRunRequest(
+    string ProviderId,
+    string ModelId,
+    ConversationState Conversation,
+    string WorkspaceRoot = "",
+    ProjectContext? ProjectContext = null);
 
 /// <summary>
 /// A runtime event emitted during an agent run. The terminal
 /// <see cref="AgentEventKind.Completed"/> event carries
-/// <see cref="AssistantMessage"/> for the caller to append to its conversation.
+/// <see cref="TurnArtifacts"/> for the caller to append to its conversation.
 /// </summary>
-public sealed record AgentEvent(AgentEventKind Kind, string Message, ConversationMessage? AssistantMessage = null);
+public sealed record AgentEvent(AgentEventKind Kind, string Message, TurnArtifacts? TurnArtifacts = null);
 
 /// <summary>
 /// Agent runtime event kinds.

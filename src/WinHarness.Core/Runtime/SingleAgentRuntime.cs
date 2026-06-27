@@ -3,8 +3,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using WinHarness.Context;
 using WinHarness.Conversation;
 using ConversationState = WinHarness.Conversation.Conversation;
 using WinHarness.Diagnostics;
@@ -32,6 +34,7 @@ Command execution rules:
 
     private static readonly IDiagnosticSink NoDiagnostics = new NullDiagnosticSink();
 
+    private readonly IContextFileLoader? _contextFileLoader;
     private readonly IDiagnosticSink _diagnosticSink;
     private readonly IProviderFactory _providerFactory;
     private readonly IEnumerable<IToolProvider> _toolProviders;
@@ -41,7 +44,7 @@ Command execution rules:
     /// Creates a runtime.
     /// </summary>
     public SingleAgentRuntime(IProviderFactory providerFactory, ILogger<SingleAgentRuntime> logger)
-        : this(providerFactory, [], NoDiagnostics, logger)
+        : this(providerFactory, [], NoDiagnostics, null, logger)
     {
     }
 
@@ -52,7 +55,7 @@ Command execution rules:
         IProviderFactory providerFactory,
         IEnumerable<IToolProvider> toolProviders,
         ILogger<SingleAgentRuntime> logger)
-        : this(providerFactory, toolProviders, NoDiagnostics, logger)
+        : this(providerFactory, toolProviders, NoDiagnostics, null, logger)
     {
     }
 
@@ -64,10 +67,24 @@ Command execution rules:
         IEnumerable<IToolProvider> toolProviders,
         IDiagnosticSink diagnosticSink,
         ILogger<SingleAgentRuntime> logger)
+        : this(providerFactory, toolProviders, diagnosticSink, null, logger)
+    {
+    }
+
+    /// <summary>
+    /// Creates a runtime.
+    /// </summary>
+    public SingleAgentRuntime(
+        IProviderFactory providerFactory,
+        IEnumerable<IToolProvider> toolProviders,
+        IDiagnosticSink diagnosticSink,
+        IContextFileLoader? contextFileLoader,
+        ILogger<SingleAgentRuntime> logger)
     {
         _providerFactory = providerFactory;
         _toolProviders = toolProviders;
         _diagnosticSink = diagnosticSink;
+        _contextFileLoader = contextFileLoader;
         _logger = logger;
     }
 
@@ -76,9 +93,11 @@ Command execution rules:
         AgentRunRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        IReadOnlyList<ChatMessage> messages = ProjectConversation(request.Conversation);
+        ProjectContext projectContext = ResolveProjectContext(request);
+        IReadOnlyList<ChatMessage> messages = ProjectConversation(request.Conversation, projectContext);
         IChatProvider provider = _providerFactory.Create(request.ProviderId, request.ModelId);
-        using IChatClient client = provider.CreateChatClient();
+        (TurnRecorderChatClient recorder, IChatClient chatClient) = TurnRecorderChatClient.Create(provider.CreateChatClient());
+        using IChatClient client = chatClient;
 
         _logger.ProviderRequestStarting(provider.ProviderId, provider.ModelId);
         Stopwatch stopwatch = Stopwatch.StartNew();
@@ -162,13 +181,46 @@ Command execution rules:
             stopwatch,
             cancellationToken,
             usage: usage).ConfigureAwait(false);
+        ConversationMessage userMessage = request.Conversation.Messages[^1];
+        MessageUsage? messageUsage = usage is null
+            ? null
+            : new MessageUsage(
+                usage.InputTokenCount,
+                usage.OutputTokenCount,
+                usage.TotalTokenCount);
+
         yield return new AgentEvent(
             AgentEventKind.Completed,
             "completed",
-            new ConversationMessage(ConversationRole.Assistant, assistantText.ToString()));
+            recorder.BuildTurnArtifacts(
+                userMessage,
+                provider.ProviderId,
+                provider.ModelId,
+                messageUsage));
     }
 
-    private static IReadOnlyList<ChatMessage> ProjectConversation(ConversationState conversation)
+    private ProjectContext ResolveProjectContext(AgentRunRequest request)
+    {
+        if (request.ProjectContext is not null)
+        {
+            return request.ProjectContext;
+        }
+
+        if (_contextFileLoader is null)
+        {
+            return new ProjectContext(null, null, string.Empty);
+        }
+
+        string workspaceRoot = string.IsNullOrWhiteSpace(request.WorkspaceRoot)
+            ? Environment.CurrentDirectory
+            : request.WorkspaceRoot;
+
+        return _contextFileLoader.Load(workspaceRoot);
+    }
+
+    private static IReadOnlyList<ChatMessage> ProjectConversation(
+        ConversationState conversation,
+        ProjectContext projectContext)
     {
         if (conversation.Messages.Count == 0)
         {
@@ -181,17 +233,125 @@ Command execution rules:
             throw new InvalidOperationException("Conversation must end with a user message before running a turn.");
         }
 
-        List<ChatMessage> messages = new(conversation.Messages.Count + 1)
+        List<ChatMessage> messages = new(conversation.Messages.Count + 4);
+        string baseSystemPrompt = string.IsNullOrWhiteSpace(projectContext.SystemPromptReplacement)
+            ? RuntimeSystemPrompt
+            : projectContext.SystemPromptReplacement;
+        messages.Add(new(ChatRole.System, baseSystemPrompt));
+
+        if (!string.IsNullOrWhiteSpace(projectContext.SystemPromptAppend))
         {
-            new(ChatRole.System, RuntimeSystemPrompt)
-        };
+            messages.Add(new(ChatRole.System, projectContext.SystemPromptAppend));
+        }
+
+        if (!string.IsNullOrWhiteSpace(projectContext.AgentsInstructions))
+        {
+            messages.Add(new(ChatRole.System, projectContext.AgentsInstructions));
+        }
 
         foreach (ConversationMessage message in conversation.Messages)
         {
-            messages.Add(new ChatMessage(ProjectRole(message.Role), message.Content));
+            messages.AddRange(ProjectMessage(message));
         }
 
         return messages;
+    }
+
+    private static IEnumerable<ChatMessage> ProjectMessage(ConversationMessage message)
+    {
+        ChatRole role = ProjectRole(message.Role);
+
+        if (message.Role == ConversationRole.Tool)
+        {
+            foreach (ContentBlock block in message.Content)
+            {
+                if (block.Kind != ContentBlockKind.ToolResult ||
+                    block.ToolCallId is null ||
+                    block.ToolName is null ||
+                    block.Text is null)
+                {
+                    continue;
+                }
+
+                yield return new ChatMessage(
+                    ChatRole.Tool,
+                    [new FunctionResultContent(block.ToolCallId, block.Text)]);
+            }
+
+            yield break;
+        }
+
+        List<AIContent> contents = [];
+        foreach (ContentBlock block in message.Content)
+        {
+            switch (block.Kind)
+            {
+                case ContentBlockKind.Text when block.Text is not null:
+                    contents.Add(new TextContent(block.Text));
+                    break;
+                case ContentBlockKind.ToolCall
+                    when block.ToolCallId is not null &&
+                         block.ToolName is not null &&
+                         block.ArgumentsJson is not null:
+                    contents.Add(new FunctionCallContent(
+                        block.ToolCallId,
+                        block.ToolName,
+                        ParseToolArguments(block.ArgumentsJson)));
+                    break;
+            }
+        }
+
+        if (contents.Count == 0)
+        {
+            yield return new ChatMessage(role, string.Empty);
+            yield break;
+        }
+
+        if (contents.Count == 1 && contents[0] is TextContent textContent)
+        {
+            yield return new ChatMessage(role, textContent.Text);
+            yield break;
+        }
+
+        yield return new ChatMessage(role, contents);
+    }
+
+    private static Dictionary<string, object?> ParseToolArguments(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+        {
+            return [];
+        }
+
+        using JsonDocument document = JsonDocument.Parse(argumentsJson);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return [];
+        }
+
+        Dictionary<string, object?> arguments = new(StringComparer.Ordinal);
+        foreach (JsonProperty property in document.RootElement.EnumerateObject())
+        {
+            arguments[property.Name] = ConvertJsonElement(property.Value);
+        }
+
+        return arguments;
+    }
+
+    private static object? ConvertJsonElement(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number when element.TryGetInt64(out long value) => value,
+            JsonValueKind.Number => element.GetDouble(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            JsonValueKind.Object => element.GetRawText(),
+            JsonValueKind.Array => element.GetRawText(),
+            _ => element.GetRawText()
+        };
     }
 
     private static ChatRole ProjectRole(ConversationRole role)

@@ -10,8 +10,11 @@ using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using WinHarness.Cli.Chat;
 using WinHarness.Configuration;
+using WinHarness.Context;
 using WinHarness.Conversation;
+using WinHarness.Infrastructure.Sessions;
 using WinHarness.Runtime;
+using WinHarness.Sessions;
 
 using Attribute = Terminal.Gui.Drawing.Attribute;
 
@@ -23,6 +26,8 @@ internal sealed class ChatTuiApp
     private readonly IServiceProvider _services;
     private readonly WinHarnessOptions _options;
     private readonly ChatSession _session;
+    private readonly SlashCommandContext _slashContext;
+    private readonly List<TranscriptMessage> _messages = [];
     private readonly ObservableCollection<TranscriptRow> _transcriptRows = [];
     private readonly CancellationTokenSource _shutdownCts;
 
@@ -37,16 +42,20 @@ internal sealed class ChatTuiApp
     private ChatTuiApp(
         IApplication app,
         IServiceProvider services,
-        string providerId,
-        string modelId,
-        bool renderMarkdown,
+        ChatSession session,
         CancellationTokenSource shutdownCts)
     {
         _app = app;
         _services = services;
         _options = services.GetRequiredService<WinHarnessOptions>();
-        _session = new ChatSession(providerId, modelId, renderMarkdown);
+        _session = session;
         _shutdownCts = shutdownCts;
+        _slashContext = new SlashCommandContext(
+            services,
+            services.GetRequiredService<SessionManagerFactory>(),
+            services.GetRequiredService<IAgentRuntime>(),
+            shutdownCts.Token,
+            TreePickerAsync: PickTreeAsync);
     }
 
     public static async ValueTask RunAsync(
@@ -54,12 +63,26 @@ internal sealed class ChatTuiApp
         string providerId,
         string modelId,
         bool renderMarkdown,
+        ChatSessionBootstrapRequest bootstrapRequest,
         CancellationToken cancellationToken)
     {
+        SessionManagerFactory factory = services.GetRequiredService<SessionManagerFactory>();
+        IContextFileLoader contextFileLoader = services.GetRequiredService<IContextFileLoader>();
+        ISessionManager sessionManager = await ChatSessionBootstrap.ResolveAsync(
+            factory,
+            bootstrapRequest,
+            cancellationToken);
+        ChatSession session = ChatSessionBootstrap.CreateChatSession(
+            sessionManager,
+            contextFileLoader,
+            providerId,
+            modelId,
+            renderMarkdown);
+
         using CancellationTokenSource shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         using IApplication app = Application.Create();
         app.Init();
-        ChatTuiApp chat = new(app, services, providerId, modelId, renderMarkdown, shutdownCts);
+        ChatTuiApp chat = new(app, services, session, shutdownCts);
         using Window window = chat.BuildWindow();
         using CancellationTokenRegistration registration = cancellationToken.Register(static state =>
         {
@@ -67,7 +90,17 @@ internal sealed class ChatTuiApp
             application.Invoke(() => application.RequestStop());
         }, app);
 
-        chat.AppendSystem("/help for commands · Ctrl+Q to quit · Enter to send");
+        chat.InitializeTranscript();
+        chat.AppendSystem("/help for commands · Ctrl+Q to quit · Enter to send · click › line to type");
+        bool initialFocusSet = false;
+        app.Iteration += (_, _) =>
+        {
+            if (!initialFocusSet)
+            {
+                initialFocusSet = true;
+                chat.FocusInput();
+            }
+        };
         try
         {
             app.Run(window);
@@ -109,7 +142,8 @@ internal sealed class ChatTuiApp
         {
             X = 1,
             Y = 0,
-            Width = Dim.Fill()! - 2
+            Width = Dim.Fill()! - 2,
+            Height = 1
         };
         _status.SetScheme(new Scheme
         {
@@ -122,7 +156,9 @@ internal sealed class ChatTuiApp
             X = 0,
             Y = 1,
             Width = Dim.Percent(70),
-            Height = Dim.Fill()! - 4
+            Height = Dim.Fill()! - 4,
+            CanFocus = false,
+            TabStop = TabBehavior.NoStop
         };
         transcriptFrame.SetScheme(new Scheme
         {
@@ -136,6 +172,8 @@ internal sealed class ChatTuiApp
             Y = 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(),
+            CanFocus = false,
+            TabStop = TabBehavior.NoStop,
             Source = new TranscriptDataSource(_transcriptRows)
         };
         transcriptFrame.Add(_transcript);
@@ -146,7 +184,9 @@ internal sealed class ChatTuiApp
             X = Pos.Right(transcriptFrame),
             Y = 1,
             Width = Dim.Fill(),
-            Height = Dim.Fill()! - 4
+            Height = Dim.Fill()! - 4,
+            CanFocus = false,
+            TabStop = TabBehavior.NoStop
         };
         toolsFrame.SetScheme(new Scheme
         {
@@ -168,17 +208,35 @@ internal sealed class ChatTuiApp
         });
         toolsFrame.Add(_toolStatus);
 
+        Label inputLabel = new()
+        {
+            Text = "›",
+            X = 0,
+            Y = Pos.AnchorEnd(2),
+            Width = 2,
+            Height = 1,
+            CanFocus = false,
+            TabStop = TabBehavior.NoStop
+        };
+        inputLabel.SetScheme(new Scheme
+        {
+            Normal = new Attribute(Color.BrightGreen, Color.Black)
+        });
+
         _input = new TextField
         {
-            X = 1,
+            X = 2,
             Y = Pos.AnchorEnd(2),
-            Width = Dim.Fill()! - 2
+            Width = Dim.Fill()! - 2,
+            Height = 1,
+            CanFocus = true,
+            TabStop = TabBehavior.TabStop
         };
         _input.SetScheme(new Scheme
         {
-            Normal = new Attribute(Color.BrightGreen, Color.Black),
+            Normal = new Attribute(Color.White, Color.Black),
             Focus = new Attribute(Color.Black, Color.BrightGreen),
-            Editable = new Attribute(Color.BrightGreen, Color.Black)
+            Editable = new Attribute(Color.White, Color.Black)
         });
         _input.Accepting += (_, args) =>
         {
@@ -189,21 +247,16 @@ internal sealed class ChatTuiApp
         Bar statusBar = new()
         {
             Orientation = Orientation.Horizontal,
-            Y = Pos.AnchorEnd()
+            Y = Pos.AnchorEnd(),
+            CanFocus = false,
+            TabStop = TabBehavior.NoStop
         };
         statusBar.Add(new Shortcut
         {
-            Title = "_Send",
-            HelpText = "Send prompt",
-            Key = Key.Enter,
-            Action = () => _ = SubmitCurrentInputAsync()
-        });
-        statusBar.Add(new Shortcut
-        {
-            Title = "_Clear",
-            HelpText = "Clear conversation",
+            Title = "_Reload",
+            HelpText = "Reload transcript from session",
             Key = Key.L.WithCtrl,
-            Action = ClearConversation
+            Action = ReloadTranscriptFromSession
         });
         statusBar.Add(new Shortcut
         {
@@ -213,9 +266,98 @@ internal sealed class ChatTuiApp
             Action = RequestQuit
         });
 
-        window.Add(_status, transcriptFrame, toolsFrame, _input, statusBar);
+        window.Add(_status, transcriptFrame, toolsFrame, inputLabel, _input, statusBar);
         UpdateStatus();
         return window;
+    }
+
+    private void FocusInput()
+    {
+        if (!_input.Enabled)
+        {
+            return;
+        }
+
+        _input.SetFocus();
+        _input.SetNeedsDraw();
+    }
+
+    private void InitializeTranscript()
+    {
+        _messages.Clear();
+        PopulateTranscriptMessagesFromSession();
+        RebuildWrappedTranscript(scrollToEnd: false);
+    }
+
+    private void LoadTranscriptFromSession()
+    {
+        InvokeUi(() =>
+        {
+            _messages.Clear();
+            PopulateTranscriptMessagesFromSession();
+            RebuildWrappedTranscript(scrollToEnd: false);
+        });
+    }
+
+    private void ReloadTranscriptFromSession()
+    {
+        if (_turnRunning)
+        {
+            AppendSystem("Wait for the current turn to finish before reloading.");
+            return;
+        }
+
+        InvokeUi(() =>
+        {
+            _messages.Clear();
+            PopulateTranscriptMessagesFromSession();
+            RebuildWrappedTranscript(scrollToEnd: false);
+        });
+    }
+
+    private void PopulateTranscriptMessagesFromSession()
+    {
+        foreach (ConversationMessage message in _session.Conversation.Messages)
+        {
+            TranscriptRole role = message.Role switch
+            {
+                ConversationRole.User => TranscriptRole.User,
+                ConversationRole.Assistant => TranscriptRole.Assistant,
+                _ => TranscriptRole.System
+            };
+            _messages.Add(new TranscriptMessage(role, message.Text));
+        }
+    }
+
+    private int GetTranscriptWrapWidth()
+    {
+        int width = _transcript.Viewport.Width;
+        if (width <= 1)
+        {
+            width = _app.Screen.Size.Width - 4;
+        }
+
+        return Math.Max(24, width - 1);
+    }
+
+    private void RebuildWrappedTranscript(bool scrollToEnd)
+    {
+        int width = GetTranscriptWrapWidth();
+        _transcriptRows.Clear();
+        foreach (TranscriptMessage message in _messages)
+        {
+            foreach (string line in TranscriptWrap.Wrap(message.Role, message.Text, width))
+            {
+                _transcriptRows.Add(new TranscriptRow(message.Role, line));
+            }
+        }
+
+        if (scrollToEnd && _transcriptRows.Count > 0)
+        {
+            _transcript.MoveEnd(false);
+        }
+
+        _transcript.SetNeedsDraw();
     }
 
     private async Task SubmitCurrentInputAsync()
@@ -236,7 +378,17 @@ internal sealed class ChatTuiApp
 
         if (input.StartsWith('/'))
         {
-            SlashCommandResult result = SlashCommandProcessor.Execute(_options, _session, input);
+            SlashCommandResult result = await SlashCommandProcessor.ExecuteAsync(
+                _options,
+                _session,
+                input,
+                _slashContext).ConfigureAwait(false);
+
+            if (ShouldReloadTranscriptAfterSlashCommand(input))
+            {
+                ReloadTranscriptFromSession();
+            }
+
             foreach (string message in result.Messages)
             {
                 AppendSystem(message);
@@ -267,7 +419,12 @@ internal sealed class ChatTuiApp
         {
             IAgentRuntime runtime = _services.GetRequiredService<IAgentRuntime>();
             await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                               new AgentRunRequest(_session.ProviderId, _session.ModelId, runConversation),
+                               new AgentRunRequest(
+                                   _session.ProviderId,
+                                   _session.ModelId,
+                                   runConversation,
+                                   _session.WorkspaceRoot,
+                                   _session.ProjectContext),
                                _shutdownCts.Token).ConfigureAwait(false))
             {
                 switch (agentEvent.Kind)
@@ -280,10 +437,10 @@ internal sealed class ChatTuiApp
                         AppendSystem("Error: " + agentEvent.Message);
                         break;
                     case AgentEventKind.Completed:
-                        if (agentEvent.AssistantMessage is not null)
+                        if (agentEvent.TurnArtifacts is not null)
                         {
-                            _session.Conversation.Add(new ConversationMessage(ConversationRole.User, prompt));
-                            _session.Conversation.Add(agentEvent.AssistantMessage);
+                            await _session.AppendTurnAsync(agentEvent.TurnArtifacts, _shutdownCts.Token)
+                                .ConfigureAwait(false);
                         }
 
                         break;
@@ -305,31 +462,46 @@ internal sealed class ChatTuiApp
         }
     }
 
-    private void ClearConversation()
+    private async ValueTask<IReadOnlyList<string>> PickTreeAsync(ISessionManager sessionManager)
     {
-        if (_turnRunning)
+        TaskCompletionSource<IReadOnlyList<string>> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _app.Invoke(() =>
         {
-            AppendSystem("Wait for the current turn to finish before clearing.");
-            return;
-        }
-
-        InvokeUi(() =>
-        {
-            _session.Conversation.Clear();
-            _transcriptRows.Clear();
-            UpdateToolStatus("idle");
-            RefreshTranscript();
-            _transcriptRows.Add(new TranscriptRow(TranscriptRole.System, "Conversation cleared."));
-            RefreshTranscript();
+            try
+            {
+                IReadOnlyList<string> messages = SessionTreeDialog.Show(
+                    _app,
+                    sessionManager,
+                    entryId =>
+                    {
+                        sessionManager.BranchTo(entryId);
+                        _session.SyncConversationFromSession();
+                    });
+                completion.SetResult(messages);
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
         });
+
+        return await completion.Task.ConfigureAwait(false);
+    }
+
+    private static bool ShouldReloadTranscriptAfterSlashCommand(string input)
+    {
+        string command = input.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault()
+            ?.ToLowerInvariant() ?? string.Empty;
+        return command is "/tree" or "/new" or "/resume" or "/fork" or "/compact";
     }
 
     private void AppendSystem(string message)
     {
         InvokeUi(() =>
         {
-            _transcriptRows.Add(new TranscriptRow(TranscriptRole.System, message));
-            RefreshTranscript();
+            _messages.Add(new TranscriptMessage(TranscriptRole.System, message));
+            RebuildWrappedTranscript(scrollToEnd: true);
         });
     }
 
@@ -337,8 +509,8 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            _transcriptRows.Add(new TranscriptRow(TranscriptRole.User, message));
-            RefreshTranscript();
+            _messages.Add(new TranscriptMessage(TranscriptRole.User, message));
+            RebuildWrappedTranscript(scrollToEnd: true);
         });
     }
 
@@ -348,14 +520,14 @@ internal sealed class ChatTuiApp
         {
             if (_activeAssistantRowIndex < 0)
             {
-                _transcriptRows.Add(new TranscriptRow(TranscriptRole.Assistant, string.Empty));
-                _activeAssistantRowIndex = _transcriptRows.Count - 1;
+                _messages.Add(new TranscriptMessage(TranscriptRole.Assistant, string.Empty));
+                _activeAssistantRowIndex = _messages.Count - 1;
             }
 
-            TranscriptRow row = _transcriptRows[_activeAssistantRowIndex];
+            TranscriptMessage row = _messages[_activeAssistantRowIndex];
             string cleaned = delta.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\n', ' ');
-            _transcriptRows[_activeAssistantRowIndex] = row with { Text = row.Text + cleaned };
-            RefreshTranscript();
+            _messages[_activeAssistantRowIndex] = row with { Text = row.Text + cleaned };
+            RebuildWrappedTranscript(scrollToEnd: true);
         });
     }
 
@@ -372,14 +544,60 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            _status.Text = BuildStatusText();
+            _status.Text = TruncateStatusLine(BuildStatusText());
         });
+    }
+
+    private string TruncateStatusLine(string text)
+    {
+        int maxWidth = Math.Max(24, _app.Screen.Size.Width - 4);
+        if (text.Length <= maxWidth)
+        {
+            return text;
+        }
+
+        return maxWidth <= 1 ? text[..maxWidth] : string.Concat(text.AsSpan(0, maxWidth - 1), "…");
     }
 
     private string BuildStatusText()
     {
         string skill = _session.SelectedSkill is null ? "none" : _session.SelectedSkill.Name;
-        return $"provider {_session.ProviderId} · model {_session.ModelId} · markdown {(_session.RenderMarkdown ? "on" : "off")} · skill {skill}";
+        List<string> parts =
+        [
+            $"provider {_session.ProviderId}",
+            $"model {_session.ModelId}",
+            $"markdown {(_session.RenderMarkdown ? "on" : "off")}",
+            $"skill {skill}",
+            BuildSessionStatusLabel(),
+        ];
+
+        string? contextLine = ContextBannerFormatter.Format(_session.ProjectContext);
+        if (contextLine is not null)
+        {
+            parts.Add(contextLine);
+        }
+
+        return string.Join(" · ", parts);
+    }
+
+    private string BuildSessionStatusLabel()
+    {
+        if (_session.IsEphemeral)
+        {
+            return "session ephemeral";
+        }
+
+        string shortId = FormatShortSessionId(_session.SessionManager.Header.Id);
+        string? displayName = _session.SessionManager.DisplayName;
+        return displayName is null
+            ? $"session persisted {shortId}"
+            : $"session persisted {shortId} · {displayName}";
+    }
+
+    private static string FormatShortSessionId(string headerId)
+    {
+        string normalized = headerId.Replace("-", string.Empty, StringComparison.Ordinal);
+        return normalized.Length <= 8 ? normalized : normalized[..8];
     }
 
     private void SetInputEnabled(bool enabled)
@@ -388,13 +606,12 @@ internal sealed class ChatTuiApp
         {
             _input.Enabled = enabled;
             _input.Text = enabled ? string.Empty : "running...";
-            _status.Text = BuildStatusText();
+            _status.Text = TruncateStatusLine(BuildStatusText());
+            if (enabled)
+            {
+                FocusInput();
+            }
         });
-    }
-
-    private void RefreshTranscript()
-    {
-        _transcript.SetNeedsDraw();
     }
 
     private void InvokeUi(Action action)
@@ -402,7 +619,10 @@ internal sealed class ChatTuiApp
         _app.Invoke(action);
     }
 
-    /// <summary>A single transcript line tagged with the role that produced it, used for color-coded rendering.</summary>
+    /// <summary>A logical transcript message before wrapping for display.</summary>
+    private sealed record TranscriptMessage(TranscriptRole Role, string Text);
+
+    /// <summary>A wrapped display line tagged with the role that produced it.</summary>
     private sealed record TranscriptRow(TranscriptRole Role, string Text);
 
     /// <summary>Identifies the source of a transcript line so it can be colored distinctly.</summary>
@@ -477,18 +697,10 @@ internal sealed class ChatTuiApp
 
             container.SetAttribute(attr);
 
-            string prefix = row.Role switch
-            {
-                TranscriptRole.System => "system › ",
-                TranscriptRole.User => "you › ",
-                TranscriptRole.Assistant => "ai › ",
-                _ => string.Empty
-            };
-
-            string text = prefix + row.Text;
+            string text = row.Text;
             if (text.Length > width)
             {
-                text = width <= 1 ? text[..width] : string.Concat(text.AsSpan(0, width - 1), "…");
+                text = text[..width];
             }
 
             container.AddStr(text);
@@ -514,6 +726,70 @@ internal sealed class ChatTuiApp
             }
 
             _disposed = true;
+        }
+    }
+
+    private static class TranscriptWrap
+    {
+        public static IEnumerable<string> Wrap(TranscriptRole role, string text, int width)
+        {
+            string prefix = role switch
+            {
+                TranscriptRole.System => "system › ",
+                TranscriptRole.User => "you › ",
+                TranscriptRole.Assistant => "ai › ",
+                _ => string.Empty
+            };
+
+            string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+            int contentWidth = Math.Max(1, width - prefix.Length);
+            string indent = new string(' ', prefix.Length);
+
+            bool first = true;
+            foreach (string chunk in WordWrap(normalized, contentWidth))
+            {
+                yield return first ? prefix + chunk : indent + chunk;
+                first = false;
+            }
+
+            if (first)
+            {
+                yield return prefix;
+            }
+        }
+
+        private static IEnumerable<string> WordWrap(string text, int width)
+        {
+            if (text.Length == 0)
+            {
+                yield break;
+            }
+
+            string remaining = text;
+            while (remaining.Length > 0)
+            {
+                if (remaining.Length <= width)
+                {
+                    yield return remaining;
+                    yield break;
+                }
+
+                int breakAt = width;
+                ReadOnlySpan<char> slice = remaining.AsSpan(0, width);
+                int lastNewline = slice.LastIndexOf('\n');
+                int lastSpace = slice.LastIndexOf(' ');
+                if (lastNewline >= 0)
+                {
+                    breakAt = lastNewline + 1;
+                }
+                else if (lastSpace > width / 3)
+                {
+                    breakAt = lastSpace;
+                }
+
+                yield return remaining[..breakAt].TrimEnd('\n');
+                remaining = remaining[breakAt..].TrimStart('\n').TrimStart(' ');
+            }
         }
     }
 }

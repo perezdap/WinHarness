@@ -6,6 +6,7 @@
   <ItemGroup>
     <ProjectReference Include="..\WinHarness.Abstractions\WinHarness.Abstractions.csproj" />
     <ProjectReference Include="..\WinHarness.Tools\WinHarness.Tools.csproj" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
     <PackageReference Include="Microsoft.Extensions.Logging" />
   </ItemGroup>
 </Project>

@@ -9,8 +9,26 @@ The ordered, provider-neutral list of messages exchanged in one session. Owned b
 _Avoid_: History, session, thread, context (overloaded).
 
 **Turn**:
-One run of the agent against the current Conversation: the runtime sends the messages, streams the reply, and reports the final assistant message for the caller to append. A turn may run tool round-trips internally but stores only the final assistant text.
+One run of the agent against a Conversation built from the active session branch (or an ephemeral in-memory list). On completion, the caller appends all turn artifacts to the session when persistence is enabled. A turn may include multiple internal tool round-trips.
 _Avoid_: Round, exchange, request.
+
+**Session**:
+A persisted JSONL file plus in-memory tree state. Distinct from Conversation (the ephemeral projection sent to the runtime for one turn).
+_Avoid_: Thread, chat (overloaded).
+
+**Session entry**:
+One append-only JSONL record in a session file. Forms a tree via `id` and `parentId`.
+_Avoid_: Message (reserved for ConversationMessage).
+
+**Active branch**:
+The path from the current leaf entry to the root. The Conversation for the next turn is built from this path.
+_Avoid_: Current thread.
+
+**Turn artifacts**:
+All ConversationMessages produced during one agent run: user input, assistant segments (text + tool calls), and tool results. The caller appends these to the session, not just the final assistant text.
+
+**Compaction**:
+A session entry that replaces older messages in the *active context* with a summary. Full history remains in the JSONL file.
 
 **Provider**:
 A configured OpenAI-compatible endpoint (id, base URL, optional credential). Distinct from Model.
