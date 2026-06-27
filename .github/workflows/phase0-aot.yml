@@ -37,9 +37,14 @@ jobs:
         shell: pwsh
         run: |
           $publishDir = "spikes/WinHarness.AotSpike/bin/Release/net10.0/win-x64/publish"
-          $unexpectedDll = Get-ChildItem -Path $publishDir -Filter *.dll -Recurse | Select-Object -First 1
-          if ($unexpectedDll) {
-            throw "Native AOT spike publish produced a DLL: $($unexpectedDll.FullName)"
+          $managedDll = Get-ChildItem -Path $publishDir -Filter *.dll -Recurse |
+            Where-Object {
+              try { [System.Reflection.AssemblyName]::GetAssemblyName($_.FullName) | Out-Null; $true }
+              catch { $false }
+            } |
+            Select-Object -First 1
+          if ($managedDll) {
+            throw "Native AOT spike publish produced a managed DLL: $($managedDll.FullName)"
           }
           $exe = Get-ChildItem -Path $publishDir -Filter winharness-aot-spike.exe -Recurse | Select-Object -First 1
           if (-not $exe) {
@@ -54,9 +59,14 @@ jobs:
         shell: pwsh
         run: |
           $publishDir = "src/WinHarness.Cli/bin/Release/net10.0/win-x64/publish"
-          $unexpectedDll = Get-ChildItem -Path $publishDir -Filter *.dll -Recurse | Select-Object -First 1
-          if ($unexpectedDll) {
-            throw "Native AOT CLI publish produced a DLL: $($unexpectedDll.FullName)"
+          $managedDll = Get-ChildItem -Path $publishDir -Filter *.dll -Recurse |
+            Where-Object {
+              try { [System.Reflection.AssemblyName]::GetAssemblyName($_.FullName) | Out-Null; $true }
+              catch { $false }
+            } |
+            Select-Object -First 1
+          if ($managedDll) {
+            throw "Native AOT CLI publish produced a managed DLL: $($managedDll.FullName)"
           }
           $exe = Get-ChildItem -Path $publishDir -Filter winharness.exe -Recurse | Select-Object -First 1
           if (-not $exe) {
