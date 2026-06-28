@@ -76,8 +76,9 @@ internal sealed class ChatTuiApp
             renderMarkdown);
 
         using CancellationTokenSource shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        TuiDriver.Configure();
         using IApplication app = Application.Create();
-        app.Init();
+        app.Init(TuiDriver.ResolveName());
         ChatTuiApp chat = new(app, services, session, shutdownCts);
         using Window window = chat.BuildWindow();
         using CancellationTokenRegistration registration = cancellationToken.Register(static state =>
