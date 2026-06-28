@@ -47,14 +47,21 @@ internal sealed class TranscriptPanel : View
         _tailView = null;
         _content.RemoveAll();
 
+        bool addedAny = false;
         for (int index = 0; index < messages.Count; index++)
         {
             TranscriptMessage message = messages[index];
-            if (index > 0)
+            if (!HasDisplayableContent(message))
+            {
+                continue;
+            }
+
+            if (addedAny)
             {
                 AddSpacer();
             }
 
+            addedAny = true;
             AddRoleLabel(message.Role);
             if (message.Role == TranscriptRole.Assistant && renderMarkdown)
             {
@@ -70,19 +77,6 @@ internal sealed class TranscriptPanel : View
             }
         }
 
-        FinishLayout();
-    }
-
-    public void BeginAssistantMessage(bool renderMarkdown)
-    {
-        if (!renderMarkdown)
-        {
-            _activeMarkdown = null;
-            return;
-        }
-
-        AddRoleLabel(TranscriptRole.Assistant);
-        _activeMarkdown = AddAssistantMarkdown(string.Empty);
         FinishLayout();
     }
 
@@ -175,7 +169,7 @@ internal sealed class TranscriptPanel : View
             CanFocus = false,
             TabStop = TabBehavior.NoStop,
             ShowHeadingPrefix = false,
-            ShowCopyButtons = false,
+            ShowCopyButtons = false
         };
         PlaceBelow(view);
         _content.Add(view);
@@ -206,9 +200,8 @@ internal sealed class TranscriptPanel : View
     private void FinishLayout()
     {
         _content.SetNeedsLayout();
-        _content.Layout(GetContentSize());
         SetNeedsLayout();
-        Layout(GetContentSize());
+        Layout();
         ScrollToEnd();
         SetNeedsDraw();
     }
@@ -224,6 +217,9 @@ internal sealed class TranscriptPanel : View
 
         ScrollVertical(contentHeight - viewportHeight);
     }
+
+    internal static bool HasDisplayableContent(TranscriptMessage message)
+        => !string.IsNullOrWhiteSpace(message.Text);
 
     private static IEnumerable<string> WordWrap(string text, int width)
     {
