@@ -525,8 +525,8 @@ internal sealed class ChatTuiApp
             }
 
             TranscriptMessage row = _messages[_activeAssistantRowIndex];
-            string cleaned = delta.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\n', ' ');
-            _messages[_activeAssistantRowIndex] = row with { Text = row.Text + cleaned };
+            string normalized = delta.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+            _messages[_activeAssistantRowIndex] = row with { Text = row.Text + normalized };
             RebuildWrappedTranscript(scrollToEnd: true);
         });
     }
