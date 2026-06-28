@@ -12,6 +12,8 @@ internal enum MarkdownBlockStyle
     BlockQuote,
     CodeFence,
     HorizontalRule,
+    TableHeader,
+    TableRow,
 }
 
 internal enum MarkdownEmphasis
@@ -43,8 +45,10 @@ internal static class MarkdownTuiFormatter
         bool inFence = false;
         string fenceLanguage = string.Empty;
 
-        foreach (string rawLine in markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        string[] rawLines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        for (int index = 0; index < rawLines.Length; index++)
         {
+            string rawLine = rawLines[index];
             string trimmedStart = rawLine.TrimStart();
             if (trimmedStart.StartsWith("```", StringComparison.Ordinal))
             {
@@ -75,6 +79,21 @@ internal static class MarkdownTuiFormatter
                 continue;
             }
 
+            if (IsTableRow(rawLine))
+            {
+                if (IsTableSeparator(rawLine))
+                {
+                    continue;
+                }
+
+                bool isHeader = index + 1 < rawLines.Length && IsTableSeparator(rawLines[index + 1]);
+                lines.Add(new MarkdownDisplayLine(
+                    FormatTableRow(rawLine),
+                    isHeader ? MarkdownBlockStyle.TableHeader : MarkdownBlockStyle.TableRow,
+                    []));
+                continue;
+            }
+
             lines.Add(ParseMarkdownLine(rawLine));
         }
 
@@ -91,7 +110,8 @@ internal static class MarkdownTuiFormatter
             yield break;
         }
 
-        if (line.BlockStyle is MarkdownBlockStyle.CodeFence or MarkdownBlockStyle.HorizontalRule)
+        if (line.BlockStyle is MarkdownBlockStyle.CodeFence or MarkdownBlockStyle.HorizontalRule
+            or MarkdownBlockStyle.TableHeader or MarkdownBlockStyle.TableRow)
         {
             string remaining = line.Text;
             while (remaining.Length > 0)
@@ -120,7 +140,7 @@ internal static class MarkdownTuiFormatter
 
         if (IsHorizontalRule(trimmed))
         {
-            return new MarkdownDisplayLine(new string('─', Math.Min(trimmed.Length, 40)), MarkdownBlockStyle.HorizontalRule, []);
+            return new MarkdownDisplayLine(new string('-', 40), MarkdownBlockStyle.HorizontalRule, []);
         }
 
         if (trimmed.StartsWith("#### ", StringComparison.Ordinal))
@@ -403,5 +423,58 @@ internal static class MarkdownTuiFormatter
         }
 
         return 0;
+    }
+
+    private static bool IsTableRow(string line)
+    {
+        string trimmed = line.Trim();
+        return trimmed.Contains('|', StringComparison.Ordinal)
+            && trimmed.Count(static c => c == '|') >= 2;
+    }
+
+    private static bool IsTableSeparator(string line)
+    {
+        string trimmed = line.Trim();
+        if (!trimmed.Contains('|', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (char c in trimmed)
+        {
+            if (c is not ('|' or '-' or ':' or ' '))
+            {
+                return false;
+            }
+        }
+
+        return trimmed.Contains('-');
+    }
+
+    private static string FormatTableRow(string line)
+    {
+        string trimmed = line.Trim();
+        if (trimmed.StartsWith('|'))
+        {
+            trimmed = trimmed[1..];
+        }
+
+        if (trimmed.EndsWith('|'))
+        {
+            trimmed = trimmed[..^1];
+        }
+
+        string[] cells = trimmed.Split('|');
+        List<string> formatted = new(cells.Length);
+        foreach (string cell in cells)
+        {
+            string value = cell.Trim();
+            if (value.Length > 0)
+            {
+                formatted.Add(value);
+            }
+        }
+
+        return string.Join(" │ ", formatted);
     }
 }

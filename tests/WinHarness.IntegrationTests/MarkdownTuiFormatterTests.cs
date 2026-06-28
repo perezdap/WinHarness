@@ -68,4 +68,33 @@ public sealed class MarkdownTuiFormatterTests
         Assert.AreEqual(4, wrapped[1].Runs[0].Length);
         Assert.AreEqual(MarkdownEmphasis.Bold, wrapped[1].Runs[0].Emphasis);
     }
+
+    [TestMethod]
+    public void ParseLines_FormatsMarkdownTables()
+    {
+        const string markdown =
+            """
+            | Tool | Description |
+            | --- | --- |
+            | grep | Search files |
+            """;
+
+        IReadOnlyList<MarkdownDisplayLine> lines = MarkdownTuiFormatter.ParseLines(markdown);
+
+        Assert.AreEqual(2, lines.Count);
+        Assert.AreEqual("Tool │ Description", lines[0].Text);
+        Assert.AreEqual(MarkdownBlockStyle.TableHeader, lines[0].BlockStyle);
+        Assert.AreEqual("grep │ Search files", lines[1].Text);
+        Assert.AreEqual(MarkdownBlockStyle.TableRow, lines[1].BlockStyle);
+    }
+
+    [TestMethod]
+    public void ParseLines_UsesAsciiHorizontalRule()
+    {
+        IReadOnlyList<MarkdownDisplayLine> lines = MarkdownTuiFormatter.ParseLines("---");
+
+        Assert.AreEqual(1, lines.Count);
+        Assert.IsTrue(lines[0].Text.All(static c => c == '-'));
+        Assert.AreEqual(MarkdownBlockStyle.HorizontalRule, lines[0].BlockStyle);
+    }
 }

@@ -10,12 +10,14 @@ internal static class MarkdownTuiStyles
     {
         return blockStyle switch
         {
-            MarkdownBlockStyle.Heading1 => new Attribute(Color.White, baseAttr.Background),
-            MarkdownBlockStyle.Heading2 => new Attribute(Color.BrightCyan, baseAttr.Background),
-            MarkdownBlockStyle.Heading3 => new Attribute(Color.BrightCyan, baseAttr.Background),
+            MarkdownBlockStyle.Heading1 => new Attribute(Color.BrightYellow, baseAttr.Background),
+            MarkdownBlockStyle.Heading2 => new Attribute(Color.BrightYellow, baseAttr.Background),
+            MarkdownBlockStyle.Heading3 => new Attribute(Color.Yellow, baseAttr.Background),
             MarkdownBlockStyle.Heading4 => new Attribute(Color.White, baseAttr.Background),
             MarkdownBlockStyle.BlockQuote => new Attribute(Color.Gray, baseAttr.Background),
-            MarkdownBlockStyle.CodeFence => new Attribute(Color.Gray, Color.DarkGray),
+            MarkdownBlockStyle.CodeFence => new Attribute(Color.BrightGreen, Color.DarkGray),
+            MarkdownBlockStyle.TableHeader => new Attribute(Color.White, Color.DarkGray),
+            MarkdownBlockStyle.TableRow => new Attribute(Color.Gray, baseAttr.Background),
             MarkdownBlockStyle.HorizontalRule => new Attribute(Color.Gray, baseAttr.Background),
             _ => baseAttr
         };
@@ -27,10 +29,10 @@ internal static class MarkdownTuiStyles
         {
             MarkdownEmphasis.Bold => new Attribute(Color.White, baseAttr.Background),
             MarkdownEmphasis.Italic => new Attribute(Color.Gray, baseAttr.Background),
-            MarkdownEmphasis.InlineCode => new Attribute(Color.Black, Color.Gray),
+            MarkdownEmphasis.InlineCode => new Attribute(Color.BrightCyan, Color.DarkGray),
             MarkdownEmphasis.Link => new Attribute(Color.BrightBlue, baseAttr.Background),
             MarkdownEmphasis.Strikethrough => new Attribute(Color.Gray, baseAttr.Background),
-            MarkdownEmphasis.ListMarker => new Attribute(Color.BrightYellow, baseAttr.Background),
+            MarkdownEmphasis.ListMarker => new Attribute(Color.BrightCyan, baseAttr.Background),
             _ => baseAttr
         };
     }
