@@ -185,7 +185,7 @@ app.Add("chat", async (
     string? prompt = null,
     string? providerId = null,
     string? modelId = null,
-    bool renderMarkdown = false,
+    bool? renderMarkdown = null,
     bool tui = false,
     bool noSession = false,
     bool continueSession = false,
@@ -197,6 +197,7 @@ app.Add("chat", async (
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
     string resolvedProviderId = providerId ?? options.DefaultProvider;
     string resolvedModelId = modelId ?? options.DefaultModel;
+    bool effectiveRenderMarkdown = renderMarkdown ?? true;
 
     if (string.IsNullOrWhiteSpace(resolvedProviderId) || string.IsNullOrWhiteSpace(resolvedModelId))
     {
@@ -219,7 +220,7 @@ app.Add("chat", async (
                     host.Services,
                     resolvedProviderId,
                     resolvedModelId,
-                    renderMarkdown,
+                    effectiveRenderMarkdown,
                     bootstrapRequest,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -230,7 +231,7 @@ app.Add("chat", async (
                 host.Services,
                 resolvedProviderId,
                 resolvedModelId,
-                renderMarkdown,
+                effectiveRenderMarkdown,
                 bootstrapRequest,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -242,7 +243,7 @@ app.Add("chat", async (
         resolvedProviderId,
         resolvedModelId,
         prompt,
-        renderMarkdown,
+        effectiveRenderMarkdown,
         bootstrapRequest,
         cancellationToken).ConfigureAwait(false);
 });
