@@ -200,9 +200,8 @@ internal sealed class TranscriptPanel : View
     private void FinishLayout()
     {
         _content.SetNeedsLayout();
-        _content.Layout(GetContentSize());
         SetNeedsLayout();
-        Layout(GetContentSize());
+        Layout();
         ScrollToEnd();
         SetNeedsDraw();
     }
