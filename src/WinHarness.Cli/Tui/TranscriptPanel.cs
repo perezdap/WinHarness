@@ -1,8 +1,6 @@
-using System.Drawing;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
-using TextMateSharp.Grammars;
 
 using Attribute = Terminal.Gui.Drawing.Attribute;
 
@@ -96,7 +94,19 @@ internal sealed class TranscriptPanel : View
         }
 
         _activeMarkdown.Text = text;
+        _activeMarkdown.SetNeedsLayout();
         _content.SetNeedsLayout();
+        SetNeedsLayout();
+        SetNeedsDraw();
+    }
+
+    public void FinalizeActiveAssistantLayout()
+    {
+        if (_activeMarkdown is null)
+        {
+            return;
+        }
+
         FinishLayout();
     }
 
@@ -166,7 +176,6 @@ internal sealed class TranscriptPanel : View
             TabStop = TabBehavior.NoStop,
             ShowHeadingPrefix = false,
             ShowCopyButtons = false,
-            SyntaxHighlighter = new TextMateSyntaxHighlighter(ThemeName.DarkPlus)
         };
         PlaceBelow(view);
         _content.Add(view);
