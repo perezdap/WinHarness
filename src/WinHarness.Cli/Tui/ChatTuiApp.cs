@@ -453,6 +453,7 @@ internal sealed class ChatTuiApp
             InvokeUi(() =>
             {
                 _transcript.ClearActiveAssistant();
+                _transcript.FinalizeActiveAssistantLayout();
                 RebuildTranscript(scrollToEnd: true);
             });
         }
