@@ -197,7 +197,7 @@ app.Add("chat", async (
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
     string resolvedProviderId = providerId ?? options.DefaultProvider;
     string resolvedModelId = modelId ?? options.DefaultModel;
-    bool effectiveRenderMarkdown = renderMarkdown ?? tui;
+    bool effectiveRenderMarkdown = renderMarkdown ?? true;
 
     if (string.IsNullOrWhiteSpace(resolvedProviderId) || string.IsNullOrWhiteSpace(resolvedModelId))
     {
