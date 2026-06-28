@@ -1,8 +1,6 @@
-using System.Drawing;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
-using TextMateSharp.Grammars;
 
 using Attribute = Terminal.Gui.Drawing.Attribute;
 
@@ -49,14 +47,21 @@ internal sealed class TranscriptPanel : View
         _tailView = null;
         _content.RemoveAll();
 
+        bool addedAny = false;
         for (int index = 0; index < messages.Count; index++)
         {
             TranscriptMessage message = messages[index];
-            if (index > 0)
+            if (!HasDisplayableContent(message))
+            {
+                continue;
+            }
+
+            if (addedAny)
             {
                 AddSpacer();
             }
 
+            addedAny = true;
             AddRoleLabel(message.Role);
             if (message.Role == TranscriptRole.Assistant && renderMarkdown)
             {
@@ -75,19 +80,6 @@ internal sealed class TranscriptPanel : View
         FinishLayout();
     }
 
-    public void BeginAssistantMessage(bool renderMarkdown)
-    {
-        if (!renderMarkdown)
-        {
-            _activeMarkdown = null;
-            return;
-        }
-
-        AddRoleLabel(TranscriptRole.Assistant);
-        _activeMarkdown = AddAssistantMarkdown(string.Empty);
-        FinishLayout();
-    }
-
     public void UpdateActiveAssistant(string text, bool renderMarkdown)
     {
         if (!renderMarkdown || _activeMarkdown is null)
@@ -96,7 +88,19 @@ internal sealed class TranscriptPanel : View
         }
 
         _activeMarkdown.Text = text;
+        _activeMarkdown.SetNeedsLayout();
         _content.SetNeedsLayout();
+        SetNeedsLayout();
+        SetNeedsDraw();
+    }
+
+    public void FinalizeActiveAssistantLayout()
+    {
+        if (_activeMarkdown is null)
+        {
+            return;
+        }
+
         FinishLayout();
     }
 
@@ -165,8 +169,7 @@ internal sealed class TranscriptPanel : View
             CanFocus = false,
             TabStop = TabBehavior.NoStop,
             ShowHeadingPrefix = false,
-            ShowCopyButtons = false,
-            SyntaxHighlighter = new TextMateSyntaxHighlighter(ThemeName.DarkPlus)
+            ShowCopyButtons = false
         };
         PlaceBelow(view);
         _content.Add(view);
@@ -215,6 +218,9 @@ internal sealed class TranscriptPanel : View
 
         ScrollVertical(contentHeight - viewportHeight);
     }
+
+    internal static bool HasDisplayableContent(TranscriptMessage message)
+        => !string.IsNullOrWhiteSpace(message.Text);
 
     private static IEnumerable<string> WordWrap(string text, int width)
     {

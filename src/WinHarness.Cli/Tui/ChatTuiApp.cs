@@ -312,6 +312,11 @@ internal sealed class ChatTuiApp
     {
         foreach (ConversationMessage message in _session.Conversation.Messages)
         {
+            if (string.IsNullOrWhiteSpace(message.Text))
+            {
+                continue;
+            }
+
             TranscriptRole role = message.Role switch
             {
                 ConversationRole.User => TranscriptRole.User,
@@ -453,6 +458,7 @@ internal sealed class ChatTuiApp
             InvokeUi(() =>
             {
                 _transcript.ClearActiveAssistant();
+                _transcript.FinalizeActiveAssistantLayout();
                 RebuildTranscript(scrollToEnd: true);
             });
         }
@@ -522,14 +528,11 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            if (_activeAssistantRowIndex < 0)
+            bool isFirstDelta = _activeAssistantRowIndex < 0;
+            if (isFirstDelta)
             {
                 _messages.Add(new TranscriptMessage(TranscriptRole.Assistant, string.Empty));
                 _activeAssistantRowIndex = _messages.Count - 1;
-                if (_session.RenderMarkdown)
-                {
-                    _transcript.BeginAssistantMessage(renderMarkdown: true);
-                }
             }
 
             TranscriptMessage row = _messages[_activeAssistantRowIndex];
@@ -539,7 +542,14 @@ internal sealed class ChatTuiApp
 
             if (_session.RenderMarkdown)
             {
-                _transcript.UpdateActiveAssistant(text, renderMarkdown: true);
+                if (isFirstDelta)
+                {
+                    RebuildTranscript(scrollToEnd: true);
+                }
+                else
+                {
+                    _transcript.UpdateActiveAssistant(text, renderMarkdown: true);
+                }
             }
             else
             {
