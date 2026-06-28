@@ -48,6 +48,32 @@ public sealed class SingleAgentRuntimeTests
     }
 
     [TestMethod]
+    public async Task SavesPartialTurnArtifactsWhenProviderFailsAfterStreaming()
+    {
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory(["partial "], failAfterUpdates: 0),
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        List<AgentEvent> events = [];
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           CreateRequest("prompt"),
+                           CancellationToken.None))
+        {
+            events.Add(agentEvent);
+        }
+
+        Assert.AreEqual(3, events.Count);
+        Assert.AreEqual(AgentEventKind.AssistantDelta, events[0].Kind);
+        Assert.AreEqual("partial ", events[0].Message);
+        Assert.AreEqual(AgentEventKind.Failed, events[1].Kind);
+        Assert.AreEqual(AgentEventKind.Completed, events[2].Kind);
+        Assert.AreEqual("partial", events[2].Message);
+        TurnArtifacts artifacts = events[2].TurnArtifacts!;
+        Assert.AreEqual(2, artifacts.Messages.Count);
+        Assert.AreEqual("partial ", artifacts.Messages[1].Text);
+    }
+
+    [TestMethod]
     public async Task HonorsCancellationDuringStreaming()
     {
         SingleAgentRuntime runtime = new(
@@ -358,18 +384,29 @@ public sealed class SingleAgentRuntimeTests
     {
         private readonly IReadOnlyList<string> _updates;
         private readonly bool _failOnStream;
+        private readonly int _failAfterUpdates;
 
-        public FakeProviderFactory(IReadOnlyList<string> updates, bool failOnStream = false)
+        public FakeProviderFactory(
+            IReadOnlyList<string> updates,
+            bool failOnStream = false,
+            int failAfterUpdates = -1)
         {
             _updates = updates;
             _failOnStream = failOnStream;
+            _failAfterUpdates = failAfterUpdates;
         }
 
         public IReadOnlyList<ChatMessage> LastMessages { get; private set; } = [];
 
         public IChatProvider Create(string providerId, string modelId)
         {
-            return new FakeProvider(providerId, modelId, _updates, _failOnStream, messages => LastMessages = messages);
+            return new FakeProvider(
+                providerId,
+                modelId,
+                _updates,
+                _failOnStream,
+                _failAfterUpdates,
+                messages => LastMessages = messages);
         }
     }
 
@@ -377,6 +414,7 @@ public sealed class SingleAgentRuntimeTests
     {
         private readonly IReadOnlyList<string> _updates;
         private readonly bool _failOnStream;
+        private readonly int _failAfterUpdates;
         private readonly Action<IReadOnlyList<ChatMessage>> _captureMessages;
 
         public FakeProvider(
@@ -384,12 +422,14 @@ public sealed class SingleAgentRuntimeTests
             string modelId,
             IReadOnlyList<string> updates,
             bool failOnStream,
+            int failAfterUpdates,
             Action<IReadOnlyList<ChatMessage>> captureMessages)
         {
             ProviderId = providerId;
             ModelId = modelId;
             _updates = updates;
             _failOnStream = failOnStream;
+            _failAfterUpdates = failAfterUpdates;
             _captureMessages = captureMessages;
         }
 
@@ -401,7 +441,7 @@ public sealed class SingleAgentRuntimeTests
 
         public IChatClient CreateChatClient()
         {
-            return new FakeChatClient(_updates, _failOnStream, _captureMessages);
+            return new FakeChatClient(_updates, _failOnStream, _failAfterUpdates, _captureMessages);
         }
     }
 
@@ -409,15 +449,18 @@ public sealed class SingleAgentRuntimeTests
     {
         private readonly IReadOnlyList<string> _updates;
         private readonly bool _failOnStream;
+        private readonly int _failAfterUpdates;
         private readonly Action<IReadOnlyList<ChatMessage>> _captureMessages;
 
         public FakeChatClient(
             IReadOnlyList<string> updates,
             bool failOnStream,
+            int failAfterUpdates,
             Action<IReadOnlyList<ChatMessage>> captureMessages)
         {
             _updates = updates;
             _failOnStream = failOnStream;
+            _failAfterUpdates = failAfterUpdates;
             _captureMessages = captureMessages;
         }
 
@@ -460,11 +503,17 @@ public sealed class SingleAgentRuntimeTests
                 yield break;
             }
 
+            int yieldedUpdates = 0;
             foreach (string update in _updates)
             {
                 await Task.Yield();
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return new ChatResponseUpdate(ChatRole.Assistant, update);
+                yieldedUpdates++;
+                if (_failAfterUpdates >= 0 && yieldedUpdates > _failAfterUpdates)
+                {
+                    throw new InvalidOperationException("provider exploded");
+                }
             }
 
             yield return new ChatResponseUpdate(

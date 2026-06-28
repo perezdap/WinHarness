@@ -19,6 +19,8 @@ namespace WinHarness.Cli.Tui;
 
 internal sealed class ChatTuiApp
 {
+    private static readonly TimeSpan TurnTimeout = TimeSpan.FromMinutes(10);
+
     private readonly IApplication _app;
     private readonly IServiceProvider _services;
     private readonly WinHarnessOptions _options;
@@ -411,6 +413,10 @@ internal sealed class ChatTuiApp
         AppendUser(prompt);
         WinHarness.Conversation.Conversation runConversation = _session.CreateRunConversation(prompt);
         _activeAssistantRowIndex = -1;
+        bool turnPersisted = false;
+
+        using CancellationTokenSource turnTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
+        turnTimeoutCts.CancelAfter(TurnTimeout);
 
         try
         {
@@ -422,7 +428,7 @@ internal sealed class ChatTuiApp
                                    runConversation,
                                    _session.WorkspaceRoot,
                                    _session.ProjectContext),
-                               _shutdownCts.Token).ConfigureAwait(false))
+                               turnTimeoutCts.Token).ConfigureAwait(false))
             {
                 switch (agentEvent.Kind)
                 {
@@ -434,10 +440,15 @@ internal sealed class ChatTuiApp
                         AppendSystem("Error: " + agentEvent.Message);
                         break;
                     case AgentEventKind.Completed:
-                        if (agentEvent.TurnArtifacts is not null)
+                        if (!turnPersisted && agentEvent.TurnArtifacts is not null)
                         {
-                            await _session.AppendTurnAsync(agentEvent.TurnArtifacts, _shutdownCts.Token)
+                            await _session.AppendTurnAsync(agentEvent.TurnArtifacts, turnTimeoutCts.Token)
                                 .ConfigureAwait(false);
+                            turnPersisted = true;
+                            if (string.Equals(agentEvent.Message, "partial", StringComparison.Ordinal))
+                            {
+                                AppendSystem("Partial response saved to session.");
+                            }
                         }
 
                         break;
@@ -451,8 +462,21 @@ internal sealed class ChatTuiApp
 
             UpdateToolStatus("idle");
         }
+        catch (OperationCanceledException) when (turnTimeoutCts.IsCancellationRequested && !_shutdownCts.IsCancellationRequested)
+        {
+            AppendSystem("Turn timed out. Saving any partial response to session.");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         finally
         {
+            if (!turnPersisted)
+            {
+                await TrySalvageTurnAsync(prompt, _shutdownCts.Token).ConfigureAwait(false);
+            }
+
             _activeAssistantRowIndex = -1;
             _turnRunning = false;
             SetInputEnabled(true);
@@ -463,6 +487,64 @@ internal sealed class ChatTuiApp
                 RebuildTranscript(scrollToEnd: true);
             });
         }
+    }
+
+    private async ValueTask<bool> TrySalvageTurnAsync(string userPrompt, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(userPrompt))
+        {
+            return false;
+        }
+
+        string? assistantText = await ReadActiveAssistantTextAsync().ConfigureAwait(false);
+        List<ConversationMessage> messages =
+        [
+            ConversationMessage.FromText(ConversationRole.User, userPrompt)
+        ];
+
+        if (!string.IsNullOrWhiteSpace(assistantText))
+        {
+            messages.Add(ConversationMessage.FromText(ConversationRole.Assistant, assistantText));
+        }
+
+        await _session.AppendTurnAsync(new TurnArtifacts(messages), cancellationToken).ConfigureAwait(false);
+
+        TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        InvokeUi(() =>
+        {
+            try
+            {
+                _messages.Clear();
+                PopulateTranscriptMessagesFromSession();
+                RebuildTranscript(scrollToEnd: true);
+                AppendSystem("Saved interrupted turn to session.");
+                completion.SetResult();
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+
+        await completion.Task.ConfigureAwait(false);
+        return true;
+    }
+
+    private async ValueTask<string?> ReadActiveAssistantTextAsync()
+    {
+        TaskCompletionSource<string?> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        InvokeUi(() =>
+        {
+            if (_activeAssistantRowIndex >= 0 && _activeAssistantRowIndex < _messages.Count)
+            {
+                completion.TrySetResult(_messages[_activeAssistantRowIndex].Text);
+                return;
+            }
+
+            completion.TrySetResult(null);
+        });
+
+        return await completion.Task.ConfigureAwait(false);
     }
 
     private async ValueTask<IReadOnlyList<string>> PickTreeAsync(ISessionManager sessionManager)
