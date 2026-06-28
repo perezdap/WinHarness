@@ -9,6 +9,7 @@ using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using WinHarness.Cli.Chat;
+using WinHarness.Cli.Rendering;
 using WinHarness.Configuration;
 using WinHarness.Context;
 using WinHarness.Conversation;
@@ -346,9 +347,16 @@ internal sealed class ChatTuiApp
         _transcriptRows.Clear();
         foreach (TranscriptMessage message in _messages)
         {
-            foreach (string line in TranscriptWrap.Wrap(message.Role, message.Text, width))
+            if (_session.RenderMarkdown && message.Role == TranscriptRole.Assistant)
             {
-                _transcriptRows.Add(new TranscriptRow(message.Role, line));
+                AppendMarkdownWrappedMessage(message.Role, message.Text, width);
+            }
+            else
+            {
+                foreach (string line in TranscriptWrap.Wrap(message.Role, message.Text, width))
+                {
+                    _transcriptRows.Add(new TranscriptRow(message.Role, line));
+                }
             }
         }
 
@@ -358,6 +366,53 @@ internal sealed class ChatTuiApp
         }
 
         _transcript.SetNeedsDraw();
+    }
+
+    private void AppendMarkdownWrappedMessage(TranscriptRole role, string markdown, int width)
+    {
+        string prefix = role switch
+        {
+            TranscriptRole.System => "system › ",
+            TranscriptRole.User => "you › ",
+            TranscriptRole.Assistant => "ai › ",
+            _ => string.Empty
+        };
+        string indent = new(' ', prefix.Length);
+        int contentWidth = Math.Max(1, width - prefix.Length);
+
+        foreach (MarkdownDisplayLine displayLine in MarkdownTuiFormatter.ParseLines(markdown))
+        {
+            bool first = true;
+            foreach ((string chunk, MarkdownBlockStyle blockStyle, IReadOnlyList<MarkdownRun> runs) in MarkdownTuiFormatter.WordWrap(
+                         displayLine,
+                         contentWidth))
+            {
+                int prefixLength = first ? prefix.Length : indent.Length;
+                string rowText = first ? prefix + chunk : indent + chunk;
+                IReadOnlyList<MarkdownRun>? shiftedRuns = runs.Count == 0
+                    ? null
+                    : ShiftRuns(runs, prefixLength);
+                _transcriptRows.Add(new TranscriptRow(role, rowText, blockStyle, shiftedRuns));
+                first = false;
+            }
+        }
+    }
+
+    private static IReadOnlyList<MarkdownRun> ShiftRuns(IReadOnlyList<MarkdownRun> runs, int offset)
+    {
+        if (offset == 0)
+        {
+            return runs;
+        }
+
+        MarkdownRun[] shifted = new MarkdownRun[runs.Count];
+        for (int i = 0; i < runs.Count; i++)
+        {
+            MarkdownRun run = runs[i];
+            shifted[i] = run with { Start = run.Start + offset };
+        }
+
+        return shifted;
     }
 
     private async Task SubmitCurrentInputAsync()
@@ -392,6 +447,11 @@ internal sealed class ChatTuiApp
             foreach (string message in result.Messages)
             {
                 AppendSystem(message);
+            }
+
+            if (IsMarkdownToggle(input))
+            {
+                InvokeUi(() => RebuildWrappedTranscript(scrollToEnd: true));
             }
 
             UpdateStatus();
@@ -494,6 +554,14 @@ internal sealed class ChatTuiApp
             .FirstOrDefault()
             ?.ToLowerInvariant() ?? string.Empty;
         return command is "/tree" or "/new" or "/resume" or "/fork" or "/compact";
+    }
+
+    private static bool IsMarkdownToggle(string input)
+    {
+        string command = input.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault()
+            ?.ToLowerInvariant() ?? string.Empty;
+        return command is "/markdown";
     }
 
     private void AppendSystem(string message)
@@ -623,7 +691,11 @@ internal sealed class ChatTuiApp
     private sealed record TranscriptMessage(TranscriptRole Role, string Text);
 
     /// <summary>A wrapped display line tagged with the role that produced it.</summary>
-    private sealed record TranscriptRow(TranscriptRole Role, string Text);
+    private sealed record TranscriptRow(
+        TranscriptRole Role,
+        string Text,
+        MarkdownBlockStyle BlockStyle = MarkdownBlockStyle.None,
+        IReadOnlyList<MarkdownRun>? Runs = null);
 
     /// <summary>Identifies the source of a transcript line so it can be colored distinctly.</summary>
     private enum TranscriptRole
@@ -685,7 +757,7 @@ internal sealed class ChatTuiApp
             TranscriptRow row = _rows[item];
             container.Move(col, line);
 
-            Attribute attr = selected
+            Attribute baseAttr = selected
                 ? _selectedAttr
                 : row.Role switch
                 {
@@ -695,7 +767,10 @@ internal sealed class ChatTuiApp
                     _ => _systemAttr
                 };
 
-            container.SetAttribute(attr);
+            if (row.BlockStyle != MarkdownBlockStyle.None)
+            {
+                baseAttr = MarkdownTuiStyles.ForBlock(row.BlockStyle, baseAttr);
+            }
 
             string text = row.Text;
             if (text.Length > width)
@@ -703,12 +778,60 @@ internal sealed class ChatTuiApp
                 text = text[..width];
             }
 
-            container.AddStr(text);
+            if (row.Runs is { Count: > 0 })
+            {
+                RenderStyledText(container, text, row.Runs, baseAttr);
+            }
+            else
+            {
+                container.SetAttribute(baseAttr);
+                container.AddStr(text);
+            }
 
             int remaining = width - text.Length;
             if (remaining > 0)
             {
+                container.SetAttribute(baseAttr);
                 container.AddStr(new string(' ', remaining));
+            }
+        }
+
+        private static void RenderStyledText(
+            ListView container,
+            string text,
+            IReadOnlyList<MarkdownRun> runs,
+            Attribute baseAttr)
+        {
+            int pos = 0;
+            foreach (MarkdownRun run in runs.OrderBy(static r => r.Start))
+            {
+                if (run.Start > text.Length)
+                {
+                    break;
+                }
+
+                int runStart = run.Start;
+                int runLength = Math.Min(run.Length, text.Length - runStart);
+                if (runLength <= 0)
+                {
+                    continue;
+                }
+
+                if (runStart > pos)
+                {
+                    container.SetAttribute(baseAttr);
+                    container.AddStr(text[pos..runStart]);
+                }
+
+                container.SetAttribute(MarkdownTuiStyles.ForEmphasis(run.Emphasis, baseAttr));
+                container.AddStr(text[runStart..(runStart + runLength)]);
+                pos = runStart + runLength;
+            }
+
+            if (pos < text.Length)
+            {
+                container.SetAttribute(baseAttr);
+                container.AddStr(text[pos..]);
             }
         }
 
