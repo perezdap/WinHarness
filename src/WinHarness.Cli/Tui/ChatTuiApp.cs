@@ -88,7 +88,7 @@ internal sealed class ChatTuiApp
         }, app);
 
         chat.InitializeTranscript();
-        chat.AppendSystem("Type /help for commands · Ctrl+Q quit · Enter send");
+        chat.AppendSystem("Type /help for commands · Ctrl+Q quit · Enter send · click conversation to scroll");
         bool initialFocusSet = false;
         app.Iteration += (_, _) =>
         {
