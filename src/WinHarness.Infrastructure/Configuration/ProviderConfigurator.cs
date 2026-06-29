@@ -108,6 +108,8 @@ public sealed class ProviderConfigurator
         string providerModelId,
         ProviderCapabilities capabilities,
         bool makeDefault,
+        int? contextWindow,
+        List<string>? supportedReasoningEfforts,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
@@ -129,7 +131,9 @@ public sealed class ProviderConfigurator
             {
                 Id = modelId,
                 ProviderModelId = providerModelId,
-                Capabilities = capabilities
+                Capabilities = capabilities,
+                ContextWindow = contextWindow,
+                SupportedReasoningEfforts = supportedReasoningEfforts
             };
             provider.Models.Add(model);
         }
@@ -137,6 +141,8 @@ public sealed class ProviderConfigurator
         {
             existing.ProviderModelId = providerModelId;
             existing.Capabilities = capabilities;
+            existing.ContextWindow = contextWindow;
+            existing.SupportedReasoningEfforts = supportedReasoningEfforts;
             model = existing;
         }
 

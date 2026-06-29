@@ -23,4 +23,9 @@ public interface IModelCatalog
 /// <summary>
 /// A model advertised by an OpenAI-compatible endpoint.
 /// </summary>
-public sealed record CatalogModel(string Id, string? OwnedBy);
+public sealed record CatalogModel(
+    string Id,
+    string? OwnedBy,
+    int? ContextWindow = null,
+    bool? Vision = null,
+    System.Collections.Generic.List<string>? SupportedReasoningEfforts = null);

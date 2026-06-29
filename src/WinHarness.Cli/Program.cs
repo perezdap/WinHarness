@@ -172,12 +172,15 @@ app.Add("models add", async (
     bool promptCaching = false,
     bool structuredOutput = false,
     bool reasoning = false,
+    int? contextWindow = null,
+    string[]? reasoningEfforts = null,
     bool setDefault = false,
     CancellationToken cancellationToken = default) =>
 {
     ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
     ProviderCapabilities capabilities = new(streaming, toolCalling, vision, promptCaching, structuredOutput, reasoning);
-    ModelOptions model = await configurator.AddModelAsync(providerId, id, providerModelId, capabilities, setDefault, cancellationToken).ConfigureAwait(false);
+    System.Collections.Generic.List<string>? efforts = reasoningEfforts is null ? null : [.. reasoningEfforts];
+    ModelOptions model = await configurator.AddModelAsync(providerId, id, providerModelId, capabilities, setDefault, contextWindow, efforts, cancellationToken).ConfigureAwait(false);
     Console.WriteLine($"Model '{model.Id}' ({model.ProviderModelId}) saved under '{providerId}'.");
 });
 

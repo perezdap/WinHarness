@@ -63,6 +63,8 @@ public sealed class ProviderConfiguratorTests
             "qwen2.5-coder:latest",
             new ProviderCapabilities(true, true, false, false, false, false),
             makeDefault: false,
+            contextWindow: null,
+            supportedReasoningEfforts: null,
             CancellationToken.None);
 
         Assert.AreEqual("coder", model.Id);
@@ -84,6 +86,8 @@ public sealed class ProviderConfiguratorTests
             "qwen2.5-coder:latest",
             ProviderCapabilities.None,
             makeDefault: true,
+            contextWindow: null,
+            supportedReasoningEfforts: null,
             CancellationToken.None);
 
         ProviderCapabilities capabilities = new(

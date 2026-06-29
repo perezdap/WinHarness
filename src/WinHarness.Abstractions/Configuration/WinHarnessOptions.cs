@@ -78,6 +78,16 @@ public sealed class ModelOptions
     /// Gets or sets model-specific capabilities.
     /// </summary>
     public ProviderCapabilities Capabilities { get; set; } = ProviderCapabilities.None;
+
+    /// <summary>
+    /// Gets or sets the context window limit (max tokens) for this model.
+    /// </summary>
+    public int? ContextWindow { get; set; }
+
+    /// <summary>
+    /// Gets or sets the reasoning effort levels supported by this model (e.g. "low", "medium", "high").
+    /// </summary>
+    public System.Collections.Generic.List<string>? SupportedReasoningEfforts { get; set; }
 }
 
 /// <summary>

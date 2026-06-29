@@ -68,7 +68,18 @@ public sealed class OpenAiCompatibleModelCatalog : IModelCatalog
 
         return payload.Data
             .Where(static model => !string.IsNullOrWhiteSpace(model.Id))
-            .Select(static model => new CatalogModel(model.Id!, model.OwnedBy))
+            .Select(static model =>
+            {
+                int? contextWindow = model.ContextWindow ?? model.ContextLength;
+                bool? vision = null;
+                if (model.Architecture?.Modality is string modality)
+                {
+                    vision = modality.Contains("image", StringComparison.OrdinalIgnoreCase) ||
+                             modality.Contains("multimodal", StringComparison.OrdinalIgnoreCase);
+                }
+                List<string>? efforts = model.Reasoning?.SupportedEfforts;
+                return new CatalogModel(model.Id!, model.OwnedBy, contextWindow, vision, efforts);
+            })
             .DistinctBy(static model => model.Id, StringComparer.Ordinal)
             .OrderBy(static model => model.Id, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -106,6 +117,30 @@ internal sealed class ModelListEntry
 
     [JsonPropertyName("owned_by")]
     public string? OwnedBy { get; set; }
+
+    [JsonPropertyName("context_length")]
+    public int? ContextLength { get; set; }
+
+    [JsonPropertyName("context_window")]
+    public int? ContextWindow { get; set; }
+
+    [JsonPropertyName("architecture")]
+    public ModelArchitecture? Architecture { get; set; }
+
+    [JsonPropertyName("reasoning")]
+    public ModelReasoning? Reasoning { get; set; }
+}
+
+internal sealed class ModelArchitecture
+{
+    [JsonPropertyName("modality")]
+    public string? Modality { get; set; }
+}
+
+internal sealed class ModelReasoning
+{
+    [JsonPropertyName("supported_efforts")]
+    public List<string>? SupportedEfforts { get; set; }
 }
 
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
