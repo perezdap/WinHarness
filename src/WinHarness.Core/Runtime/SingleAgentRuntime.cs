@@ -151,6 +151,20 @@ Command execution rules:
             if (failureEvent is not null)
             {
                 yield return failureEvent;
+
+                if (assistantText.Length > 0)
+                {
+                    ConversationMessage failedUserMessage = request.Conversation.Messages[^1];
+                    yield return new AgentEvent(
+                        AgentEventKind.Completed,
+                        "partial",
+                        new TurnArtifacts(
+                        [
+                            failedUserMessage,
+                            ConversationMessage.FromText(ConversationRole.Assistant, assistantText.ToString())
+                        ]));
+                }
+
                 yield break;
             }
 

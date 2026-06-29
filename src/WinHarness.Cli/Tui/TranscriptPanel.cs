@@ -1,4 +1,6 @@
+using System.Drawing;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
@@ -21,8 +23,11 @@ internal sealed class TranscriptPanel : View
     {
         Width = Dim.Fill();
         Height = Dim.Fill();
-        CanFocus = false;
-        TabStop = TabBehavior.NoStop;
+        CanFocus = true;
+        TabStop = TabBehavior.TabStop;
+        ViewportSettings |= ViewportSettingsFlags.HasVerticalScrollBar;
+        MouseBindings.Add(MouseFlags.WheeledUp, Command.ScrollUp);
+        MouseBindings.Add(MouseFlags.WheeledDown, Command.ScrollDown);
 
         _content = new View
         {
@@ -88,10 +93,7 @@ internal sealed class TranscriptPanel : View
         }
 
         _activeMarkdown.Text = text;
-        _activeMarkdown.SetNeedsLayout();
-        _content.SetNeedsLayout();
-        SetNeedsLayout();
-        SetNeedsDraw();
+        RefreshStreamingLayout();
     }
 
     public void FinalizeActiveAssistantLayout()
@@ -199,19 +201,59 @@ internal sealed class TranscriptPanel : View
 
     private void FinishLayout()
     {
-        _content.SetNeedsLayout();
+        RefreshContentLayout(scrollToEnd: true);
+    }
+
+    private void RefreshStreamingLayout()
+    {
+        RefreshContentLayout(scrollToEnd: true);
+    }
+
+    private void RefreshContentLayout(bool scrollToEnd)
+    {
+        LayoutContentChildren();
+        SyncContentSize();
         SetNeedsLayout();
         Layout();
-        ScrollToEnd();
+        if (scrollToEnd)
+        {
+            ScrollToEnd();
+        }
+
         SetNeedsDraw();
+    }
+
+    private void LayoutContentChildren()
+    {
+        int width = Math.Max(1, Viewport.Width);
+        _content.SetNeedsLayout();
+        _content.Layout(new Size(width, int.MaxValue));
+    }
+
+    private void SyncContentSize()
+    {
+        int width = Math.Max(1, Viewport.Width);
+        int height = Math.Max(MeasureContentHeight(), Viewport.Height);
+        SetContentSize(new Size(width, height));
+    }
+
+    private int MeasureContentHeight()
+    {
+        if (_tailView is null)
+        {
+            return 1;
+        }
+
+        return Math.Max(1, _tailView.Frame.Bottom);
     }
 
     private void ScrollToEnd()
     {
-        int contentHeight = _content.GetContentSize().Height;
+        int contentHeight = GetContentHeight();
         int viewportHeight = Viewport.Height;
         if (contentHeight <= viewportHeight)
         {
+            ScrollVertical(0);
             return;
         }
 
