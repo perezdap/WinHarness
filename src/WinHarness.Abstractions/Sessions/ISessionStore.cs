@@ -24,4 +24,16 @@ public interface ISessionStore
     /// Lists session summaries for the given working directory.
     /// </summary>
     ValueTask<IReadOnlyList<SessionSummary>> ListAsync(string cwd, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lists session summaries across all working directories under the sessions root.
+    /// </summary>
+    ValueTask<IReadOnlyList<SessionSummary>> ListAllAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes a session file. When <paramref name="permanent"/> is <see langword="false"/>
+    /// the file is moved to a <c>.trash</c> folder under the sessions root so it can be
+    /// recovered; when <see langword="true"/> it is removed permanently.
+    /// </summary>
+    ValueTask<SessionDeletionResult> DeleteAsync(string path, bool permanent, CancellationToken cancellationToken);
 }

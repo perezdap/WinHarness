@@ -18,27 +18,33 @@ internal sealed class TranscriptDataSource : IListDataSource, IDisposable
     private readonly ObservableCollection<TranscriptRow> _rows;
     private bool _disposed;
     private int _maxItemLength;
+    private bool _maxItemLengthDirty = true;
 
     public TranscriptDataSource(ObservableCollection<TranscriptRow> rows)
     {
         _rows = rows;
         _rows.CollectionChanged += OnCollectionChanged;
-        RecalculateMaxItemLength();
     }
 
     private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        RecalculateMaxItemLength();
-    }
-
-    private void RecalculateMaxItemLength()
-    {
-        _maxItemLength = _rows.Count == 0 ? 0 : _rows.Max(static r => r.Text.Length);
+        _maxItemLengthDirty = true;
     }
 
     public int Count => _rows.Count;
 
-    public int MaxItemLength => _maxItemLength;
+    public int MaxItemLength
+    {
+        get
+        {
+            if (_maxItemLengthDirty)
+            {
+                _maxItemLength = _rows.Count == 0 ? 0 : _rows.Max(static r => r.Text.Length);
+                _maxItemLengthDirty = false;
+            }
+            return _maxItemLength;
+        }
+    }
 
     public bool SuspendCollectionChangedEvent { get; set; }
 
@@ -114,7 +120,7 @@ internal sealed class TranscriptDataSource : IListDataSource, IDisposable
         Attribute baseAttr)
     {
         int pos = 0;
-        foreach (MarkdownRun run in runs.OrderBy(static r => r.Start))
+        foreach (MarkdownRun run in runs)
         {
             if (run.Start > text.Length)
             {

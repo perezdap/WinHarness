@@ -271,4 +271,45 @@ public sealed class JsonlSessionStoreTests
         StringAssert.Contains(messageJson, "\"type\":\"message\"");
         StringAssert.Contains(messageJson, "\"parentId\":\"a1b2c3d4\"");
     }
+
+    [TestMethod]
+    public async Task DeleteAsyncRemovesFileOrTrashes()
+    {
+        JsonlSessionStore store = new(_sessionsRoot);
+        SessionFile created = await store.CreateAsync(Environment.CurrentDirectory, CancellationToken.None);
+        Assert.IsTrue(File.Exists(created.Path));
+
+        // Soft delete (trash)
+        SessionDeletionResult softResult = await store.DeleteAsync(created.Path, permanent: false, CancellationToken.None);
+        Assert.AreEqual(SessionDeletionStatus.Trashed, softResult.Status);
+        Assert.IsFalse(File.Exists(created.Path));
+        Assert.IsTrue(File.Exists(softResult.FinalPath));
+        Assert.IsTrue(softResult.FinalPath!.Contains(".trash"));
+
+        // Permanent delete
+        SessionDeletionResult permResult = await store.DeleteAsync(softResult.FinalPath, permanent: true, CancellationToken.None);
+        Assert.AreEqual(SessionDeletionStatus.PermanentlyDeleted, permResult.Status);
+        Assert.IsFalse(File.Exists(softResult.FinalPath));
+
+        // Not found deletion
+        SessionDeletionResult nfResult = await store.DeleteAsync(created.Path, permanent: false, CancellationToken.None);
+        Assert.AreEqual(SessionDeletionStatus.NotFound, nfResult.Status);
+    }
+
+    [TestMethod]
+    public async Task ListAllAsyncListsAcrossWorkspaces()
+    {
+        JsonlSessionStore store = new(_sessionsRoot);
+        string cwd1 = Path.Combine(Environment.CurrentDirectory, "ws1");
+        string cwd2 = Path.Combine(Environment.CurrentDirectory, "ws2");
+
+        SessionFile ws1File = await store.CreateAsync(cwd1, CancellationToken.None);
+        SessionFile ws2File = await store.CreateAsync(cwd2, CancellationToken.None);
+
+        IReadOnlyList<SessionSummary> all = await store.ListAllAsync(CancellationToken.None);
+
+        // Verify we find both
+        Assert.IsTrue(all.Any(s => s.FilePath == ws1File.Path));
+        Assert.IsTrue(all.Any(s => s.FilePath == ws2File.Path));
+    }
 }

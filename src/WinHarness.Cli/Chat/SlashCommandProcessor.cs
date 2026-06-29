@@ -1,3 +1,6 @@
+using System.IO;
+using System.Linq;
+using Spectre.Console;
 using WinHarness.Configuration;
 using WinHarness.Sessions;
 
@@ -26,6 +29,7 @@ internal static class SlashCommandProcessor
             "/name" => await SetSessionNameAsync(session, argument, context).ConfigureAwait(false),
             "/new" => await CreateNewSessionAsync(session, context).ConfigureAwait(false),
             "/resume" => await ResumeSessionAsync(session, context).ConfigureAwait(false),
+            "/delete" => await DeleteSessionAsync(session, argument, context).ConfigureAwait(false),
             "/providers" => SlashCommandResult.Handled(CreateProviderLines(options, session.ProviderId)),
             "/models" => SlashCommandResult.Handled(CreateModelLines(
                 options,
@@ -89,6 +93,7 @@ internal static class SlashCommandProcessor
             "/name <name>          Set session display name (persisted sessions)",
             "/new                  Start a new persisted session file",
             "/resume               Pick a saved session to open",
+            "/delete [id-or-path]  Delete a session file (trashed by default)",
             "/providers            List configured providers",
             "/models [provider]    List models for a provider",
             "/provider <id>        Switch active provider",
@@ -197,6 +202,100 @@ internal static class SlashCommandProcessor
             $"file: {opened.SessionFilePath}",
             $"name: {opened.DisplayName ?? "(none)"}"
         ]);
+    }
+
+    private static async ValueTask<SlashCommandResult> DeleteSessionAsync(
+        ChatSession session,
+        string argument,
+        SlashCommandContext? context)
+    {
+        if (context is null)
+        {
+            return MissingContext("/delete");
+        }
+
+        SessionDeletionService service = new(context.SessionFactory);
+        string? activeSessionPath = session.SessionManager.SessionFilePath;
+        bool isTui = context.TreePickerAsync is not null;
+
+        if (string.IsNullOrWhiteSpace(argument))
+        {
+            if (isTui)
+            {
+                return SlashCommandResult.Handled([
+                    "Error: Please specify the session ID or path to delete (e.g. `/delete 7a866815`).",
+                    "Interactive deletion is not supported inside the TUI."
+                ]);
+            }
+
+            var summaries = await context.SessionFactory.ListAsync(session.WorkspaceRoot, context.CancellationToken).ConfigureAwait(false);
+            if (summaries.Count == 0)
+            {
+                return SlashCommandResult.Handled(["No saved sessions for this workspace."]);
+            }
+
+            var deletableSummaries = summaries.Where(s => !string.Equals(Path.GetFullPath(s.FilePath), Path.GetFullPath(activeSessionPath ?? string.Empty), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (deletableSummaries.Count == 0)
+            {
+                return SlashCommandResult.Handled(["No other deletable sessions in this workspace (the only session is active)."]);
+            }
+
+            var selected = AnsiConsole.Prompt(
+                new SelectionPrompt<SessionSummary>()
+                    .Title("Select a session to delete (will be moved to trash)")
+                    .PageSize(10)
+                    .AddChoices(deletableSummaries)
+                    .UseConverter(static s =>
+                        $"{s.SessionId} · {s.DisplayName ?? s.FirstUserPreview ?? "(untitled)"}"));
+
+            if (!AnsiConsole.Confirm($"Are you sure you want to delete session '{selected.SessionId}'?"))
+            {
+                return SlashCommandResult.Handled(["Deletion cancelled."]);
+            }
+
+            var result = await service.DeleteAsync(selected.FilePath, permanent: false, activeSessionPath, context.CancellationToken).ConfigureAwait(false);
+            return SlashCommandResult.Handled([
+                $"Session '{selected.SessionId}' moved to trash.",
+                $"Trashed file: {result.FinalPath}"
+            ]);
+        }
+
+        string targetPath = argument.Trim();
+        if (!File.Exists(targetPath))
+        {
+            var summaries = await context.SessionFactory.ListAsync(session.WorkspaceRoot, context.CancellationToken).ConfigureAwait(false);
+            var matched = summaries.FirstOrDefault(s => s.SessionId.EndsWith(targetPath, StringComparison.OrdinalIgnoreCase));
+            if (matched is not null)
+            {
+                targetPath = matched.FilePath;
+            }
+            else
+            {
+                var allSummaries = await context.SessionFactory.ListAllAsync(context.CancellationToken).ConfigureAwait(false);
+                matched = allSummaries.FirstOrDefault(s => s.SessionId.EndsWith(targetPath, StringComparison.OrdinalIgnoreCase));
+                if (matched is not null)
+                {
+                    targetPath = matched.FilePath;
+                }
+                else
+                {
+                    return SlashCommandResult.Handled([$"Error: Could not find session with ID or path '{argument.Trim()}'."]);
+                }
+            }
+        }
+
+        try
+        {
+            var result = await service.DeleteAsync(targetPath, permanent: false, activeSessionPath, context.CancellationToken).ConfigureAwait(false);
+            return SlashCommandResult.Handled([
+                $"Session '{Path.GetFileNameWithoutExtension(targetPath)}' moved to trash.",
+                $"Trashed file: {result.FinalPath}"
+            ]);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return SlashCommandResult.Handled([$"Error: {ex.Message}"]);
+        }
     }
 
     private static IReadOnlyList<string> CreateSkillLines(ChatSession session)

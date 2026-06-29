@@ -59,4 +59,16 @@ public sealed class SessionManagerFactory
     /// </summary>
     public ValueTask<IReadOnlyList<SessionSummary>> ListAsync(string cwd, CancellationToken cancellationToken) =>
         _store.ListAsync(cwd, cancellationToken);
+
+    /// <summary>
+    /// Lists session summaries across all working directories.
+    /// </summary>
+    public ValueTask<IReadOnlyList<SessionSummary>> ListAllAsync(CancellationToken cancellationToken) =>
+        _store.ListAllAsync(cancellationToken);
+
+    /// <summary>
+    /// Deletes a session file.
+    /// </summary>
+    public ValueTask<SessionDeletionResult> DeleteAsync(string path, bool permanent, CancellationToken cancellationToken) =>
+        _store.DeleteAsync(path, permanent, cancellationToken);
 }

@@ -529,6 +529,115 @@ app.Add("credentials delete", async (string targetName, CancellationToken cancel
     Console.WriteLine("Credential deleted.");
 });
 
+app.Add("sessions prune", async (
+    string olderThan,
+    bool permanent = false,
+    bool dryRun = false,
+    bool allWorkspaces = false,
+    CancellationToken cancellationToken = default) =>
+{
+    TimeSpan duration = ParseDuration(olderThan);
+    DateTimeOffset cutoff = DateTimeOffset.UtcNow.Subtract(duration);
+
+    SessionManagerFactory sessionFactory = host.Services.GetRequiredService<SessionManagerFactory>();
+    IReadOnlyList<SessionSummary> summaries;
+
+    if (allWorkspaces)
+    {
+        summaries = await sessionFactory.ListAllAsync(cancellationToken).ConfigureAwait(false);
+    }
+    else
+    {
+        summaries = await sessionFactory.ListAsync(Environment.CurrentDirectory, cancellationToken).ConfigureAwait(false);
+    }
+
+    var itemsToPrune = summaries.Where(s => s.LastModified < cutoff).ToList();
+
+    if (itemsToPrune.Count == 0)
+    {
+        Console.WriteLine("No sessions found matching the pruning criteria.");
+        return;
+    }
+
+    Console.WriteLine($"Found {itemsToPrune.Count} session(s) older than {olderThan} (cutoff: {cutoff:g}):");
+    foreach (var summary in itemsToPrune)
+    {
+        Console.WriteLine($"  - [{summary.SessionId}] Modified: {summary.LastModified.LocalDateTime:g} | Path: {summary.FilePath}");
+    }
+
+    if (dryRun)
+    {
+        Console.WriteLine("\nDry run mode enabled. No files were modified.");
+        return;
+    }
+
+    Console.WriteLine();
+    string modeLabel = permanent ? "permanently deleting" : "trashing";
+    if (Console.IsInputRedirected)
+    {
+        Console.WriteLine($"Pruning sessions ({modeLabel})...");
+    }
+    else if (!AnsiConsole.Confirm($"Are you sure you want to prune these {itemsToPrune.Count} session(s) ({modeLabel})?"))
+    {
+        Console.WriteLine("Pruning cancelled.");
+        return;
+    }
+
+    SessionDeletionService deletionService = new(sessionFactory);
+    int prunedCount = 0;
+    foreach (var summary in itemsToPrune)
+    {
+        try
+        {
+            var result = await deletionService.DeleteAsync(summary.FilePath, permanent, activeSessionPath: null, cancellationToken).ConfigureAwait(false);
+            if (result.Status == SessionDeletionStatus.PermanentlyDeleted)
+            {
+                Console.WriteLine($"Deleted permanently: {summary.SessionId}");
+            }
+            else if (result.Status == SessionDeletionStatus.Trashed)
+            {
+                Console.WriteLine($"Moved to trash: {summary.SessionId} -> {result.FinalPath}");
+            }
+            prunedCount++;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error pruning {summary.SessionId}: {ex.Message}");
+        }
+    }
+
+    Console.WriteLine($"\nSuccessfully pruned {prunedCount} session(s).");
+
+    static TimeSpan ParseDuration(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Duration value cannot be empty.");
+        }
+
+        value = value.Trim().ToLowerInvariant();
+        char unit = value[^1];
+        if (!char.IsLetter(unit))
+        {
+            throw new ArgumentException("Duration value must end with a time unit (e.g. 'd' for days, 'h' for hours).");
+        }
+
+        if (!double.TryParse(value[..^1], out double amount))
+        {
+            throw new ArgumentException($"Invalid numeric format for duration: '{value[..^1]}'.");
+        }
+
+        return unit switch
+        {
+            'd' => TimeSpan.FromDays(amount),
+            'h' => TimeSpan.FromHours(amount),
+            'm' => TimeSpan.FromMinutes(amount),
+            's' => TimeSpan.FromSeconds(amount),
+            _ => throw new ArgumentException($"Unknown duration time unit: '{unit}'. Supported units are 'd', 'h', 'm', 's'.")
+        };
+    }
+});
+
 await app.RunAsync(args).ConfigureAwait(false);
 
 static IReadOnlyList<string> ParseStringArray(string json)

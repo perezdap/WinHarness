@@ -283,6 +283,67 @@ public sealed class JsonlSessionStore : ISessionStore
         }
     }
 
+    /// <inheritdoc />
+    public async ValueTask<IReadOnlyList<SessionSummary>> ListAllAsync(CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(_sessionsRoot))
+        {
+            return [];
+        }
+
+        List<SessionSummary> summaries = [];
+        foreach (string subDir in Directory.EnumerateDirectories(_sessionsRoot))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string folderName = Path.GetFileName(subDir);
+            if (string.Equals(folderName, ".trash", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (string path in Directory.EnumerateFiles(subDir, "*.jsonl"))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                SessionSummary? summary = await TryBuildSummaryAsync(path, cancellationToken).ConfigureAwait(false);
+                if (summary is not null)
+                {
+                    summaries.Add(summary);
+                }
+            }
+        }
+
+        summaries.Sort(static (left, right) => right.LastModified.CompareTo(left.LastModified));
+        return summaries;
+    }
+
+    /// <inheritdoc />
+    public async ValueTask<SessionDeletionResult> DeleteAsync(string path, bool permanent, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        string fullPath = Path.GetFullPath(path);
+
+        if (!File.Exists(fullPath))
+        {
+            return SessionDeletionResult.NotFound(path);
+        }
+
+        if (permanent)
+        {
+            File.Delete(fullPath);
+            return SessionDeletionResult.Succeeded(path, SessionDeletionStatus.PermanentlyDeleted, fullPath);
+        }
+
+        string trashDirectory = Path.Combine(_sessionsRoot, ".trash");
+        Directory.CreateDirectory(trashDirectory);
+
+        string fileNameWithoutExt = Path.GetFileNameWithoutExtension(fullPath);
+        string finalFileName = $"{fileNameWithoutExt}_{DateTimeOffset.UtcNow.Ticks}.jsonl";
+        string destinationPath = Path.Combine(trashDirectory, finalFileName);
+
+        File.Move(fullPath, destinationPath);
+        return SessionDeletionResult.Succeeded(path, SessionDeletionStatus.Trashed, destinationPath);
+    }
+
     private static async ValueTask WriteJsonLineAsync(
         FileStream stream,
         byte[] bytes,

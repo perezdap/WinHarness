@@ -669,10 +669,13 @@ internal sealed class ChatTuiApp
                 await TrySalvageTurnAsync(prompt, _shutdownCts.Token).ConfigureAwait(false);
             }
 
-            InvokeUi(EndAssistantStreaming);
-            _activeAssistantRowIndex = -1;
-            _turnRunning = false;
-            SetInputEnabled(true);
+            InvokeUi(() =>
+            {
+                EndAssistantStreaming();
+                _activeAssistantRowIndex = -1;
+                _turnRunning = false;
+                SetInputEnabled(true);
+            });
         }
     }
 
