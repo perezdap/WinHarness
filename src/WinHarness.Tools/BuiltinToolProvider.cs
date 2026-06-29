@@ -139,6 +139,13 @@ public sealed class BuiltinToolProvider : IToolProvider
             return value.GetString() ?? string.Empty;
         }
 
+        protected static string? OptionalString(JsonElement arguments, string propertyName)
+        {
+            return arguments.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+
         protected static int OptionalInt32(JsonElement arguments, string propertyName, int defaultValue)
         {
             return arguments.TryGetProperty(propertyName, out JsonElement value) && value.TryGetInt32(out int parsed)
@@ -309,8 +316,8 @@ public sealed class BuiltinToolProvider : IToolProvider
                 workspaceRoot,
                 longPathService,
                 "run_command",
-                "Run a Windows command with captured output by default. The command field must be only the executable name/path; put flags and parameters in the arguments array. This host is Windows: prefer PowerShell/cmd-native commands (where.exe, pwsh -NoProfile -Command Get-Command <name>, Get-ChildItem, Get-Content). Do not use Unix shell builtins such as command -v, which, bash, sh, ls, or cat unless the executable is known to exist.",
-                """{"type":"object","properties":{"command":{"type":"string","description":"Executable name or path only, for example pwsh, cmd.exe, where.exe, dotnet, or git. Do not include spaces, flags, pipes, redirection, or shell builtins."},"arguments":{"type":"array","items":{"type":"string"},"description":"Each command-line argument as a separate string. For shell syntax, invoke pwsh with ['-NoProfile','-Command','...'] or cmd.exe with ['/c','...']."},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"maxOutputBytes":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]}},"required":["command"]}""")
+                "Run a command with captured output by default. The command field must be only the executable name/path; put flags and parameters in the arguments array. Captured mode is non-interactive; to supply stdin, use the input field. This host is Windows: prefer PowerShell/cmd-native commands (where.exe, pwsh -NoProfile -Command Get-Command <name>, Get-ChildItem, Get-Content). Do not use Unix shell builtins such as command -v, which, bash, sh, ls, or cat unless the executable is known to exist.",
+                """{"type":"object","properties":{"command":{"type":"string","description":"Executable name or path only, for example pwsh, cmd.exe, where.exe, dotnet, or git. Do not include spaces, flags, pipes, redirection, or shell builtins."},"arguments":{"type":"array","items":{"type":"string"},"description":"Each command-line argument as a separate string. For shell syntax, invoke pwsh with ['-NoProfile','-Command','...'] or cmd.exe with ['/c','...']."},"workingDirectory":{"type":"string"},"timeoutSeconds":{"type":"integer"},"maxOutputBytes":{"type":"integer"},"mode":{"type":"string","enum":["captured","interactive"]},"input":{"type":"string","description":"Optional text written to the process's standard input, then EOF. Use for commands that read from stdin (e.g. patches, piped text). Omit for normal commands."}},"required":["command"]}""")
         {
             _commandExecutor = commandExecutor;
         }
@@ -366,7 +373,8 @@ public sealed class BuiltinToolProvider : IToolProvider
                         ? NormalizeForIo(ResolveWorkspacePath(invocation.Arguments, "workingDirectory"))
                         : WorkspaceRoot,
                     Mode: executionMode,
-                    Timeout: TimeSpan.FromSeconds(OptionalInt32(invocation.Arguments, "timeoutSeconds", 60)));
+                    Timeout: TimeSpan.FromSeconds(OptionalInt32(invocation.Arguments, "timeoutSeconds", 60)),
+                    StandardInput: OptionalString(invocation.Arguments, "input"));
             }
             catch (InvalidOperationException ex)
             {
@@ -471,6 +479,7 @@ public sealed class BuiltinToolProvider : IToolProvider
                 FileName = request.FileName,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                RedirectStandardInput = true,
                 UseShellExecute = false,
                 WorkingDirectory = request.WorkingDirectory
             };
@@ -496,6 +505,8 @@ public sealed class BuiltinToolProvider : IToolProvider
             }
 
             using System.Diagnostics.Process process = startedProcess;
+            await WriteStandardInputAsync(process, request.StandardInput).ConfigureAwait(false);
+
             Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
             Task<string> stderrTask = process.StandardError.ReadToEndAsync();
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -525,6 +536,34 @@ public sealed class BuiltinToolProvider : IToolProvider
             string stderr = await stderrTask.ConfigureAwait(false);
 
             return new CommandResult(process.ExitCode, stdout, stderr, CommandExecutionMode.Captured);
+        }
+        private static async ValueTask WriteStandardInputAsync(System.Diagnostics.Process process, string? standardInput)
+        {
+            if (standardInput is not null)
+            {
+                try
+                {
+                    await process.StandardInput.WriteAsync(standardInput).ConfigureAwait(false);
+                    await process.StandardInput.FlushAsync().ConfigureAwait(false);
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process already exited and its standard input stream is gone.
+                }
+                catch (IOException)
+                {
+                    // The process already exited and its standard input stream is gone.
+                }
+            }
+
+            try
+            {
+                process.StandardInput.Close();
+            }
+            catch (InvalidOperationException)
+            {
+                // The process already exited and its standard input stream is gone.
+            }
         }
     }
 

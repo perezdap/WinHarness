@@ -69,6 +69,22 @@ public sealed class CommandExecutorTests
     }
 
     [TestMethod]
+    public async Task CapturedExecutorDeliversStdinInput()
+    {
+        CapturedCommandExecutor executor = new();
+
+        CommandRequest request = OperatingSystem.IsWindows()
+            ? new CommandRequest("cmd.exe", ["/c", "findstr .*"], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromSeconds(10), "hello\n")
+            : new CommandRequest("/bin/sh", ["-c", "read value; echo got:$value"], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromSeconds(10), "hello\n");
+
+        CommandResult result = await executor.ExecuteAsync(request, CancellationToken.None);
+
+        Assert.AreEqual(CommandExecutionMode.Captured, result.Mode);
+        StringAssert.DoesNotMatch(result.StandardError, new System.Text.RegularExpressions.Regex("Process timed out\\."));
+        StringAssert.Contains(result.StandardOutput, "hello");
+    }
+
+    [TestMethod]
     public async Task InteractiveExecutorUsesConPtyOnWindows()
     {
         if (!OperatingSystem.IsWindows())
