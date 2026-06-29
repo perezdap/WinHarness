@@ -869,11 +869,18 @@ internal static class ChatRepl
                 continue;
             }
 
+            // Visually separate the user's prompt from the agent's response so the
+            // boundary is obvious in the scrollback.
+            AnsiConsole.WriteLine();
+
             await RunTurnAsync(
                 services,
                 session,
                 input,
                 cancellationToken).ConfigureAwait(false);
+
+            // Trailing blank line closes the turn before the next prompt.
+            AnsiConsole.WriteLine();
         }
     }
 
@@ -969,17 +976,54 @@ internal static class ChatRepl
 
         bool interactive = !Console.IsOutputRedirected;
 
-        // Buffers the full assistant text so it can be re-rendered as markdown once
-        // the turn completes. Live raw tokens are streamed as they arrive so the
-        // user sees progress; if markdown is enabled the streamed text is erased and
-        // reprinted formatted at the end (interactive, no-tool turns only).
+        // Buffers the full assistant text (for non-interactive rendering) and the
+        // current contiguous text "segment" (the text emitted between two tool
+        // calls). Behaviour depends on the markdown toggle:
+        //   markdown ON  — the spinner stays up while a segment buffers, then the
+        //                  whole segment is printed as formatted markdown. This is
+        //                  robust regardless of length: nothing to erase, so long
+        //                  answers that scroll still render correctly.
+        //   markdown OFF — raw tokens stream live as they arrive so the user sees
+        //                  incremental progress, terminated by a newline per segment.
         StringBuilder assistantBuffer = new();
+        StringBuilder segmentBuffer = new();
         AssistantStreamWriter writer = new();
         await using ThinkingIndicator thinking = new();
 
-        bool toolActivityOccurred = false;
-        bool streaming = false;
+        bool segmentActive = false;
+        bool rawLabelWritten = false;
         bool plainLabelWritten = false;
+
+        // Ends the current assistant text segment. In markdown mode the spinner is
+        // stopped and the buffered segment is rendered as formatted markdown; in raw
+        // mode the streamed line is simply terminated.
+        async ValueTask FinalizeSegmentAsync()
+        {
+            if (!segmentActive)
+            {
+                return;
+            }
+
+            segmentActive = false;
+
+            if (session.RenderMarkdown)
+            {
+                await thinking.StopAsync().ConfigureAwait(false);
+                if (segmentBuffer.Length > 0)
+                {
+                    AnsiConsole.Markup("[bold blue]•[/] ");
+                    MarkdownConsoleRenderer.Write(segmentBuffer.ToString());
+                }
+            }
+            else if (writer.HasOutput)
+            {
+                Console.WriteLine();
+            }
+
+            segmentBuffer.Clear();
+            rawLabelWritten = false;
+            writer = new AssistantStreamWriter();
+        }
 
         if (interactive)
         {
@@ -1000,18 +1044,13 @@ internal static class ChatRepl
                 switch (agentEvent.Kind)
                 {
                     case AgentEventKind.ToolActivity:
-                        toolActivityOccurred = true;
                         if (interactive)
                         {
-                            if (streaming)
-                            {
-                                // A tool runs after some assistant text: end the
-                                // current streamed line and resume the spinner.
-                                streaming = false;
-                                Console.WriteLine();
-                                thinking.Start();
-                            }
-
+                            // A tool runs after some assistant text: close the current
+                            // segment (markdown render or newline) and resume the
+                            // spinner for the tool.
+                            await FinalizeSegmentAsync().ConfigureAwait(false);
+                            thinking.Start();
                             thinking.SetLabel(agentEvent.Message);
                         }
 
@@ -1020,8 +1059,8 @@ internal static class ChatRepl
                     case AgentEventKind.Failed:
                         if (interactive)
                         {
+                            await FinalizeSegmentAsync().ConfigureAwait(false);
                             await thinking.StopAsync().ConfigureAwait(false);
-                            streaming = false;
                         }
 
                         AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
@@ -1041,13 +1080,21 @@ internal static class ChatRepl
 
                         if (interactive)
                         {
-                            if (!streaming)
-                            {
-                                await thinking.StopAsync().ConfigureAwait(false);
-                                streaming = true;
-                            }
+                            segmentActive = true;
+                            segmentBuffer.Append(agentEvent.Message);
 
-                            writer.Write(agentEvent.Message);
+                            if (!session.RenderMarkdown)
+                            {
+                                // Raw streaming: drop the spinner on first token, then
+                                // emit tokens as they arrive.
+                                if (!rawLabelWritten)
+                                {
+                                    await thinking.StopAsync().ConfigureAwait(false);
+                                    rawLabelWritten = true;
+                                }
+
+                                writer.Write(agentEvent.Message);
+                            }
                         }
                         else if (!session.RenderMarkdown)
                         {
@@ -1074,18 +1121,7 @@ internal static class ChatRepl
 
         if (interactive)
         {
-            if (writer.HasOutput)
-            {
-                if (session.RenderMarkdown && !toolActivityOccurred && writer.TryEraseForReRender())
-                {
-                    MarkdownConsoleRenderer.Write(assistantBuffer.ToString());
-                }
-                else
-                {
-                    Console.WriteLine();
-                }
-            }
-
+            await FinalizeSegmentAsync().ConfigureAwait(false);
             return;
         }
 
