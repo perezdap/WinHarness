@@ -1,4 +1,4 @@
-using System.Text;
+using System.Collections.ObjectModel;
 using Microsoft.Extensions.DependencyInjection;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
@@ -6,6 +6,7 @@ using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using WinHarness.Cli.Chat;
+using WinHarness.Cli.Rendering;
 using WinHarness.Configuration;
 using WinHarness.Context;
 using WinHarness.Conversation;
@@ -19,6 +20,8 @@ namespace WinHarness.Cli.Tui;
 
 internal sealed class ChatTuiApp
 {
+    private const int StreamRedrawIntervalMs = 75;
+
     private static readonly TimeSpan TurnTimeout = TimeSpan.FromMinutes(10);
 
     private readonly IApplication _app;
@@ -27,14 +30,19 @@ internal sealed class ChatTuiApp
     private readonly ChatSession _session;
     private readonly SlashCommandContext _slashContext;
     private readonly List<TranscriptMessage> _messages = [];
+    private readonly ObservableCollection<TranscriptRow> _transcriptRows = [];
     private readonly CancellationTokenSource _shutdownCts;
 
     private Label _status = null!;
-    private TranscriptPanel _transcript = null!;
+    private ListView _transcript = null!;
     private Label _toolStatus = null!;
     private TextField _input = null!;
     private bool _turnRunning;
     private int _activeAssistantRowIndex = -1;
+    private int _activeAssistantContentRowStart = -1;
+    private bool _followTail = true;
+    private bool _streamRedrawScheduled;
+    private long _lastStreamRedrawMs;
     private Task _activeTurn = Task.CompletedTask;
 
     private ChatTuiApp(
@@ -90,7 +98,7 @@ internal sealed class ChatTuiApp
         }, app);
 
         chat.InitializeTranscript();
-        chat.AppendSystem("Type /help for commands · Ctrl+Q quit · Enter send · click conversation to scroll");
+        chat.AppendSystem("Type /help for commands · Ctrl+Q quit · Enter send · Tab conversation · ↑↓ scroll");
         bool initialFocusSet = false;
         app.Iteration += (_, _) =>
         {
@@ -165,13 +173,17 @@ internal sealed class ChatTuiApp
             Focus = TuiTheme.Border
         });
 
-        _transcript = new TranscriptPanel
+        _transcript = new ListView
         {
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
-            Height = Dim.Fill()
+            Height = Dim.Fill(),
+            CanFocus = true,
+            TabStop = TabBehavior.TabStop,
+            Source = new TranscriptDataSource(_transcriptRows)
         };
+        _transcript.ViewportChanged += (_, _) => UpdateFollowTailFromViewport();
         transcriptFrame.Add(_transcript);
 
         FrameView toolsFrame = new()
@@ -282,17 +294,7 @@ internal sealed class ChatTuiApp
     {
         _messages.Clear();
         PopulateTranscriptMessagesFromSession();
-        RebuildTranscript(scrollToEnd: false);
-    }
-
-    private void LoadTranscriptFromSession()
-    {
-        InvokeUi(() =>
-        {
-            _messages.Clear();
-            PopulateTranscriptMessagesFromSession();
-            RebuildTranscript(scrollToEnd: false);
-        });
+        RebuildWrappedTranscript(scrollToEnd: false);
     }
 
     private void ReloadTranscriptFromSession()
@@ -307,7 +309,7 @@ internal sealed class ChatTuiApp
         {
             _messages.Clear();
             PopulateTranscriptMessagesFromSession();
-            RebuildTranscript(scrollToEnd: false);
+            RebuildWrappedTranscript(scrollToEnd: false);
         });
     }
 
@@ -341,16 +343,205 @@ internal sealed class ChatTuiApp
         return Math.Max(24, width - 1);
     }
 
-    private void RebuildTranscript(bool scrollToEnd)
+    private void RebuildWrappedTranscript(bool scrollToEnd)
     {
         int width = GetTranscriptWrapWidth();
-        _transcript.SetContentWidth(width);
-        _transcript.Rebuild(_messages, _session.RenderMarkdown);
-        if (!scrollToEnd)
+        _transcriptRows.Clear();
+        _activeAssistantContentRowStart = -1;
+
+        for (int index = 0; index < _messages.Count; index++)
+        {
+            TranscriptMessage message = _messages[index];
+            if (!TranscriptContent.HasDisplayableContent(message))
+            {
+                continue;
+            }
+
+            AppendMessageToTranscript(message, width, addSpacer: _transcriptRows.Count > 0);
+        }
+
+        if (scrollToEnd)
+        {
+            ScrollTranscriptToEnd();
+        }
+        else
+        {
+            _transcript.SetNeedsDraw();
+        }
+    }
+
+    private void AppendSingleMessage(TranscriptMessage message, bool scrollToEnd)
+    {
+        if (!TranscriptContent.HasDisplayableContent(message))
         {
             return;
         }
 
+        int width = GetTranscriptWrapWidth();
+        AppendMessageToTranscript(message, width, addSpacer: _transcriptRows.Count > 0);
+        if (scrollToEnd)
+        {
+            ScrollTranscriptToEnd();
+        }
+        else
+        {
+            _transcript.SetNeedsDraw();
+        }
+    }
+
+    private void AppendMessageToTranscript(TranscriptMessage message, int width, bool addSpacer)
+    {
+        if (addSpacer)
+        {
+            _transcriptRows.Add(new TranscriptRow(message.Role, string.Empty, TranscriptRowKind.Spacer));
+        }
+
+        string roleLabel = message.Role switch
+        {
+            TranscriptRole.User => "you",
+            TranscriptRole.Assistant => "assistant",
+            TranscriptRole.System => "system",
+            _ => "system"
+        };
+        _transcriptRows.Add(new TranscriptRow(message.Role, roleLabel, TranscriptRowKind.RoleLabel));
+
+        if (_session.RenderMarkdown && message.Role == TranscriptRole.Assistant)
+        {
+            AppendMarkdownContent(message.Role, message.Text, width);
+        }
+        else
+        {
+            AppendPlainContent(message.Role, message.Text, width);
+        }
+    }
+
+    private void AppendPlainContent(TranscriptRole role, string text, int width)
+    {
+        int contentWidth = Math.Max(1, width - TranscriptContent.Indent.Length);
+        string normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+
+        bool any = false;
+        foreach (string chunk in TranscriptContent.WordWrap(normalized, contentWidth))
+        {
+            any = true;
+            _transcriptRows.Add(new TranscriptRow(role, TranscriptContent.Indent + chunk));
+        }
+
+        if (!any)
+        {
+            _transcriptRows.Add(new TranscriptRow(role, TranscriptContent.Indent));
+        }
+    }
+
+    private void AppendMarkdownContent(TranscriptRole role, string markdown, int width)
+    {
+        int contentWidth = Math.Max(1, width - TranscriptContent.Indent.Length);
+
+        foreach (MarkdownDisplayLine displayLine in MarkdownTuiFormatter.ParseLines(markdown))
+        {
+            foreach ((string chunk, MarkdownBlockStyle blockStyle, IReadOnlyList<MarkdownRun> runs) in MarkdownTuiFormatter.WordWrap(
+                         displayLine,
+                         contentWidth))
+            {
+                string rowText = TranscriptContent.Indent + chunk;
+                IReadOnlyList<MarkdownRun>? shiftedRuns = runs.Count == 0
+                    ? null
+                    : ShiftRuns(runs, TranscriptContent.Indent.Length);
+                _transcriptRows.Add(new TranscriptRow(role, rowText, TranscriptRowKind.Content, blockStyle, shiftedRuns));
+            }
+        }
+    }
+
+    private static IReadOnlyList<MarkdownRun> ShiftRuns(IReadOnlyList<MarkdownRun> runs, int offset)
+    {
+        if (offset == 0)
+        {
+            return runs;
+        }
+
+        MarkdownRun[] shifted = new MarkdownRun[runs.Count];
+        for (int i = 0; i < runs.Count; i++)
+        {
+            MarkdownRun run = runs[i];
+            shifted[i] = run with { Start = run.Start + offset };
+        }
+
+        return shifted;
+    }
+
+    private void BeginAssistantStreaming()
+    {
+        if (_transcriptRows.Count > 0)
+        {
+            _transcriptRows.Add(new TranscriptRow(TranscriptRole.Assistant, string.Empty, TranscriptRowKind.Spacer));
+        }
+
+        _transcriptRows.Add(new TranscriptRow(TranscriptRole.Assistant, "assistant", TranscriptRowKind.RoleLabel));
+        _activeAssistantContentRowStart = _transcriptRows.Count;
+    }
+
+    private void UpdateAssistantStreaming(string text)
+    {
+        if (_activeAssistantContentRowStart < 0)
+        {
+            BeginAssistantStreaming();
+        }
+
+        while (_transcriptRows.Count > _activeAssistantContentRowStart)
+        {
+            _transcriptRows.RemoveAt(_transcriptRows.Count - 1);
+        }
+
+        int width = GetTranscriptWrapWidth();
+        if (_session.RenderMarkdown)
+        {
+            AppendMarkdownContent(TranscriptRole.Assistant, text, width);
+        }
+        else
+        {
+            AppendPlainContent(TranscriptRole.Assistant, text, width);
+        }
+
+        if (_followTail)
+        {
+            ScrollTranscriptToEnd();
+        }
+        else
+        {
+            _transcript.SetNeedsDraw();
+        }
+    }
+
+    private void EndAssistantStreaming()
+    {
+        FlushAssistantStreamRedraw();
+        _activeAssistantContentRowStart = -1;
+    }
+
+    private void UpdateFollowTailFromViewport()
+    {
+        if (_transcriptRows.Count == 0)
+        {
+            _followTail = true;
+            return;
+        }
+
+        int firstVisible = _transcript.Viewport.Y;
+        int visibleRows = Math.Max(1, _transcript.Viewport.Height);
+        int lastVisible = firstVisible + visibleRows - 1;
+        _followTail = lastVisible >= _transcriptRows.Count - 2;
+    }
+
+    private void ScrollTranscriptToEnd()
+    {
+        if (_transcriptRows.Count == 0)
+        {
+            return;
+        }
+
+        _followTail = true;
+        _transcript.MoveEnd(false);
+        _transcript.SelectedItem = null;
         _transcript.SetNeedsDraw();
     }
 
@@ -390,7 +581,7 @@ internal sealed class ChatTuiApp
 
             if (IsMarkdownToggle(input))
             {
-                InvokeUi(() => RebuildTranscript(scrollToEnd: true));
+                InvokeUi(() => RebuildWrappedTranscript(scrollToEnd: true));
             }
 
             UpdateStatus();
@@ -413,6 +604,7 @@ internal sealed class ChatTuiApp
         AppendUser(prompt);
         WinHarness.Conversation.Conversation runConversation = _session.CreateRunConversation(prompt);
         _activeAssistantRowIndex = -1;
+        _activeAssistantContentRowStart = -1;
         bool turnPersisted = false;
 
         using CancellationTokenSource turnTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token);
@@ -477,15 +669,10 @@ internal sealed class ChatTuiApp
                 await TrySalvageTurnAsync(prompt, _shutdownCts.Token).ConfigureAwait(false);
             }
 
+            InvokeUi(EndAssistantStreaming);
             _activeAssistantRowIndex = -1;
             _turnRunning = false;
             SetInputEnabled(true);
-            InvokeUi(() =>
-            {
-                _transcript.ClearActiveAssistant();
-                _transcript.FinalizeActiveAssistantLayout();
-                RebuildTranscript(scrollToEnd: true);
-            });
         }
     }
 
@@ -516,7 +703,7 @@ internal sealed class ChatTuiApp
             {
                 _messages.Clear();
                 PopulateTranscriptMessagesFromSession();
-                RebuildTranscript(scrollToEnd: true);
+                RebuildWrappedTranscript(scrollToEnd: true);
                 AppendSystem("Saved interrupted turn to session.");
                 completion.SetResult();
             }
@@ -594,7 +781,7 @@ internal sealed class ChatTuiApp
         InvokeUi(() =>
         {
             _messages.Add(new TranscriptMessage(TranscriptRole.System, message));
-            RebuildTranscript(scrollToEnd: true);
+            AppendSingleMessage(_messages[^1], scrollToEnd: _followTail);
         });
     }
 
@@ -603,7 +790,7 @@ internal sealed class ChatTuiApp
         InvokeUi(() =>
         {
             _messages.Add(new TranscriptMessage(TranscriptRole.User, message));
-            RebuildTranscript(scrollToEnd: true);
+            AppendSingleMessage(_messages[^1], scrollToEnd: true);
         });
     }
 
@@ -611,8 +798,7 @@ internal sealed class ChatTuiApp
     {
         InvokeUi(() =>
         {
-            bool isFirstDelta = _activeAssistantRowIndex < 0;
-            if (isFirstDelta)
+            if (_activeAssistantRowIndex < 0)
             {
                 _messages.Add(new TranscriptMessage(TranscriptRole.Assistant, string.Empty));
                 _activeAssistantRowIndex = _messages.Count - 1;
@@ -620,25 +806,47 @@ internal sealed class ChatTuiApp
 
             TranscriptMessage row = _messages[_activeAssistantRowIndex];
             string normalized = delta.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-            string text = row.Text + normalized;
-            _messages[_activeAssistantRowIndex] = row with { Text = text };
-
-            if (_session.RenderMarkdown)
-            {
-                if (isFirstDelta)
-                {
-                    RebuildTranscript(scrollToEnd: true);
-                }
-                else
-                {
-                    _transcript.UpdateActiveAssistant(text, renderMarkdown: true);
-                }
-            }
-            else
-            {
-                RebuildTranscript(scrollToEnd: true);
-            }
+            _messages[_activeAssistantRowIndex] = row with { Text = row.Text + normalized };
+            RequestAssistantStreamRedraw(force: false);
         });
+    }
+
+    private void RequestAssistantStreamRedraw(bool force)
+    {
+        if (_activeAssistantRowIndex < 0)
+        {
+            return;
+        }
+
+        long now = Environment.TickCount64;
+        if (!force && now - _lastStreamRedrawMs < StreamRedrawIntervalMs)
+        {
+            if (!_streamRedrawScheduled)
+            {
+                _streamRedrawScheduled = true;
+                _app.AddTimeout(TimeSpan.FromMilliseconds(StreamRedrawIntervalMs), () =>
+                {
+                    _streamRedrawScheduled = false;
+                    FlushAssistantStreamRedraw();
+                    return false;
+                });
+            }
+
+            return;
+        }
+
+        FlushAssistantStreamRedraw();
+    }
+
+    private void FlushAssistantStreamRedraw()
+    {
+        if (_activeAssistantRowIndex < 0 || _activeAssistantRowIndex >= _messages.Count)
+        {
+            return;
+        }
+
+        _lastStreamRedrawMs = Environment.TickCount64;
+        UpdateAssistantStreaming(_messages[_activeAssistantRowIndex].Text);
     }
 
     private void UpdateToolStatus(string message)

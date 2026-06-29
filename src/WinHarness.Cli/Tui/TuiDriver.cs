@@ -15,7 +15,10 @@ internal static class TuiDriver
         // The ANSI driver's default size detection sends CSI 18t queries. When the
         // ESC [ 8 ; height ; width t response is not consumed, it appears as garbage
         // like ^[[8;48;165t in Windows Terminal.
-        Driver.SizeDetection = SizeDetectionMode.Polling;
+        if (ResolveName() == DriverRegistry.Names.ANSI)
+        {
+            Driver.SizeDetection = SizeDetectionMode.Polling;
+        }
     }
 
     /// <summary>
