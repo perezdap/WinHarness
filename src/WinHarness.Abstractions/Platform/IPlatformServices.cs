@@ -41,7 +41,8 @@ public sealed record CommandRequest(
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
     CommandExecutionMode Mode,
-    TimeSpan Timeout);
+    TimeSpan Timeout,
+    string? StandardInput = null);
 
 /// <summary>
 /// Command execution mode.

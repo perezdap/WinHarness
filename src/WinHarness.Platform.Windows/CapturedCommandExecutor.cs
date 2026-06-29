@@ -47,7 +47,7 @@ public sealed class CapturedCommandExecutor : ICommandExecutor
         }
 
         using Process process = startedProcess;
-        CloseStandardInput(process);
+        await WriteStandardInputAsync(process, request.StandardInput).ConfigureAwait(false);
 
         Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = process.StandardError.ReadToEndAsync();
@@ -81,8 +81,25 @@ public sealed class CapturedCommandExecutor : ICommandExecutor
         return new CommandResult(process.ExitCode, stdout, stderr, CommandExecutionMode.Captured);
     }
 
-    private static void CloseStandardInput(Process process)
+    private static async ValueTask WriteStandardInputAsync(Process process, string? standardInput)
     {
+        if (standardInput is not null)
+        {
+            try
+            {
+                await process.StandardInput.WriteAsync(standardInput).ConfigureAwait(false);
+                await process.StandardInput.FlushAsync().ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                // The process already exited and its standard input stream is gone.
+            }
+            catch (System.IO.IOException)
+            {
+                // The process already exited and its standard input stream is gone.
+            }
+        }
+
         try
         {
             process.StandardInput.Close();

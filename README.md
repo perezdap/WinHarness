@@ -301,12 +301,18 @@ Built-in tools are exposed through the same `ITool` registry as MCP tools:
 - `glob`
 - `grep`
 
-`run_command` defaults to captured stdout/stderr for clean agent-readable output. Set `mode` to `interactive` only when a command needs a real terminal; that path uses the Windows ConPTY executor.
+`run_command` defaults to captured stdout/stderr for clean agent-readable output. Set `mode` to `interactive` only when a command needs a real terminal; that path uses the Windows ConPTY executor. Captured mode is non-interactive; to feed data to a command that reads stdin, use the `input` field (UTF-8, no BOM). The field writes the text and then closes stdin so the process exits cleanly.
 
 Example:
 
 ```powershell
 winharness tools call --name run_command --arguments-json '{"command":"dotnet","arguments":["--info"],"timeoutSeconds":30}'
+```
+
+Stdin input example:
+
+```powershell
+winharness tools call --name run_command --arguments-json '{"command":"cmd.exe","arguments":["/c","findstr .*"],"input":"hello\\n","timeoutSeconds":10}'
 ```
 
 ## Diagnostics

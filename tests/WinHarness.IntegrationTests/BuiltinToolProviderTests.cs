@@ -95,6 +95,24 @@ public sealed class BuiltinToolProviderTests
     }
 
     [TestMethod]
+    public async Task RunCommandDeliversInputToStdin()
+    {
+        string root = CreateTempDirectory();
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        string json = OperatingSystem.IsWindows()
+            ? """{"command":"cmd.exe","arguments":["/c","findstr .*"],"input":"hello\n","timeoutSeconds":10}"""
+            : """{"command":"/bin/sh","arguments":["-c","read value; echo got:$value"],"input":"hello\n","timeoutSeconds":10}""";
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "run_command")
+            .ExecuteAsync(new ToolInvocation("run_command", Json(json)), CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        StringAssert.Contains(result.Content, "hello");
+    }
+
+    [TestMethod]
     public async Task RunCommandReturnsGracefulFailureForMissingExecutable()
     {
         string root = CreateTempDirectory();
@@ -195,6 +213,25 @@ public sealed class BuiltinToolProviderTests
         Assert.IsNotNull(executor.LastRequest);
         Assert.AreEqual("dotnet", executor.LastRequest!.FileName);
         CollectionAssert.AreEqual(new[] { "build", "WinHarness.sln" }, executor.LastRequest.Arguments.ToArray());
+        Assert.IsNull(executor.LastRequest.StandardInput);
+    }
+
+    [TestMethod]
+    public async Task RunCommandPassesInputToCommandRequest()
+    {
+        string root = CreateTempDirectory();
+        FakeCommandExecutor executor = new();
+        BuiltinToolProvider provider = new(root, executor);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "run_command")
+            .ExecuteAsync(
+                new ToolInvocation("run_command", Json("""{"command":"cmd.exe","arguments":["/c","set /p value=Enter:"],"input":"hello\n","timeoutSeconds":10}""")),
+                CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        Assert.IsNotNull(executor.LastRequest);
+        Assert.AreEqual("hello\n", executor.LastRequest!.StandardInput);
     }
 
     [TestMethod]
