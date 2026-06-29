@@ -326,16 +326,38 @@ public sealed class BuiltinToolProvider : IToolProvider
                 : CommandExecutionMode.Captured;
 
             List<string> commandArguments = [];
+            bool hasExplicitArguments = false;
             if (invocation.Arguments.TryGetProperty("arguments", out JsonElement arguments) && arguments.ValueKind == JsonValueKind.Array)
             {
                 foreach (JsonElement argument in arguments.EnumerateArray())
                 {
                     commandArguments.Add(argument.GetString() ?? string.Empty);
+                    hasExplicitArguments = true;
+                }
+            }
+
+            string fileName = RequireString(invocation.Arguments, "command");
+
+            // Recover from the most common malformed call: the model places the whole
+            // command line (e.g. "dotnet build -c Release") into "command" and leaves
+            // "arguments" empty. No executable by that name exists, so it fails instantly.
+            // Only auto-split when no explicit arguments were supplied, so well-formed
+            // calls (and paths containing spaces) are left untouched.
+            if (!hasExplicitArguments && ContainsUnquotedSpace(fileName))
+            {
+                IReadOnlyList<string> tokens = TokenizeCommandLine(fileName);
+                if (tokens.Count > 1)
+                {
+                    fileName = tokens[0];
+                    for (int i = 1; i < tokens.Count; i++)
+                    {
+                        commandArguments.Add(tokens[i]);
+                    }
                 }
             }
 
             CommandRequest request = new(
-                FileName: RequireString(invocation.Arguments, "command"),
+                FileName: fileName,
                 Arguments: commandArguments,
                 WorkingDirectory: invocation.Arguments.TryGetProperty("workingDirectory", out JsonElement workingDirectory) && workingDirectory.ValueKind == JsonValueKind.String
                     ? NormalizeForIo(ResolveWorkspacePath(invocation.Arguments, "workingDirectory"))
@@ -355,6 +377,60 @@ public sealed class BuiltinToolProvider : IToolProvider
                     ["command.mode"] = result.Mode.ToString(),
                     ["command.exit_code"] = result.ExitCode.ToString(CultureInfo.InvariantCulture)
                 });
+        }
+
+        private static bool ContainsUnquotedSpace(string value)
+        {
+            bool inQuotes = false;
+            foreach (char character in value)
+            {
+                if (character == '"')
+                {
+                    inQuotes = !inQuotes;
+                }
+                else if (char.IsWhiteSpace(character) && !inQuotes)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static IReadOnlyList<string> TokenizeCommandLine(string commandLine)
+        {
+            List<string> tokens = [];
+            StringBuilder current = new();
+            bool inQuotes = false;
+
+            foreach (char character in commandLine)
+            {
+                if (character == '"')
+                {
+                    inQuotes = !inQuotes;
+                    continue;
+                }
+
+                if (char.IsWhiteSpace(character) && !inQuotes)
+                {
+                    if (current.Length > 0)
+                    {
+                        tokens.Add(current.ToString());
+                        current.Clear();
+                    }
+
+                    continue;
+                }
+
+                current.Append(character);
+            }
+
+            if (current.Length > 0)
+            {
+                tokens.Add(current.ToString());
+            }
+
+            return tokens;
         }
 
         private static string Truncate(string content, int maxOutputBytes)

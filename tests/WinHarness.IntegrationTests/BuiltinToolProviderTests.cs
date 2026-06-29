@@ -161,6 +161,44 @@ public sealed class BuiltinToolProviderTests
         Assert.IsTrue(longPathService.Paths.Any(candidate => candidate.EndsWith("notes.txt", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [TestMethod]
+    public async Task RunCommandSplitsFullCommandLineWhenArgumentsAreOmitted()
+    {
+        string root = CreateTempDirectory();
+        FakeCommandExecutor executor = new();
+        BuiltinToolProvider provider = new(root, executor);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "run_command")
+            .ExecuteAsync(
+                new ToolInvocation("run_command", Json("""{"command":"dotnet build \"WinHarness.sln\"","timeoutSeconds":10}""")),
+                CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        Assert.IsNotNull(executor.LastRequest);
+        Assert.AreEqual("dotnet", executor.LastRequest!.FileName);
+        CollectionAssert.AreEqual(new[] { "build", "WinHarness.sln" }, executor.LastRequest.Arguments.ToArray());
+    }
+
+    [TestMethod]
+    public async Task RunCommandKeepsSpacedCommandPathWhenArgumentsAreExplicit()
+    {
+        string root = CreateTempDirectory();
+        FakeCommandExecutor executor = new();
+        BuiltinToolProvider provider = new(root, executor);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "run_command")
+            .ExecuteAsync(
+                new ToolInvocation("run_command", Json("""{"command":"C:\\Program Files\\tool.exe","arguments":["--version"],"timeoutSeconds":10}""")),
+                CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        Assert.IsNotNull(executor.LastRequest);
+        Assert.AreEqual(@"C:\Program Files\tool.exe", executor.LastRequest!.FileName);
+        CollectionAssert.AreEqual(new[] { "--version" }, executor.LastRequest.Arguments.ToArray());
+    }
+
     private sealed class RecordingLongPathService : ILongPathService
     {
         public List<string> Paths { get; } = [];
@@ -174,8 +212,11 @@ public sealed class BuiltinToolProviderTests
 
     private sealed class FakeCommandExecutor : ICommandExecutor
     {
+        public CommandRequest? LastRequest { get; private set; }
+
         public ValueTask<CommandResult> ExecuteAsync(CommandRequest request, CancellationToken cancellationToken)
         {
+            LastRequest = request;
             return ValueTask.FromResult(new CommandResult(0, string.Empty, string.Empty, request.Mode));
         }
     }

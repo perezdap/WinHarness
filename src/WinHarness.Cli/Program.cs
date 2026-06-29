@@ -965,99 +965,251 @@ internal static class ChatRepl
         CancellationToken cancellationToken)
     {
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
-        StringBuilder? markdownBuffer = session.RenderMarkdown ? new StringBuilder() : null;
         Conversation runConversation = session.CreateRunConversation(prompt);
 
-        // Tracks a transient, single-line tool status that overwrites itself in
-        // place (via carriage return) so tool activity never adds scrollback lines.
-        // Only real assistant output is allowed to advance to new lines.
-        TransientStatusLine status = new();
-        bool wroteAssistantLabel = false;
+        bool interactive = !Console.IsOutputRedirected;
 
-        await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                           new AgentRunRequest(
-                               session.ProviderId,
-                               session.ModelId,
-                               runConversation,
-                               session.WorkspaceRoot,
-                               session.ProjectContext),
-                           cancellationToken).ConfigureAwait(false))
+        // Buffers the full assistant text so it can be re-rendered as markdown once
+        // the turn completes. Live raw tokens are streamed as they arrive so the
+        // user sees progress; if markdown is enabled the streamed text is erased and
+        // reprinted formatted at the end (interactive, no-tool turns only).
+        StringBuilder assistantBuffer = new();
+        AssistantStreamWriter writer = new();
+        await using ThinkingIndicator thinking = new();
+
+        bool toolActivityOccurred = false;
+        bool streaming = false;
+        bool plainLabelWritten = false;
+
+        if (interactive)
         {
-            if (agentEvent.Kind == AgentEventKind.ToolActivity)
-            {
-                status.Show(agentEvent.Message);
-                continue;
-            }
-
-            if (agentEvent.Kind == AgentEventKind.Failed)
-            {
-                status.Clear();
-                AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
-                continue;
-            }
-
-            if (agentEvent.Kind == AgentEventKind.Completed)
-            {
-                if (agentEvent.TurnArtifacts is not null)
-                {
-                    await session.AppendTurnAsync(agentEvent.TurnArtifacts, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
-                continue;
-            }
-
-            if (agentEvent.Kind != AgentEventKind.AssistantDelta)
-            {
-                continue;
-            }
-
-            status.Clear();
-
-            if (markdownBuffer is null)
-            {
-                if (!wroteAssistantLabel)
-                {
-                    AnsiConsole.Markup("[bold blue]•[/] ");
-                    wroteAssistantLabel = true;
-                }
-
-                Console.Write(agentEvent.Message);
-            }
-            else
-            {
-                markdownBuffer.Append(agentEvent.Message);
-            }
+            thinking.Start();
         }
 
-        status.Clear();
-
-        if (markdownBuffer is not null)
+        try
         {
-            MarkdownConsoleRenderer.Write(markdownBuffer.ToString());
+            await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                               new AgentRunRequest(
+                                   session.ProviderId,
+                                   session.ModelId,
+                                   runConversation,
+                                   session.WorkspaceRoot,
+                                   session.ProjectContext),
+                               cancellationToken).ConfigureAwait(false))
+            {
+                switch (agentEvent.Kind)
+                {
+                    case AgentEventKind.ToolActivity:
+                        toolActivityOccurred = true;
+                        if (interactive)
+                        {
+                            if (streaming)
+                            {
+                                // A tool runs after some assistant text: end the
+                                // current streamed line and resume the spinner.
+                                streaming = false;
+                                Console.WriteLine();
+                                thinking.Start();
+                            }
+
+                            thinking.SetLabel(agentEvent.Message);
+                        }
+
+                        break;
+
+                    case AgentEventKind.Failed:
+                        if (interactive)
+                        {
+                            await thinking.StopAsync().ConfigureAwait(false);
+                            streaming = false;
+                        }
+
+                        AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
+                        break;
+
+                    case AgentEventKind.Completed:
+                        if (agentEvent.TurnArtifacts is not null)
+                        {
+                            await session.AppendTurnAsync(agentEvent.TurnArtifacts, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+
+                        break;
+
+                    case AgentEventKind.AssistantDelta:
+                        assistantBuffer.Append(agentEvent.Message);
+
+                        if (interactive)
+                        {
+                            if (!streaming)
+                            {
+                                await thinking.StopAsync().ConfigureAwait(false);
+                                streaming = true;
+                            }
+
+                            writer.Write(agentEvent.Message);
+                        }
+                        else if (!session.RenderMarkdown)
+                        {
+                            if (!plainLabelWritten)
+                            {
+                                AnsiConsole.Markup("[bold blue]•[/] ");
+                                plainLabelWritten = true;
+                            }
+
+                            Console.Write(agentEvent.Message);
+                        }
+
+                        break;
+
+                    default:
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            await thinking.StopAsync().ConfigureAwait(false);
         }
 
-        Console.WriteLine();
+        if (interactive)
+        {
+            if (writer.HasOutput)
+            {
+                if (session.RenderMarkdown && !toolActivityOccurred && writer.TryEraseForReRender())
+                {
+                    MarkdownConsoleRenderer.Write(assistantBuffer.ToString());
+                }
+                else
+                {
+                    Console.WriteLine();
+                }
+            }
+
+            return;
+        }
+
+        if (session.RenderMarkdown)
+        {
+            if (assistantBuffer.Length > 0)
+            {
+                MarkdownConsoleRenderer.Write(assistantBuffer.ToString());
+            }
+
+            Console.WriteLine();
+        }
+        else if (plainLabelWritten)
+        {
+            Console.WriteLine();
+        }
     }
 
     /// <summary>
-    /// Renders a single, self-overwriting status line for transient tool activity.
-    /// The line is updated in place using a carriage return and is wiped before any
-    /// real output is written, so tool messages never accumulate as scrollback.
+    /// Animated, self-overwriting "thinking" line shown while the agent is waiting
+    /// for the model or running a tool. It renders a spinner, a label (default
+    /// "thinking", or the latest tool activity), and elapsed seconds on a single
+    /// line that is wiped before any real output is written. No-op when output is
+    /// redirected so piped/captured output stays clean.
     /// </summary>
-    private sealed class TransientStatusLine
+    private sealed class ThinkingIndicator : IAsyncDisposable
     {
-        private int _renderedWidth;
-        private bool _active;
+        private static readonly char[] Frames =
+            ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-        public void Show(string message)
+        private readonly bool _enabled = !Console.IsOutputRedirected;
+        private readonly object _gate = new();
+        private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+
+        private CancellationTokenSource? _cts;
+        private Task? _loop;
+        private int _frame;
+        private int _renderedWidth;
+        private string _label = "thinking";
+
+        public void Start()
         {
-            if (Console.IsOutputRedirected)
+            if (!_enabled || _loop is not null)
             {
                 return;
             }
 
-            string text = Truncate(message);
+            _cts = new CancellationTokenSource();
+            CancellationToken token = _cts.Token;
+            _loop = Task.Run(
+                async () =>
+                {
+                    try
+                    {
+                        while (!token.IsCancellationRequested)
+                        {
+                            lock (_gate)
+                            {
+                                Render();
+                            }
+
+                            await Task.Delay(120, token).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                },
+                token);
+        }
+
+        public void SetLabel(string label)
+        {
+            lock (_gate)
+            {
+                _label = Sanitize(label);
+            }
+        }
+
+        public async ValueTask StopAsync()
+        {
+            CancellationTokenSource? cts = _cts;
+            Task? loop = _loop;
+            _cts = null;
+            _loop = null;
+
+            if (cts is null)
+            {
+                return;
+            }
+
+            await cts.CancelAsync().ConfigureAwait(false);
+            if (loop is not null)
+            {
+                try
+                {
+                    await loop.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
+            lock (_gate)
+            {
+                Erase();
+            }
+
+            cts.Dispose();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await StopAsync().ConfigureAwait(false);
+        }
+
+        private void Render()
+        {
+            char frame = Frames[_frame % Frames.Length];
+            _frame++;
+
+            string elapsed = _stopwatch.Elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture);
+            string text = Truncate($"{frame} {_label} {elapsed}s");
+
             Console.Write('\r');
             AnsiConsole.Markup("[dim]" + Markup.Escape(text) + "[/]");
 
@@ -1067,14 +1219,12 @@ internal static class ChatRepl
             }
 
             _renderedWidth = text.Length;
-            _active = true;
         }
 
-        public void Clear()
+        private void Erase()
         {
-            if (!_active || Console.IsOutputRedirected)
+            if (_renderedWidth == 0)
             {
-                _active = false;
                 return;
             }
 
@@ -1082,7 +1232,12 @@ internal static class ChatRepl
             Console.Write(new string(' ', _renderedWidth));
             Console.Write('\r');
             _renderedWidth = 0;
-            _active = false;
+        }
+
+        private static string Sanitize(string message)
+        {
+            string single = message.Replace('\r', ' ').Replace('\n', ' ');
+            return single.Length == 0 ? "thinking" : single;
         }
 
         private static string Truncate(string message)
@@ -1103,6 +1258,102 @@ internal static class ChatRepl
             }
 
             return max <= 1 ? message[..max] : string.Concat(message.AsSpan(0, max - 1), "…");
+        }
+    }
+
+    /// <summary>
+    /// Streams raw assistant tokens to the console as they arrive while tracking the
+    /// on-screen rows used, so the streamed block can be erased and re-rendered as
+    /// markdown when the turn completes. Erase is only attempted when the output is
+    /// interactive, the terminal size is known, and the block did not scroll.
+    /// </summary>
+    private sealed class AssistantStreamWriter
+    {
+        private readonly bool _interactive = !Console.IsOutputRedirected;
+        private readonly int _width;
+        private readonly int _height;
+        private readonly bool _canMeasure;
+
+        private bool _labelWritten;
+        private int _column;
+        private int _rows;
+
+        public AssistantStreamWriter()
+        {
+            try
+            {
+                _width = Console.WindowWidth;
+                _height = Console.WindowHeight;
+                _canMeasure = _width > 0 && _height > 0;
+            }
+            catch (IOException)
+            {
+                _canMeasure = false;
+            }
+        }
+
+        public bool HasOutput => _labelWritten;
+
+        public void Write(string text)
+        {
+            if (!_labelWritten)
+            {
+                AnsiConsole.Markup("[bold blue]•[/] ");
+                _labelWritten = true;
+                _column = 2;
+            }
+
+            Console.Write(text);
+            Track(text);
+        }
+
+        public bool TryEraseForReRender()
+        {
+            if (!_interactive || !_canMeasure || !_labelWritten)
+            {
+                return false;
+            }
+
+            // If the streamed block is taller than the window it has scrolled and the
+            // saved relative position is no longer reliable; leave the raw text.
+            if (_rows + 1 > _height)
+            {
+                return false;
+            }
+
+            if (_rows > 0)
+            {
+                Console.Write($"\x1b[{_rows.ToString(CultureInfo.InvariantCulture)}A");
+            }
+
+            Console.Write('\r');
+            Console.Write("\x1b[0J");
+            return true;
+        }
+
+        private void Track(string text)
+        {
+            foreach (char character in text)
+            {
+                if (character == '\n')
+                {
+                    _rows++;
+                    _column = 0;
+                }
+                else if (character == '\r')
+                {
+                    _column = 0;
+                }
+                else
+                {
+                    _column++;
+                    if (_canMeasure && _column >= _width)
+                    {
+                        _rows++;
+                        _column = 0;
+                    }
+                }
+            }
         }
     }
 }
