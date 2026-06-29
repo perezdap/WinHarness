@@ -12,7 +12,6 @@ using WinHarness;
 using WinHarness.Cli.Chat;
 using WinHarness.Cli.Configuration;
 using WinHarness.Cli.Rendering;
-using WinHarness.Cli.Tui;
 using WinHarness.Configuration;
 using WinHarness.Context;
 using WinHarness.Conversation;
@@ -189,7 +188,6 @@ app.Add("chat", async (
     string? providerId = null,
     string? modelId = null,
     bool? renderMarkdown = null,
-    bool tui = false,
     bool noSession = false,
     bool continueSession = false,
     bool resume = false,
@@ -217,19 +215,6 @@ app.Add("chat", async (
 
     if (string.IsNullOrWhiteSpace(prompt))
     {
-        if (tui)
-        {
-            await ChatTuiApp.RunAsync(
-                    host.Services,
-                    resolvedProviderId,
-                    resolvedModelId,
-                    effectiveRenderMarkdown,
-                    bootstrapRequest,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
         await ChatRepl.RunAsync(
                 host.Services,
                 resolvedProviderId,
