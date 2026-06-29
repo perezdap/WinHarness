@@ -22,7 +22,8 @@ public sealed class CapturedCommandExecutor : ICommandExecutor
             WorkingDirectory = request.WorkingDirectory,
             UseShellExecute = false,
             RedirectStandardOutput = true,
-            RedirectStandardError = true
+            RedirectStandardError = true,
+            RedirectStandardInput = true
         };
 
         foreach (string argument in request.Arguments)
@@ -46,6 +47,7 @@ public sealed class CapturedCommandExecutor : ICommandExecutor
         }
 
         using Process process = startedProcess;
+        CloseStandardInput(process);
 
         Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
         Task<string> stderrTask = process.StandardError.ReadToEndAsync();
@@ -77,5 +79,17 @@ public sealed class CapturedCommandExecutor : ICommandExecutor
         string stderr = await stderrTask.ConfigureAwait(false);
 
         return new CommandResult(process.ExitCode, stdout, stderr, CommandExecutionMode.Captured);
+    }
+
+    private static void CloseStandardInput(Process process)
+    {
+        try
+        {
+            process.StandardInput.Close();
+        }
+        catch (InvalidOperationException)
+        {
+            // The process already exited and its standard input stream is gone.
+        }
     }
 }

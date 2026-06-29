@@ -336,34 +336,46 @@ public sealed class BuiltinToolProvider : IToolProvider
                 }
             }
 
-            string fileName = RequireString(invocation.Arguments, "command");
-
-            // Recover from the most common malformed call: the model places the whole
-            // command line (e.g. "dotnet build -c Release") into "command" and leaves
-            // "arguments" empty. No executable by that name exists, so it fails instantly.
-            // Only auto-split when no explicit arguments were supplied, so well-formed
-            // calls (and paths containing spaces) are left untouched.
-            if (!hasExplicitArguments && ContainsUnquotedSpace(fileName))
+            CommandRequest request;
+            try
             {
-                IReadOnlyList<string> tokens = TokenizeCommandLine(fileName);
-                if (tokens.Count > 1)
+                string fileName = RequireString(invocation.Arguments, "command");
+
+                // Recover from the most common malformed call: the model places the whole
+                // command line (e.g. "dotnet build -c Release") into "command" and leaves
+                // "arguments" empty. No executable by that name exists, so it fails instantly.
+                // Only auto-split when no explicit arguments were supplied, so well-formed
+                // calls (and paths containing spaces) are left untouched.
+                if (!hasExplicitArguments && ContainsUnquotedSpace(fileName))
                 {
-                    fileName = tokens[0];
-                    for (int i = 1; i < tokens.Count; i++)
+                    IReadOnlyList<string> tokens = TokenizeCommandLine(fileName);
+                    if (tokens.Count > 1)
                     {
-                        commandArguments.Add(tokens[i]);
+                        fileName = tokens[0];
+                        for (int i = 1; i < tokens.Count; i++)
+                        {
+                            commandArguments.Add(tokens[i]);
+                        }
                     }
                 }
-            }
 
-            CommandRequest request = new(
-                FileName: fileName,
-                Arguments: commandArguments,
-                WorkingDirectory: invocation.Arguments.TryGetProperty("workingDirectory", out JsonElement workingDirectory) && workingDirectory.ValueKind == JsonValueKind.String
-                    ? NormalizeForIo(ResolveWorkspacePath(invocation.Arguments, "workingDirectory"))
-                    : WorkspaceRoot,
-                Mode: executionMode,
-                Timeout: TimeSpan.FromSeconds(OptionalInt32(invocation.Arguments, "timeoutSeconds", 60)));
+                request = new CommandRequest(
+                    FileName: fileName,
+                    Arguments: commandArguments,
+                    WorkingDirectory: invocation.Arguments.TryGetProperty("workingDirectory", out JsonElement workingDirectory) && workingDirectory.ValueKind == JsonValueKind.String
+                        ? NormalizeForIo(ResolveWorkspacePath(invocation.Arguments, "workingDirectory"))
+                        : WorkspaceRoot,
+                    Mode: executionMode,
+                    Timeout: TimeSpan.FromSeconds(OptionalInt32(invocation.Arguments, "timeoutSeconds", 60)));
+            }
+            catch (InvalidOperationException ex)
+            {
+                return new ToolResult(false, ex.Message, "invalid_arguments");
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                return new ToolResult(false, ex.Message, "invalid_arguments");
+            }
 
             CommandResult result = await _commandExecutor.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
             string content = string.Concat("mode: ", result.Mode, Environment.NewLine, "exit_code: ", result.ExitCode, Environment.NewLine, "stdout:", Environment.NewLine, result.StandardOutput, Environment.NewLine, "stderr:", Environment.NewLine, result.StandardError);

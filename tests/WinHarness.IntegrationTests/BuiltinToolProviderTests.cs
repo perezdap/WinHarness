@@ -115,6 +115,23 @@ public sealed class BuiltinToolProviderTests
     }
 
     [TestMethod]
+    public async Task RunCommandReturnsGracefulFailureForEscapingWorkingDirectory()
+    {
+        string root = CreateTempDirectory();
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+        string escapedWorkingDirectory = JsonEncodedText.Encode(Path.GetTempPath()).ToString();
+        string json = $$"""{"command":"dotnet","workingDirectory":"{{escapedWorkingDirectory}}","timeoutSeconds":10}""";
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "run_command")
+            .ExecuteAsync(new ToolInvocation("run_command", Json(json)), CancellationToken.None);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual("invalid_arguments", result.ErrorCode);
+        StringAssert.Contains(result.Content, "escapes the workspace");
+    }
+
+    [TestMethod]
     public async Task RejectsSiblingPathEscape()
     {
         string parent = Path.Combine(Path.GetTempPath(), "WinHarnessTests", Guid.NewGuid().ToString("N"));

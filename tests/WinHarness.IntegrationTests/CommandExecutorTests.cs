@@ -49,6 +49,26 @@ public sealed class CommandExecutorTests
     }
 
     [TestMethod]
+    public async Task CapturedExecutorDoesNotHangOnCommandsThatReadStdin()
+    {
+        CapturedCommandExecutor executor = new();
+
+        // A command that reads from stdin previously inherited the harness console
+        // and blocked forever (surfacing as a tool timeout). Captured mode now closes
+        // stdin so the child receives EOF and completes promptly.
+        CommandRequest request = OperatingSystem.IsWindows()
+            ? new CommandRequest("cmd.exe", ["/c", "set /p value=Enter: "], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromSeconds(10))
+            : new CommandRequest("/bin/sh", ["-c", "read value"], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromSeconds(10));
+
+        CommandResult result = await executor.ExecuteAsync(request, CancellationToken.None);
+
+        // The important guarantee is that it returns (does not time out) well within the
+        // 10s budget; the exact exit code from an EOF read is shell-specific.
+        Assert.AreEqual(CommandExecutionMode.Captured, result.Mode);
+        StringAssert.DoesNotMatch(result.StandardError, new System.Text.RegularExpressions.Regex("Process timed out\\."));
+    }
+
+    [TestMethod]
     public async Task InteractiveExecutorUsesConPtyOnWindows()
     {
         if (!OperatingSystem.IsWindows())
