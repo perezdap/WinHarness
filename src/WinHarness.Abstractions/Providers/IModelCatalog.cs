@@ -21,11 +21,19 @@ public interface IModelCatalog
 }
 
 /// <summary>
-/// A model advertised by an OpenAI-compatible endpoint.
+/// A model advertised by an OpenAI-compatible endpoint. Nullable booleans
+/// mean "endpoint did not say"; a present <c>false</c> is authoritative-false.
+/// The inference layer (<c>IModelCapabilityResolver</c>) falls back to name
+/// heuristics and OpenRouter's public catalog only when an endpoint is silent
+/// (<c>null</c>) on a given capability.
 /// </summary>
 public sealed record CatalogModel(
     string Id,
     string? OwnedBy,
     int? ContextWindow = null,
     bool? Vision = null,
-    System.Collections.Generic.List<string>? SupportedReasoningEfforts = null);
+    System.Collections.Generic.List<string>? SupportedReasoningEfforts = null,
+    bool? Reasoning = null,
+    bool? ToolCalling = null,
+    bool? StructuredOutput = null,
+    bool? PromptCaching = null);

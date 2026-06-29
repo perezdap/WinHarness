@@ -1,0 +1,173 @@
+{
+  "object": "list",
+  "type": "text",
+  "data": [
+    {
+      "id": "z-ai-glm-5v-turbo",
+      "object": "model",
+      "type": "text",
+      "created": 1780007122,
+      "owned_by": "venice",
+      "context_length": 128000,
+      "model_spec": {
+        "name": "GLM 5V Turbo",
+        "description": "Vision + reasoning chat model.",
+        "modelSource": "z-ai",
+        "offline": false,
+        "availableContextTokens": 128000,
+        "maxCompletionTokens": 16384,
+        "capabilities": {
+          "optimizedForCode": true,
+          "quantization": "q4_k_m",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": false,
+          "supportsMultipleImages": true,
+          "maxImages": 10,
+          "supportsReasoning": true,
+          "supportsReasoningEffort": true,
+          "reasoningEffortOptions": ["none", "low", "medium", "high"],
+          "defaultReasoningEffort": "medium",
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsE2EE": false,
+          "supportsVideoInput": true,
+          "supportsVision": true,
+          "supportsWebSearch": false,
+          "supportsXSearch": false
+        },
+        "pricing": {
+          "input": { "usd": 0.30, "diem": 0.30 },
+          "output": { "usd": 1.20, "diem": 1.20 },
+          "cache_input": { "usd": 0.03, "diem": 0.03 }
+        },
+        "privacy": {
+          "retainDeidentifiedMinutes": 0
+        }
+      }
+    },
+    {
+      "id": "zai-org-glm-5-1",
+      "object": "model",
+      "type": "text",
+      "created": 1780007111,
+      "owned_by": "venice",
+      "context_length": 200000,
+      "model_spec": {
+        "name": "GLM 5.1",
+        "description": "Reasoning chat model without vision.",
+        "modelSource": "zai-org",
+        "offline": false,
+        "availableContextTokens": 200000,
+        "maxCompletionTokens": 16384,
+        "capabilities": {
+          "optimizedForCode": true,
+          "quantization": "q4_k_m",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": false,
+          "supportsMultipleImages": false,
+          "supportsReasoning": true,
+          "supportsReasoningEffort": true,
+          "reasoningEffortOptions": ["none", "low", "medium", "high"],
+          "defaultReasoningEffort": "medium",
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsE2EE": false,
+          "supportsVideoInput": false,
+          "supportsVision": false,
+          "supportsWebSearch": false,
+          "supportsXSearch": false
+        },
+        "pricing": {
+          "input": { "usd": 0.325, "diem": 0.325 },
+          "output": { "usd": 1.30, "diem": 1.30 },
+          "cache_input": { "usd": 0.0325, "diem": 0.0325 }
+        },
+        "privacy": {
+          "retainDeidentifiedMinutes": 0
+        }
+      }
+    },
+    {
+      "id": "olafangensan-glm-4.7-flash-heretic",
+      "object": "model",
+      "type": "text",
+      "created": 1780007100,
+      "owned_by": "venice",
+      "context_length": 128000,
+      "model_spec": {
+        "name": "GLM 4.7 Flash Heretic",
+        "description": "Reasoning + tools chat model; no prompt caching advertised.",
+        "modelSource": "olafangensan",
+        "offline": false,
+        "availableContextTokens": 128000,
+        "maxCompletionTokens": 8192,
+        "capabilities": {
+          "optimizedForCode": false,
+          "quantization": "q4_k_m",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": true,
+          "supportsLogProbs": false,
+          "supportsMultipleImages": false,
+          "supportsReasoning": true,
+          "supportsReasoningEffort": false,
+          "supportsResponseSchema": true,
+          "supportsTeeAttestation": false,
+          "supportsE2EE": false,
+          "supportsVideoInput": false,
+          "supportsVision": false,
+          "supportsWebSearch": false,
+          "supportsXSearch": false
+        },
+        "pricing": {
+          "input": { "usd": 0.05, "diem": 0.05 },
+          "output": { "usd": 0.20, "diem": 0.20 }
+        },
+        "privacy": {
+          "retainDeidentifiedMinutes": 0
+        }
+      }
+    },
+    {
+      "id": "hermes-3-llama-3.1-405b",
+      "object": "model",
+      "type": "text",
+      "created": 1780007000,
+      "owned_by": "venice",
+      "context_length": 131072,
+      "model_spec": {
+        "name": "Hermes 3 405B",
+        "description": "Plain chat model; no vision, reasoning, tools, or structured output.",
+        "modelSource": "nousresearch",
+        "offline": false,
+        "availableContextTokens": 131072,
+        "maxCompletionTokens": 4096,
+        "capabilities": {
+          "optimizedForCode": false,
+          "quantization": "q4_k_m",
+          "supportsAudioInput": false,
+          "supportsFunctionCalling": false,
+          "supportsLogProbs": false,
+          "supportsMultipleImages": false,
+          "supportsReasoning": false,
+          "supportsReasoningEffort": false,
+          "supportsResponseSchema": false,
+          "supportsTeeAttestation": false,
+          "supportsE2EE": false,
+          "supportsVideoInput": false,
+          "supportsVision": false,
+          "supportsWebSearch": false,
+          "supportsXSearch": false
+        },
+        "pricing": {
+          "input": { "usd": 0.40, "diem": 0.40 },
+          "output": { "usd": 1.50, "diem": 1.50 }
+        },
+        "privacy": {
+          "retainDeidentifiedMinutes": 0
+        }
+      }
+    }
+  ]
+}

@@ -70,15 +70,62 @@ public sealed class OpenAiCompatibleModelCatalog : IModelCatalog
             .Where(static model => !string.IsNullOrWhiteSpace(model.Id))
             .Select(static model =>
             {
-                int? contextWindow = model.ContextWindow ?? model.ContextLength;
-                bool? vision = null;
-                if (model.Architecture?.Modality is string modality)
+                int? contextWindow = model.ContextWindow ?? model.ContextLength ?? model.TopProvider?.ContextLength;
+                List<string>? efforts = model.ModelSpec?.Capabilities?.ReasoningEffortOptions ?? model.Reasoning?.SupportedEfforts;
+                bool? reasoning = model.ModelSpec?.Capabilities?.SupportsReasoning;
+                if (reasoning is null && efforts is { Count: > 0 })
                 {
-                    vision = modality.Contains("image", StringComparison.OrdinalIgnoreCase) ||
-                             modality.Contains("multimodal", StringComparison.OrdinalIgnoreCase);
+                    reasoning = true;
                 }
-                List<string>? efforts = model.Reasoning?.SupportedEfforts;
-                return new CatalogModel(model.Id!, model.OwnedBy, contextWindow, vision, efforts);
+
+                bool? vision = model.ModelSpec?.Capabilities?.SupportsVision;
+                if (vision is null)
+                {
+                    if (model.Architecture?.InputModalities is { Count: > 0 } inputs &&
+                        inputs.Any(static m => m.Equals("image", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        vision = true;
+                    }
+                    else if (model.Architecture?.Modality is string modality)
+                    {
+                        vision = modality.Contains("image", StringComparison.OrdinalIgnoreCase) ||
+                                 modality.Contains("multimodal", StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+
+                bool? toolCalling = model.ModelSpec?.Capabilities?.SupportsFunctionCalling;
+                if (toolCalling is null &&
+                    model.SupportedParameters is { Count: > 0 } toolParams &&
+                    toolParams.Any(static p => p.Equals("tools", StringComparison.OrdinalIgnoreCase)))
+                {
+                    toolCalling = true;
+                }
+
+                bool? structuredOutput = model.ModelSpec?.Capabilities?.SupportsResponseSchema;
+                if (structuredOutput is null &&
+                    model.SupportedParameters is { Count: > 0 } structParams &&
+                    structParams.Any(static p => p.Equals("structured_outputs", StringComparison.OrdinalIgnoreCase)))
+                {
+                    structuredOutput = true;
+                }
+
+                // Venice advertises prompt caching through the presence of a
+                // cache_input price (always non-zero when present in the live
+                // response). OpenRouter's /models schema has no equivalent
+                // signal, so PromptCaching stays null there and falls through
+                // to the name heuristic in the inferrer.
+                bool? promptCaching = model.ModelSpec?.Pricing?.CacheInput is not null ? true : null;
+
+                return new CatalogModel(
+                    model.Id!,
+                    model.OwnedBy,
+                    contextWindow,
+                    vision,
+                    efforts,
+                    reasoning,
+                    toolCalling,
+                    structuredOutput,
+                    promptCaching);
             })
             .DistinctBy(static model => model.Id, StringComparer.Ordinal)
             .OrderBy(static model => model.Id, StringComparer.OrdinalIgnoreCase)
@@ -129,18 +176,86 @@ internal sealed class ModelListEntry
 
     [JsonPropertyName("reasoning")]
     public ModelReasoning? Reasoning { get; set; }
+
+    [JsonPropertyName("supported_parameters")]
+    public List<string>? SupportedParameters { get; set; }
+
+    [JsonPropertyName("top_provider")]
+    public ModelTopProvider? TopProvider { get; set; }
+
+    [JsonPropertyName("model_spec")]
+    public VeniceModelSpec? ModelSpec { get; set; }
 }
 
 internal sealed class ModelArchitecture
 {
     [JsonPropertyName("modality")]
     public string? Modality { get; set; }
+
+    [JsonPropertyName("input_modalities")]
+    public List<string>? InputModalities { get; set; }
+
+    [JsonPropertyName("output_modalities")]
+    public List<string>? OutputModalities { get; set; }
 }
 
 internal sealed class ModelReasoning
 {
     [JsonPropertyName("supported_efforts")]
     public List<string>? SupportedEfforts { get; set; }
+}
+
+internal sealed class ModelTopProvider
+{
+    [JsonPropertyName("context_length")]
+    public int? ContextLength { get; set; }
+}
+
+// Venice's /api/v1/models response nests capability signals under
+// model_spec.capabilities with Venice-specific boolean field names, plus a
+// pricing.cache_input object whose presence is a reliable prompt-caching
+// signal. None of these match the OpenRouter schema; both are read here so
+// the endpoint parser handles Venice and OpenRouter-style endpoints alike.
+internal sealed class VeniceModelSpec
+{
+    [JsonPropertyName("capabilities")]
+    public VeniceCapabilities? Capabilities { get; set; }
+
+    [JsonPropertyName("pricing")]
+    public VenicePricing? Pricing { get; set; }
+}
+
+internal sealed class VeniceCapabilities
+{
+    [JsonPropertyName("supportsVision")]
+    public bool? SupportsVision { get; set; }
+
+    [JsonPropertyName("supportsFunctionCalling")]
+    public bool? SupportsFunctionCalling { get; set; }
+
+    [JsonPropertyName("supportsResponseSchema")]
+    public bool? SupportsResponseSchema { get; set; }
+
+    [JsonPropertyName("supportsReasoning")]
+    public bool? SupportsReasoning { get; set; }
+
+    [JsonPropertyName("reasoningEffortOptions")]
+    public List<string>? ReasoningEffortOptions { get; set; }
+}
+
+internal sealed class VenicePricing
+{
+    [JsonPropertyName("cache_input")]
+    public VeniceCacheInputPrice? CacheInput { get; set; }
+}
+
+internal sealed class VeniceCacheInputPrice
+{
+    [JsonPropertyName("usd")]
+    public decimal? Usd { get; set; }
+
+    [JsonPropertyName("diem")]
+    public decimal? Diem { get; set; }
 }
 
 [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]

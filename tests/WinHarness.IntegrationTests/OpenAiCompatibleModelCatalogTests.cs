@@ -70,6 +70,94 @@ public sealed class OpenAiCompatibleModelCatalogTests
         Assert.AreEqual(0, models.Count);
     }
 
+    [TestMethod]
+    public async Task ParsesVeniceFixtureAndMapsModelSpecCapabilities()
+    {
+        string fixture = await LoadFixtureAsync("venice-models.json");
+        StubHandler handler = new(HttpStatusCode.OK, fixture);
+        OpenAiCompatibleModelCatalog catalog = new(new HttpClient(handler));
+
+        IReadOnlyList<CatalogModel> models = await catalog.ListModelsAsync(
+            "https://api.venice.ai/api/v1",
+            "sk-test",
+            CancellationToken.None);
+
+        // Fixture has 4 models; parser sorts by id.
+        Assert.AreEqual(4, models.Count);
+
+        CatalogModel visionReasoning = models.Single(m => m.Id == "z-ai-glm-5v-turbo");
+        Assert.IsTrue(visionReasoning.Vision, "supportsVision=true should map to Vision=true");
+        Assert.IsTrue(visionReasoning.Reasoning, "supportsReasoning=true should map to Reasoning=true");
+        Assert.IsTrue(visionReasoning.ToolCalling, "supportsFunctionCalling=true should map to ToolCalling=true");
+        Assert.IsTrue(visionReasoning.StructuredOutput, "supportsResponseSchema=true should map to StructuredOutput=true");
+        Assert.IsTrue(visionReasoning.PromptCaching, "pricing.cache_input present should map to PromptCaching=true");
+        Assert.AreEqual(128000, visionReasoning.ContextWindow, "context_length should round-trip");
+        CollectionAssert.AreEqual(
+            new[] { "none", "low", "medium", "high" },
+            visionReasoning.SupportedReasoningEfforts?.ToArray() ?? Array.Empty<string>());
+
+        CatalogModel reasoningNoVision = models.Single(m => m.Id == "zai-org-glm-5-1");
+        Assert.IsFalse(reasoningNoVision.Vision!.Value, "supportsVision=false is authoritative-false");
+        Assert.IsTrue(reasoningNoVision.Reasoning, "supportsReasoning=true");
+        Assert.IsTrue(reasoningNoVision.ToolCalling);
+        Assert.IsTrue(reasoningNoVision.StructuredOutput);
+        Assert.IsTrue(reasoningNoVision.PromptCaching);
+
+        // Venice explicitly says supportsReasoning=true but omits
+        // reasoningEffortOptions; Reasoning=true comes from the direct signal,
+        // SupportedReasoningEfforts stays null.
+        CatalogModel reasoningNoEfforts = models.Single(m => m.Id == "olafangensan-glm-4.7-flash-heretic");
+        Assert.IsTrue(reasoningNoEfforts.Reasoning, "supportsReasoning=true with no effort options still yields Reasoning=true");
+        Assert.IsNull(reasoningNoEfforts.SupportedReasoningEfforts, "reasoningEffortOptions absent -> null");
+        Assert.IsTrue(reasoningNoEfforts.ToolCalling);
+        Assert.IsTrue(reasoningNoEfforts.StructuredOutput);
+        Assert.IsNull(reasoningNoEfforts.PromptCaching, "no cache_input -> PromptCaching null (falls to name heuristic)");
+
+        CatalogModel plain = models.Single(m => m.Id == "hermes-3-llama-3.1-405b");
+        Assert.IsFalse(plain.Vision!.Value, "supportsVision=false");
+        Assert.IsFalse(plain.Reasoning!.Value, "supportsReasoning=false is authoritative-false");
+        Assert.IsFalse(plain.ToolCalling!.Value, "supportsFunctionCalling=false");
+        Assert.IsFalse(plain.StructuredOutput!.Value, "supportsResponseSchema=false");
+        Assert.IsNull(plain.PromptCaching, "no cache_input -> null");
+    }
+
+    [TestMethod]
+    public async Task ParsesOllamaFixtureWithMinimalShapeAndNullExtensionFields()
+    {
+        string fixture = await LoadFixtureAsync("ollama-models.json");
+        StubHandler handler = new(HttpStatusCode.OK, fixture);
+        OpenAiCompatibleModelCatalog catalog = new(new HttpClient(handler));
+
+        IReadOnlyList<CatalogModel> models = await catalog.ListModelsAsync(
+            "http://localhost:11434/v1",
+            apiKey: null,
+            CancellationToken.None);
+
+        Assert.AreEqual(3, models.Count);
+        foreach (CatalogModel model in models)
+        {
+            Assert.IsNotNull(model.Id);
+            Assert.AreEqual("library", model.OwnedBy);
+            // Ollama /v1/models is minimal: no architecture, no model_spec, no
+            // supported_parameters. All extension fields must be null so the
+            // resolver falls through to Tier 2 (OpenRouter) and Tier 3 (name
+            // heuristic).
+            Assert.IsNull(model.ContextWindow, $"{model.Id}: context window should be null");
+            Assert.IsNull(model.Vision, $"{model.Id}: Vision should be null");
+            Assert.IsNull(model.Reasoning, $"{model.Id}: Reasoning should be null");
+            Assert.IsNull(model.ToolCalling, $"{model.Id}: ToolCalling should be null");
+            Assert.IsNull(model.StructuredOutput, $"{model.Id}: StructuredOutput should be null");
+            Assert.IsNull(model.PromptCaching, $"{model.Id}: PromptCaching should be null");
+            Assert.IsNull(model.SupportedReasoningEfforts, $"{model.Id}: SupportedReasoningEfforts should be null");
+        }
+    }
+
+    private static async Task<string> LoadFixtureAsync(string name)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "Data", name);
+        return await File.ReadAllTextAsync(path, CancellationToken.None).ConfigureAwait(false);
+    }
+
     private sealed class StubHandler : HttpMessageHandler
     {
         private readonly HttpStatusCode _status;
