@@ -74,6 +74,36 @@ public sealed class SingleAgentRuntimeTests
     }
 
     [TestMethod]
+    public async Task StopsRunawayAssistantStreamAndSavesPartialArtifacts()
+    {
+        string runawayText = new('x', (256 * 1024) + 1);
+        RecordingDiagnosticSink diagnostics = new();
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory([runawayText]),
+            [],
+            diagnostics,
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        List<AgentEvent> events = [];
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           CreateRequest("prompt"),
+                           CancellationToken.None))
+        {
+            events.Add(agentEvent);
+        }
+
+        Assert.AreEqual(2, events.Count);
+        Assert.AreEqual(AgentEventKind.Failed, events[0].Kind);
+        StringAssert.Contains(events[0].Message, "per-turn text limit");
+        Assert.AreEqual(AgentEventKind.Completed, events[1].Kind);
+        Assert.AreEqual("partial", events[1].Message);
+        Assert.AreEqual(256 * 1024, events[1].TurnArtifacts!.Messages[1].Text.Length);
+        Assert.AreEqual(runawayText[..(256 * 1024)], events[1].TurnArtifacts!.Messages[1].Text);
+        Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "provider.failed"));
+        Assert.IsFalse(diagnostics.Records.Any(static record => record.EventName == "provider.completed"));
+    }
+
+    [TestMethod]
     public async Task HonorsCancellationDuringStreaming()
     {
         SingleAgentRuntime runtime = new(

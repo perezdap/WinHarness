@@ -32,6 +32,13 @@ Command execution rules:
 - Prefer PowerShell equivalents: Get-ChildItem, Get-Content, Remove-Item, New-Item, Set-Content, Join-Path.
 """;
 
+    // Safety net for a single streamed response that never stops (e.g. a model that
+    // loops the same empty code fence forever). The function-invocation loop is already
+    // bounded by Microsoft.Extensions.AI, but a runaway *within one response* is not, so
+    // we cap accumulated text and raw update count per turn and fail cleanly if exceeded.
+    private const int MaxAssistantCharactersPerTurn = 256 * 1024;
+    private const int MaxStreamingUpdatesPerTurn = 100_000;
+
     private static readonly IDiagnosticSink NoDiagnostics = new NullDiagnosticSink();
 
     private readonly IContextFileLoader? _contextFileLoader;
@@ -117,6 +124,7 @@ Command execution rules:
                 cancellationToken: cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
         UsageDetails? usage = null;
+        int updateCount = 0;
 
         while (true)
         {
@@ -130,6 +138,18 @@ Command execution rules:
                 }
 
                 update = updates.Current;
+                updateCount++;
+                if (updateCount > MaxStreamingUpdatesPerTurn)
+                {
+                    string message = $"Response exceeded the per-turn streaming limit of {MaxStreamingUpdatesPerTurn} updates and was stopped to prevent a runaway loop.";
+                    await WriteProviderDiagnosticAsync(
+                        "provider.failed",
+                        provider,
+                        stopwatch,
+                        CancellationToken.None,
+                        new InvalidOperationException(message)).ConfigureAwait(false);
+                    failureEvent = new AgentEvent(AgentEventKind.Failed, message);
+                }
             }
             catch (Exception ex)
             {
@@ -178,6 +198,35 @@ Command execution rules:
             string text = update.ToString();
             if (text.Length > 0)
             {
+                int remainingCharacterBudget = MaxAssistantCharactersPerTurn - assistantText.Length;
+                if (text.Length > remainingCharacterBudget)
+                {
+                    if (remainingCharacterBudget > 0)
+                    {
+                        assistantText.Append(text.AsSpan(0, remainingCharacterBudget));
+                    }
+
+                    string message = $"Response exceeded the per-turn text limit of {MaxAssistantCharactersPerTurn} characters and was stopped to prevent a runaway loop.";
+                    await WriteProviderDiagnosticAsync(
+                        "provider.failed",
+                        provider,
+                        stopwatch,
+                        CancellationToken.None,
+                        new InvalidOperationException(message)).ConfigureAwait(false);
+                    yield return new AgentEvent(AgentEventKind.Failed, message);
+
+                    ConversationMessage failedUserMessage = request.Conversation.Messages[^1];
+                    yield return new AgentEvent(
+                        AgentEventKind.Completed,
+                        "partial",
+                        new TurnArtifacts(
+                        [
+                            failedUserMessage,
+                            ConversationMessage.FromText(ConversationRole.Assistant, assistantText.ToString())
+                        ]));
+                    yield break;
+                }
+
                 assistantText.Append(text);
                 yield return new AgentEvent(AgentEventKind.AssistantDelta, text);
             }

@@ -63,6 +63,62 @@ public sealed class BuiltinToolProviderTests
     }
 
     [TestMethod]
+    public async Task EditFileMatchesLfOldTextAgainstCrlfFile()
+    {
+        string root = CreateTempDirectory();
+        string path = Path.Combine(root, "code.txt");
+        await File.WriteAllTextAsync(path, "line1\r\nline2\r\nline3\r\n");
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "edit_file")
+            .ExecuteAsync(
+                new ToolInvocation("edit_file", Json("""{"path":"code.txt","oldText":"line1\nline2","newText":"line1\nCHANGED"}""")),
+                CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        // Replacement preserves the file's CRLF convention.
+        Assert.AreEqual("line1\r\nCHANGED\r\nline3\r\n", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task EditFilePreservesCrlfWhenOldTextUsesCrlf()
+    {
+        string root = CreateTempDirectory();
+        string path = Path.Combine(root, "code.txt");
+        await File.WriteAllTextAsync(path, "a\r\nb\r\nc\r\n");
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "edit_file")
+            .ExecuteAsync(
+                new ToolInvocation("edit_file", Json("""{"path":"code.txt","oldText":"a\r\nb","newText":"a\r\nB"}""")),
+                CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        Assert.AreEqual("a\r\nB\r\nc\r\n", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task EditFileMatchesCrlfOldTextAgainstLfFile()
+    {
+        string root = CreateTempDirectory();
+        string path = Path.Combine(root, "code.txt");
+        await File.WriteAllTextAsync(path, "a\nb\nc\n");
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "edit_file")
+            .ExecuteAsync(
+                new ToolInvocation("edit_file", Json("""{"path":"code.txt","oldText":"a\r\nb","newText":"a\r\nB"}""")),
+                CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        // File was LF; replacement keeps LF.
+        Assert.AreEqual("a\nB\nc\n", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
     public async Task GrepSkipsFilesOverMaxFileBytes()
     {
         string root = CreateTempDirectory();

@@ -269,13 +269,42 @@ public sealed class BuiltinToolProvider : IToolProvider
 
             string normalizedPath = NormalizeForIo(path);
             string content = await File.ReadAllTextAsync(normalizedPath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
-            int occurrences = CountOccurrences(content, oldText);
-            if (occurrences != expectedOccurrences)
+
+            // Match against the raw file content first so byte-for-byte edits stay exact.
+            // If the model's oldText uses different line endings than the file (the common
+            // case: LF in the request vs. CRLF on disk), retry with the search/replace text
+            // translated to the file's dominant newline. Only the matched substring is
+            // replaced, so unmatched lines keep their original bytes.
+            string effectiveOld = oldText;
+            string effectiveNew = newText;
+            int occurrences = CountOccurrences(content, effectiveOld);
+            bool retriedWithNewlineTranslation = false;
+            if (occurrences == 0 && ContainsNewline(oldText))
             {
-                return new ToolResult(false, $"Expected {expectedOccurrences} occurrence(s), found {occurrences}.", "occurrence_mismatch");
+                string fileNewline = content.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+                string translatedOld = NormalizeNewlines(oldText, fileNewline);
+                int translatedOccurrences = CountOccurrences(content, translatedOld);
+                if (translatedOccurrences > 0)
+                {
+                    effectiveOld = translatedOld;
+                    effectiveNew = NormalizeNewlines(newText, fileNewline);
+                    occurrences = translatedOccurrences;
+                    retriedWithNewlineTranslation = true;
+                }
             }
 
-            string updated = content.Replace(oldText, newText, StringComparison.Ordinal);
+            if (occurrences != expectedOccurrences)
+            {
+                string hint = occurrences == 0 && ContainsNewline(oldText) && !retriedWithNewlineTranslation
+                    ? " The oldText was not found even after normalizing line endings; verify the exact text (including indentation) still exists in the file."
+                    : string.Empty;
+                return new ToolResult(
+                    false,
+                    $"Expected {expectedOccurrences} occurrence(s), found {occurrences}.{hint}",
+                    "occurrence_mismatch");
+            }
+
+            string updated = content.Replace(effectiveOld, effectiveNew, StringComparison.Ordinal);
             if (dryRun)
             {
                 return new ToolResult(true, $"Would replace {occurrences} occurrence(s). Updated length: {updated.Length} characters.");
@@ -283,6 +312,18 @@ public sealed class BuiltinToolProvider : IToolProvider
 
             await AtomicWriteAllTextAsync(normalizedPath, updated, Utf8NoBom, cancellationToken).ConfigureAwait(false);
             return new ToolResult(true, $"Replaced {occurrences} occurrence(s).");
+        }
+
+        private static bool ContainsNewline(string value) =>
+            value.Contains('\n', StringComparison.Ordinal) || value.Contains('\r', StringComparison.Ordinal);
+
+        private static string NormalizeNewlines(string value, string newline)
+        {
+            // Collapse CRLF and lone CR to LF first, then expand to the target newline so
+            // any incoming line-ending style maps cleanly onto the file's convention.
+            string lf = value.Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace("\r", "\n", StringComparison.Ordinal);
+            return newline == "\n" ? lf : lf.Replace("\n", newline, StringComparison.Ordinal);
         }
 
         private static int CountOccurrences(string content, string oldText)
