@@ -16,12 +16,18 @@ internal sealed class ProviderWizard
     private readonly ProviderConfigurator _configurator;
     private readonly ConfigStore _store;
     private readonly IModelCatalog _modelCatalog;
+    private readonly IModelCapabilityResolver _resolver;
 
-    public ProviderWizard(ProviderConfigurator configurator, ConfigStore store, IModelCatalog modelCatalog)
+    public ProviderWizard(
+        ProviderConfigurator configurator,
+        ConfigStore store,
+        IModelCatalog modelCatalog,
+        IModelCapabilityResolver resolver)
     {
         _configurator = configurator;
         _store = store;
         _modelCatalog = modelCatalog;
+        _resolver = resolver;
     }
 
     /// <summary>
@@ -145,16 +151,16 @@ internal sealed class ProviderWizard
             return false;
         }
 
-        bool? sharedVision = null;
-        List<string>? sharedReasoning = null;
+        CatalogModel? sharedModel = null;
         if (chosen.Count == 1)
         {
-            CatalogModel? m = models.FirstOrDefault(m => string.Equals(m.Id, chosen[0], StringComparison.Ordinal));
-            sharedVision = m?.Vision;
-            sharedReasoning = m?.SupportedReasoningEfforts;
+            sharedModel = models.FirstOrDefault(m => string.Equals(m.Id, chosen[0], StringComparison.Ordinal));
         }
 
-        ProviderCapabilities capabilities = PromptCapabilities(chosen.Count == 1 ? chosen[0] : "all selected models", sharedVision, sharedReasoning);
+        ProviderCapabilities capabilities = await PromptCapabilitiesAsync(
+            chosen.Count == 1 ? chosen[0] : "all selected models",
+            sharedModel,
+            cancellationToken).ConfigureAwait(false);
         bool applySharedCapabilities = chosen.Count == 1 ||
             AnsiConsole.Confirm("Apply those capabilities to all selected models?", defaultValue: true);
 
@@ -167,7 +173,9 @@ internal sealed class ProviderWizard
                         .DefaultValue(DeriveAlias(providerModelId)))
                 : DeriveAlias(providerModelId);
 
-            ProviderCapabilities modelCapabilities = applySharedCapabilities ? capabilities : PromptCapabilities(providerModelId, catalogModel?.Vision, catalogModel?.SupportedReasoningEfforts);
+            ProviderCapabilities modelCapabilities = applySharedCapabilities
+                ? capabilities
+                : await PromptCapabilitiesAsync(providerModelId, catalogModel, cancellationToken).ConfigureAwait(false);
 
             await _configurator.AddModelAsync(
                 providerId,
@@ -222,7 +230,10 @@ internal sealed class ProviderWizard
                     ? ValidationResult.Error("Provider model id is required.")
                     : ValidationResult.Success()));
 
-        ProviderCapabilities capabilities = PromptCapabilities(providerModelId, endpointVision: null, endpointReasoningEfforts: null);
+        ProviderCapabilities capabilities = await PromptCapabilitiesAsync(
+            providerModelId,
+            new CatalogModel(providerModelId, OwnedBy: null),
+            cancellationToken).ConfigureAwait(false);
 
         await _configurator.AddModelAsync(
             providerId,
@@ -237,69 +248,31 @@ internal sealed class ProviderWizard
         AnsiConsole.MarkupLine($"[green]✓[/] Model [bold]{Markup.Escape(modelId)}[/] saved.");
     }
 
-    private static ProviderCapabilities InferCapabilities(string modelId, bool? endpointVision, List<string>? endpointReasoningEfforts)
+    private async ValueTask<ProviderCapabilities> PromptCapabilitiesAsync(
+        string label,
+        CatalogModel? model,
+        CancellationToken cancellationToken)
     {
-        string lower = modelId.ToLowerInvariant();
-
-        // 1. Streaming: almost all modern chat models support streaming.
-        bool streaming = true;
-
-        // Check for common non-chat models
-        bool isNonChat = lower.Contains("embedding") ||
-                         lower.Contains("moderation") ||
-                         lower.Contains("whisper") ||
-                         lower.Contains("tts") ||
-                         lower.Contains("dall-e") ||
-                         lower.Contains("rerank");
-
-        // 2. Tool calling: supported by default for most modern chat/instruct models.
-        bool toolCalling = !isNonChat;
-
-        // 3. Vision: DO NOT guess vision by common knowledge. Use endpointVision if available, otherwise false.
-        bool vision = endpointVision ?? false;
-
-        // 4. Prompt Caching: Claude 3/3.5, Gemini 1.5/2.0, DeepSeek
-        bool promptCaching = lower.Contains("claude-3") ||
-                             lower.Contains("gemini-1.5") ||
-                             lower.Contains("gemini-2.0") ||
-                             lower.Contains("deepseek");
-
-        // 5. Structured Output: OpenAI gpt-4o/gpt-4-turbo, Gemini 1.5/2.0
-        bool structuredOutput = lower.Contains("gpt-4o") ||
-                               lower.Contains("gpt-4-turbo") ||
-                               lower.Contains("gemini-1.5") ||
-                               lower.Contains("gemini-2.0");
-
-        // 6. Reasoning: DO NOT guess reasoning by common knowledge. Use endpointReasoningEfforts.
-        bool reasoning = endpointReasoningEfforts is not null && endpointReasoningEfforts.Count > 0;
-
-        if (isNonChat)
-        {
-            streaming = false;
-            toolCalling = false;
-            vision = false;
-            promptCaching = false;
-            structuredOutput = false;
-            reasoning = false;
-        }
-
-        return new ProviderCapabilities(
-            Streaming: streaming,
-            ToolCalling: toolCalling,
-            Vision: vision,
-            PromptCaching: promptCaching,
-            StructuredOutput: structuredOutput,
-            Reasoning: reasoning);
-    }
-
-    private static ProviderCapabilities PromptCapabilities(string modelId, bool? endpointVision, List<string>? endpointReasoningEfforts)
-    {
-        ProviderCapabilities inferred = InferCapabilities(modelId, endpointVision, endpointReasoningEfforts);
+        // When the wizard is prompting for shared capabilities across a
+        // multi-select (model is null), fall back to the conservative default
+        // (streaming + toolCalling) rather than running the resolver against a
+        // synthetic id. For a real discovered or manually-entered model, the
+        // resolver applies Tier 1 (endpoint) -> Tier 2 (OpenRouter) -> Tier 3+4
+        // (name heuristic + default).
+        ProviderCapabilities inferred = model is null
+            ? new ProviderCapabilities(
+                Streaming: true,
+                ToolCalling: true,
+                Vision: false,
+                PromptCaching: false,
+                StructuredOutput: false,
+                Reasoning: false)
+            : await _resolver.ResolveAsync(model, cancellationToken).ConfigureAwait(false);
 
         MultiSelectionPrompt<string> prompt = new MultiSelectionPrompt<string>()
-            .Title($"Model capabilities for [bold]{Markup.Escape(modelId)}[/] [grey](space to toggle, enter to confirm)[/]:")
+            .Title($"Model capabilities for [bold]{Markup.Escape(label)}[/] [grey](space to toggle, enter to confirm)[/]:")
             .NotRequired()
-            .InstructionsText("[grey](defaults are inferred from model id)[/]")
+            .InstructionsText("[grey](defaults are inferred from the endpoint and OpenRouter catalog when available)[/]")
             .AddChoices("streaming", "toolCalling", "vision", "promptCaching", "structuredOutput", "reasoning");
 
         if (inferred.Streaming) prompt.Select("streaming");

@@ -15,6 +15,9 @@ public static class ProviderServiceCollectionExtensions
         services.AddSingleton<IModelCapabilityRegistry, ConfigurationModelCapabilityRegistry>();
         services.AddSingleton<IProviderFactory, OpenAiCompatibleProviderFactory>();
         services.AddSingleton<IModelCatalog, OpenAiCompatibleModelCatalog>();
+        services.AddSingleton<IModelCapabilityInferrer, ModelCapabilityInferrer>();
+        services.AddSingleton<IOpenRouterModelCatalog, OpenRouterModelCatalog>();
+        services.AddSingleton<IModelCapabilityResolver, ModelCapabilityResolver>();
         return services;
     }
 }

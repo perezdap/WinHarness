@@ -122,7 +122,8 @@ app.Add("config wizard", async (CancellationToken cancellationToken) =>
     ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
     ConfigStore store = host.Services.GetRequiredService<ConfigStore>();
     IModelCatalog catalog = host.Services.GetRequiredService<IModelCatalog>();
-    ProviderWizard wizard = new(configurator, store, catalog);
+    IModelCapabilityResolver resolver = host.Services.GetRequiredService<IModelCapabilityResolver>();
+    ProviderWizard wizard = new(configurator, store, catalog, resolver);
     await wizard.RunAsync(cancellationToken).ConfigureAwait(false);
     AnsiConsole.MarkupLine("[dim]Run [bold]winharness chat[/] to start a session.[/]");
 });
@@ -148,6 +149,7 @@ app.Add("providers remove", async (string id, CancellationToken cancellationToke
 app.Add("models discover", async (string baseUrl, string? apiKey = null, CancellationToken cancellationToken = default) =>
 {
     IModelCatalog catalog = host.Services.GetRequiredService<IModelCatalog>();
+    IModelCapabilityResolver resolver = host.Services.GetRequiredService<IModelCapabilityResolver>();
     IReadOnlyList<CatalogModel> models = await catalog.ListModelsAsync(baseUrl, apiKey, cancellationToken).ConfigureAwait(false);
     if (models.Count == 0)
     {
@@ -157,7 +159,17 @@ app.Add("models discover", async (string baseUrl, string? apiKey = null, Cancell
 
     foreach (CatalogModel model in models)
     {
-        Console.WriteLine(model.OwnedBy is null ? model.Id : $"{model.Id}\t{model.OwnedBy}");
+        ProviderCapabilities caps = await resolver.ResolveAsync(model, cancellationToken).ConfigureAwait(false);
+        List<string> enabled = [];
+        if (caps.Streaming)        enabled.Add("streaming");
+        if (caps.ToolCalling)      enabled.Add("toolCalling");
+        if (caps.Vision)           enabled.Add("vision");
+        if (caps.PromptCaching)    enabled.Add("promptCaching");
+        if (caps.StructuredOutput) enabled.Add("structuredOutput");
+        if (caps.Reasoning)        enabled.Add("reasoning");
+        string capsText = enabled.Count == 0 ? "-" : string.Join(",", enabled);
+        string prefix = model.OwnedBy is null ? model.Id : $"{model.Id}\t{model.OwnedBy}";
+        Console.WriteLine($"{prefix}\t{capsText}");
     }
 });
 
