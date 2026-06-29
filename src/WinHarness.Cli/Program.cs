@@ -342,18 +342,47 @@ app.Add("providers use", async (string providerId, CancellationToken cancellatio
     Console.WriteLine($"Default provider set to {providerId}.");
 });
 
-app.Add("models list", (string providerId) =>
+app.Add("models list", (string? providerId = null) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
-    ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
+
+    // No argument: list every provider's models with a header per provider.
+    if (string.IsNullOrWhiteSpace(providerId))
+    {
+        if (options.Providers.Count == 0)
+        {
+            Console.WriteLine("No providers configured.");
+            return;
+        }
+
+        foreach (ProviderOptions provider in options.Providers)
+        {
+            Console.WriteLine($"{provider.Id}\t{provider.BaseUrl}");
+            if (provider.Models.Count == 0)
+            {
+                Console.WriteLine($"\t(no models configured)");
+                continue;
+            }
+
+            foreach (ModelOptions model in provider.Models)
+            {
+                Console.WriteLine($"\t{model.Id}\t{model.ProviderModelId}");
+            }
+        }
+
+        return;
+    }
+
+    // Single-provider filter: keep the original behavior (throw if missing).
+    ProviderOptions? filtered = options.Providers.FirstOrDefault(candidate =>
         string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
 
-    if (provider is null)
+    if (filtered is null)
     {
         throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
     }
 
-    foreach (ModelOptions model in provider.Models)
+    foreach (ModelOptions model in filtered.Models)
     {
         Console.WriteLine($"{model.Id}\t{model.ProviderModelId}");
     }

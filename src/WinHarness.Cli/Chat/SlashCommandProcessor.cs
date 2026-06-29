@@ -386,52 +386,134 @@ internal static class SlashCommandProcessor
         string argument,
         SlashCommandContext? context)
     {
-        string providerId = argument.Length > 0 ? argument : session.ProviderId;
-        ProviderOptions? provider = FindProvider(options, providerId);
-        if (provider is null)
+        // Bare "/models" lists every provider's models in one grouped picker;
+        // "/models <providerId>" filters to a single provider (backward compat).
+        string? filterProviderId = argument.Length > 0 ? argument : null;
+        if (filterProviderId is not null && FindProvider(options, filterProviderId) is null)
         {
-            return SlashCommandResult.Handled([$"Provider '{providerId}' is not configured."]);
+            return SlashCommandResult.Handled([$"Provider '{filterProviderId}' is not configured."]);
         }
 
-        if (provider.Models.Count == 0)
+        if (options.Providers.Count == 0)
         {
-            return SlashCommandResult.Handled([$"No models configured for '{provider.Id}'."]);
+            return SlashCommandResult.Handled(["No providers configured. Run 'winharness config wizard'."]);
+        }
+
+        List<ModelChoice> choices = BuildAllModelChoices(options, filterProviderId, session.ProviderId, session.ModelId);
+        if (choices.Count == 0)
+        {
+            string scope = filterProviderId is null ? "any provider" : $"'{filterProviderId}'";
+            return SlashCommandResult.Handled([$"No models configured for {scope}."]);
         }
 
         if (!IsInteractive)
         {
-            return SlashCommandResult.Handled(CreateModelLines(options, provider.Id, session.ModelId));
+            return SlashCommandResult.Handled(CreateModelLines(options, filterProviderId, session.ProviderId, session.ModelId));
         }
 
-        string current = session.ModelId;
-        SelectionPrompt<string> prompt = new()
+        // Group choices by provider so the picker shows one scrollable list with
+        // provider headers; only model leaves are selectable (SelectionMode.Leaf).
+        SelectionPrompt<ModelChoice> prompt = new()
         {
-            Title = $"Select a model for {provider.Id} (Esc to cancel)"
+            Title = "Select a model (Esc to cancel)"
         };
-        prompt.PageSize(10)
+        prompt.Mode(SelectionMode.Leaf)
+              .PageSize(10)
               .MoreChoicesText("[grey](move up and down to reveal more models)[/]")
-              .AddChoices(provider.Models.Select(m =>
-                  $"{(string.Equals(m.Id, current, StringComparison.OrdinalIgnoreCase) ? "*" : " ")} {m.Id} {m.ProviderModelId}"));
+              .UseConverter(static choice => choice.Display);
 
-        string selected = AnsiConsole.Prompt(prompt);
-        string modelId = ExtractFirstToken(selected);
-
-        // If the user re-selected the current model, no-op.
-        if (string.Equals(modelId, current, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(provider.Id, session.ProviderId, StringComparison.OrdinalIgnoreCase))
+        ModelChoice? active = choices.FirstOrDefault(c =>
+            string.Equals(c.ProviderId, session.ProviderId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(c.ModelId, session.ModelId, StringComparison.OrdinalIgnoreCase));
+        if (active is not null)
         {
-            return SlashCommandResult.Handled([$"Already on model '{modelId}'."]);
+            prompt.DefaultValue(active);
         }
 
-        // Ensure the provider is active, then switch the model.
-        if (!string.Equals(provider.Id, session.ProviderId, StringComparison.OrdinalIgnoreCase))
+        foreach (IGrouping<string, ModelChoice> group in choices.GroupBy(c => c.ProviderId, StringComparer.OrdinalIgnoreCase))
         {
-            session.ProviderId = provider.Id;
-            await AppendModelChangeIfPersistedAsync(session, context).ConfigureAwait(false);
+            ProviderOptions provider = options.Providers.First(p =>
+                string.Equals(p.Id, group.Key, StringComparison.OrdinalIgnoreCase));
+            string header = provider.BaseUrl is null
+                ? Markup.Escape(provider.Id)
+                : $"{Markup.Escape(provider.Id)} [dim]{Markup.Escape(provider.BaseUrl)}[/]";
+            prompt.AddChoiceGroup(new ModelChoice(provider.Id, string.Empty, header), group);
         }
 
-        return await SwitchModelAsync(options, session, modelId, context).ConfigureAwait(false);
+        ModelChoice selected = AnsiConsole.Prompt(prompt);
+
+        // If the user re-selected the active provider+model, no-op.
+        if (string.Equals(selected.ProviderId, session.ProviderId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(selected.ModelId, session.ModelId, StringComparison.OrdinalIgnoreCase))
+        {
+            return SlashCommandResult.Handled([$"Already on model '{selected.ModelId}'."]);
+        }
+
+        // Switch provider (when crossing providers) then model in one step.
+        if (!string.Equals(selected.ProviderId, session.ProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            session.ProviderId = selected.ProviderId;
+        }
+
+        session.ModelId = selected.ModelId;
+        await AppendModelChangeIfPersistedAsync(session, context).ConfigureAwait(false);
+        return SlashCommandResult.Handled([$"Provider {session.ProviderId}, model {session.ModelId}."]);
     }
+
+    /// <summary>
+    /// Builds the flat, ordered list of selectable model choices across all
+    /// configured providers (or a single filtered provider). Each choice carries
+    /// its provider id and model alias so selection is unambiguous even when two
+    /// providers share an alias; the display string is tagged with the provider
+    /// id only on actual collisions to keep the common case clean.
+    /// </summary>
+    private static List<ModelChoice> BuildAllModelChoices(
+        WinHarnessOptions options,
+        string? filterProviderId,
+        string currentProviderId,
+        string currentModelId)
+    {
+        List<ModelChoice> choices = new();
+        HashSet<string> seenDisplays = new(StringComparer.Ordinal);
+
+        foreach (ProviderOptions provider in options.Providers)
+        {
+            if (filterProviderId is not null &&
+                !string.Equals(provider.Id, filterProviderId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (provider.Models.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (ModelOptions model in provider.Models)
+            {
+                bool isActive = string.Equals(provider.Id, currentProviderId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(model.Id, currentModelId, StringComparison.OrdinalIgnoreCase);
+                string marker = isActive ? "*" : " ";
+                string baseDisplay = $"{marker} {model.Id} {model.ProviderModelId}";
+
+                // Disambiguate alias collisions across providers by tagging the
+                // later occurrence with its provider id (both stay visible/selectable).
+                string display = seenDisplays.Add(baseDisplay)
+                    ? baseDisplay
+                    : $"{baseDisplay} ({provider.Id})";
+
+                choices.Add(new ModelChoice(provider.Id, model.Id, display));
+            }
+        }
+
+        return choices;
+    }
+
+    /// <summary>
+    /// A selectable model entry: the provider id and model alias identify the
+    /// target unambiguously; <see cref="Display"/> is what the picker renders.
+    /// </summary>
+    private sealed record ModelChoice(string ProviderId, string ModelId, string Display);
 
     private static ValueTask<SlashCommandResult> ListSkillsAsync(
         ChatSession session,
@@ -512,24 +594,49 @@ internal static class SlashCommandProcessor
         return lines;
     }
 
-    private static IReadOnlyList<string> CreateModelLines(WinHarnessOptions options, string providerId, string currentModelId)
+    private static IReadOnlyList<string> CreateModelLines(
+        WinHarnessOptions options,
+        string? filterProviderId,
+        string currentProviderId,
+        string currentModelId)
     {
-        ProviderOptions? provider = FindProvider(options, providerId);
-        if (provider is null)
+        if (options.Providers.Count == 0)
         {
-            return [$"Provider '{providerId}' is not configured."];
+            return ["No providers configured. Run 'winharness config wizard'."];
         }
 
-        if (provider.Models.Count == 0)
+        List<string> lines = new();
+        bool anyProviderEmitted = false;
+
+        foreach (ProviderOptions provider in options.Providers)
         {
-            return [$"No models configured for '{provider.Id}'."];
+            if (filterProviderId is not null &&
+                !string.Equals(provider.Id, filterProviderId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            anyProviderEmitted = true;
+            lines.Add($"{provider.Id}  {provider.BaseUrl}");
+
+            if (provider.Models.Count == 0)
+            {
+                lines.Add($"  No models configured for '{provider.Id}'.");
+                continue;
+            }
+
+            foreach (ModelOptions model in provider.Models)
+            {
+                bool isActive = string.Equals(provider.Id, currentProviderId, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(model.Id, currentModelId, StringComparison.OrdinalIgnoreCase);
+                string marker = isActive ? "*" : " ";
+                lines.Add($"  {marker} {model.Id} {model.ProviderModelId}");
+            }
         }
 
-        List<string> lines = new(provider.Models.Count);
-        foreach (ModelOptions model in provider.Models)
+        if (!anyProviderEmitted)
         {
-            string marker = string.Equals(model.Id, currentModelId, StringComparison.OrdinalIgnoreCase) ? "*" : " ";
-            lines.Add($"{marker} {model.Id} {model.ProviderModelId}");
+            return [$"Provider '{filterProviderId}' is not configured."];
         }
 
         return lines;
