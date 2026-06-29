@@ -45,21 +45,4 @@ public sealed class SessionTreeChoicesTests
 
         Assert.AreEqual(0, choices.Count);
     }
-
-    [TestMethod]
-    public void FormatListLabel_MarksActiveBranchWithStar()
-    {
-        ISessionManager session = SessionManager.InMemory(Environment.CurrentDirectory);
-        session.AppendMessagesAsync(
-            [ConversationMessage.FromText(ConversationRole.User, "hello")],
-            CancellationToken.None).AsTask().GetAwaiter().GetResult();
-
-        SessionTreeChoices.Choice choice = SessionTreeChoices.BuildChoices(session).Single();
-
-        string label = SessionTreeChoices.FormatListLabel(choice);
-
-        Assert.StartsWith("*", label, StringComparison.Ordinal);
-        StringAssert.Contains(label, "[User]");
-        StringAssert.Contains(label, "hello");
-    }
 }

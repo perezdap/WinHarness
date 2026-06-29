@@ -45,6 +45,6 @@ and a handful of Windows-only runtime paths require Windows.
   round-trip via `tools call` (`write_file` → `edit_file` → `read_file` → `grep` →
   `run_command`). On Linux use a real executable for `run_command` (e.g.
   `/bin/echo`) instead of the Windows `cmd.exe` example.
-- `winharness chat` / `chat --tui` require a configured + reachable model provider
-  (e.g. a local Ollama at `http://localhost:11434/v1`); they are not needed for a
+- `winharness chat` requires a configured + reachable model provider
+  (e.g. a local Ollama at `http://localhost:11434/v1`); it is not needed for a
   basic smoke test.

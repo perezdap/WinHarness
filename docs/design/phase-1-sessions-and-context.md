@@ -4,7 +4,7 @@
 **Target:** WinHarness v0.2  
 **Goal:** Pi Coder parity for session lifecycle and context engineering — persistent tree-structured sessions, full tool-aware message history, project context files, and manual compaction.
 
-**Implementation complete:** PR-1 through PR-9 are merged. Sessions, context files, compaction, and CLI/TUI integration ship in v0.2.
+**Implementation complete:** PR-1 through PR-9 are merged. Sessions, context files, compaction, and CLI integration ship in v0.2. (TUI integration was subsequently removed; only the line-based REPL remains.)
 
 This design is informed by [Pi's session format](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md) but constrained by WinHarness's Native AOT, C# layering, and existing domain language in `CONTEXT.md`.
 
@@ -50,7 +50,7 @@ Phase 1 closes these gaps without tackling extensibility (Phase 4), multi-provid
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  CLI (Program.cs, ChatRepl, ChatTuiApp, SlashCommandProcessor)      │
+│  CLI (Program.cs, ChatRepl, SlashCommandProcessor)                  │
 │  - owns ChatSession + ISessionManager                               │
 │  - appends entries after each turn                                  │
 └──────────────────────────────┬──────────────────────────────────────┘
@@ -526,7 +526,7 @@ Skills remain session-selected and transient; they are **not** written to the se
 
 ### 9.4 Startup banner
 
-REPL/TUI banner adds a line when context files are loaded:
+REPL banner adds a line when context files are loaded:
 
 ```text
 context: AGENTS.md (3 files, 4.2 KB) · SYSTEM.md (project)
@@ -587,7 +587,7 @@ One-shot `winharness chat --prompt "..."` without `--continue` remains ephemeral
 |---------|----------|
 | `/session` | Show file path, id, display name, leaf id, message count, provider/model |
 | `/name <name>` | Append `session_info` entry |
-| `/tree` | Navigate branch (TUI: tree view; REPL: numbered list + pick) |
+| `/tree` | Navigate branch (numbered list + pick) |
 | `/fork` | Create new session file in the **current workspace session dir** (new timestamped filename), branched from the active path; opens in new manager |
 | `/compact [instructions]` | Manual compaction (§10) |
 | `/new` | **Changed:** creates new session file (not just clear in-memory). Old file remains on disk. |
@@ -632,14 +632,9 @@ await session.Session.AppendMessagesAsync(agentEvent.TurnArtifacts.Messages, ct)
 
 ---
 
-## 13. TUI: `/tree` View
+## 13. `/tree` View
 
-`ChatTuiApp` adds a modal `TreeView` (Terminal.Gui `TreeView` or `ListView` with indentation):
-
-- Shows active branch highlighted.
-- `Enter` on a node calls `sessionManager.BranchTo(entryId)`.
-- `Esc` closes without branching.
-- After branch, scrollback rebuilds from the new active branch.
+> **Note:** The full-screen TUI (`ChatTuiApp`) has been removed. Only the REPL fallback below remains.
 
 REPL fallback: print numbered entries from `GetActiveBranch()` ancestors plus children at leaf, prompt `branch-to #`.
 
@@ -696,8 +691,8 @@ PR-7  Slash commands: /tree, /fork, /compact
         - Compaction summarization turn
         - model_change on /provider and /model
 
-PR-8  TUI integration
-        - Tree view, session status in footer
+PR-8  ~~TUI integration~~ (removed; only line-based REPL remains)
+        - ~~Tree view, session status in footer~~
         - Same persistence path as REPL
 
 PR-9  Docs + CONTEXT.md + README + sample session file

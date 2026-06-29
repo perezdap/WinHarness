@@ -3,7 +3,7 @@ using WinHarness.Sessions;
 namespace WinHarness.Cli.Chat;
 
 /// <summary>
-/// Shared branch-choice building and formatting for REPL and TUI <c>/tree</c> pickers.
+/// Shared branch-choice building and formatting for the REPL <c>/tree</c> picker.
 /// </summary>
 internal static class SessionTreeChoices
 {
@@ -53,15 +53,6 @@ internal static class SessionTreeChoices
     {
         string marker = choice.IsOnActiveBranch ? "*" : " ";
         return $"  {index + 1,2}{marker} {FormatEntry(choice.Entry)}";
-    }
-
-    /// <summary>
-    /// Formats a choice for TUI list rows.
-    /// </summary>
-    public static string FormatListLabel(Choice choice)
-    {
-        string marker = choice.IsOnActiveBranch ? "*" : " ";
-        return $"{marker} {FormatEntry(choice.Entry)}";
     }
 
     /// <summary>

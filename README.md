@@ -60,7 +60,6 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness config wizard` for guided, interactive provider/model setup
 - `winharness chat --prompt "..." [--render-markdown true] [--continue-session]`
 - `winharness chat` for the terminal REPL (continues the most recent workspace session by default; see [Sessions](#sessions))
-- `winharness chat --tui` for the full-screen terminal UI with a scrollback pane, persistent input box, tool activity panel, status bar, and the same slash commands
 - `winharness providers list`
 - `winharness providers add --id openai-main --base-url https://api.openai.com/v1 [--api-key sk-... --set-default]`
 - `winharness providers remove --id openai-main`
@@ -133,17 +132,7 @@ Project instructions are loaded at startup and injected into the system prompt c
 | `.winharness/SYSTEM.md` | Replaces the built-in runtime system prompt (project first, then global) |
 | `.winharness/APPEND_SYSTEM.md` | Appended after the base system prompt (project first, then global) |
 
-The REPL/TUI startup banner includes a `context:` line when any of these files are loaded.
-
-### Full-screen TUI
-
-Launch the full-screen chat UI with:
-
-```powershell
-winharness chat --tui
-```
-
-The TUI keeps conversation scrollback visible, shows live tool activity, and provides a persistent input box. The status bar shows provider, model, markdown mode, skill, and session name (or `ephemeral`). Press `Enter` to submit, `Ctrl+L` to clear the on-screen transcript (persisted session unchanged), and `Ctrl+Q` to quit. `/tree` runs the numbered branch picker (`*` marks the active branch); after branching, the transcript rebuilds from the new active path. Slash commands such as `/provider <id>`, `/model <id>`, `/skills`, `/skill <name|off>`, `/markdown`, `/session`, and `/help` work in both the TUI and the line-based REPL.
+The REPL startup banner includes a `context:` line when any of these files are loaded.
 
 ### Skills
 

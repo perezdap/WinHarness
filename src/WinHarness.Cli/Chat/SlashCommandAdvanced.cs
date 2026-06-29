@@ -7,18 +7,16 @@ namespace WinHarness.Cli.Chat;
 /// </summary>
 internal static class SlashCommandAdvanced
 {
-    public static async ValueTask<SlashCommandResult> TreeAsync(
-        ChatSession session,
-        SlashCommandContext? context)
+    public static ValueTask<SlashCommandResult> TreeAsync(ChatSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
 
         if (!session.SessionManager.IsPersisted)
         {
-            return SlashCommandResult.Handled(
+            return new(SlashCommandResult.Handled(
             [
                 "Branching requires a persisted session. Use --continue or omit --no-session.",
-            ]);
+            ]));
         }
 
         Action<string> onBranch = entryId =>
@@ -27,17 +25,9 @@ internal static class SlashCommandAdvanced
             session.SyncConversationFromSession();
         };
 
-        IReadOnlyList<string> messages;
-        if (context?.TreePickerAsync is not null)
-        {
-            messages = await context.TreePickerAsync(session.SessionManager).ConfigureAwait(false);
-        }
-        else
-        {
-            messages = SessionTreePicker.PickAndBranch(session.SessionManager, onBranch);
-        }
+        IReadOnlyList<string> messages = SessionTreePicker.PickAndBranch(session.SessionManager, onBranch);
 
-        return SlashCommandResult.Handled(messages);
+        return new(SlashCommandResult.Handled(messages));
     }
 
     public static async ValueTask<SlashCommandResult> ForkAsync(

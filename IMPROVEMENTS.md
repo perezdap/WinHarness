@@ -50,8 +50,8 @@ partial failures.
 
 **File:** `src/WinHarness.Cli/Program.cs` (`ChatRepl`)
 
-The TUI has a 10-minute `TurnTimeout`, but the line-based REPL offers no way
-to interrupt a running turn short of Ctrl+C (which kills the process).
+The line-based REPL offers no way to interrupt a running turn short of
+Ctrl+C (which kills the process).
 
 **Recommendation:** Register a `Console.CancelKeyPress` handler that signals a
 `CancellationToken` for the active turn without terminating the process.
@@ -140,7 +140,7 @@ still useful for "what did the model think earlier?" debugging.
 **File:** `src/WinHarness.Cli/Program.cs`
 
 `const string Version = "0.1.0"` but the README describes v0.2 features
-(sessions, compaction, TUI, skills, context files).
+(sessions, compaction, skills, context files).
 
 **Recommendation:** Bump to `"0.2.0"` and keep it in sync with the README
 scope table. Consider reading the version from `AssemblyInfo.cs` or a shared
@@ -237,24 +237,7 @@ Contains the abstract `BuiltinTool` base, all six tool implementations, the
 own file. This makes each tool easier to test in isolation and reduces merge
 conflicts.
 
-### 4.3 `ChatTuiApp.cs` is very large
-
-**File:** `src/WinHarness.Cli/Tui/ChatTuiApp.cs` (~942 lines; was estimated ~600)
-
-Handles window construction, transcript management, markdown rendering,
-streaming, slash commands, session tree picking, and turn lifecycle.
-
-**Recommendation:** Extract the transcript data source and rendering into a
-dedicated `TranscriptController` class. Extract the turn runner into a
-`TuiTurnRunner`. Keep `ChatTuiApp` focused on window layout and event wiring.
-
-**Reviewer note:** This is the highest-impact refactor in section 4 — a
-942-line TUI class is hard to test and hard to merge around. Note that
-`TranscriptDataSource.cs` already exists as a separate file (and is currently
-being modified — see git status), so the extraction may be partially
-underway; verify before duplicating work.
-
-### 4.4 Missing XML documentation on public APIs
+### 4.3 Missing XML documentation on public APIs
 
 Several public interfaces and classes in `WinHarness.Abstractions` have good
 XML docs, but many implementation classes lack them. This is especially

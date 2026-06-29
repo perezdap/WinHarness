@@ -30,15 +30,12 @@ internal static class SlashCommandProcessor
             "/new" => await CreateNewSessionAsync(session, context).ConfigureAwait(false),
             "/resume" => await ResumeSessionAsync(session, context).ConfigureAwait(false),
             "/delete" => await DeleteSessionAsync(session, argument, context).ConfigureAwait(false),
-            "/providers" => SlashCommandResult.Handled(CreateProviderLines(options, session.ProviderId)),
-            "/models" => SlashCommandResult.Handled(CreateModelLines(
-                options,
-                argument.Length > 0 ? argument : session.ProviderId,
-                session.ModelId)),
+            "/providers" => await ListProvidersAsync(options, session, context).ConfigureAwait(false),
+            "/models" => await ListModelsAsync(options, session, argument, context).ConfigureAwait(false),
             "/provider" => await SwitchProviderAsync(options, session, argument, context).ConfigureAwait(false),
             "/model" => await SwitchModelAsync(options, session, argument, context).ConfigureAwait(false),
-            "/skills" => SlashCommandResult.Handled(CreateSkillLines(session)),
-            "/skill" => SelectSkill(session, argument),
+            "/skills" => await ListSkillsAsync(session, context).ConfigureAwait(false),
+            "/skill" => await SelectSkillAsync(session, argument, context).ConfigureAwait(false),
             "/markdown" => ToggleMarkdown(session),
             "/clear" => Clear(session),
             "/tree" => await ExecuteTreeAsync(session, context).ConfigureAwait(false),
@@ -48,14 +45,14 @@ internal static class SlashCommandProcessor
         };
     }
 
-    private static async ValueTask<SlashCommandResult> ExecuteTreeAsync(ChatSession session, SlashCommandContext? context)
+    private static ValueTask<SlashCommandResult> ExecuteTreeAsync(ChatSession session, SlashCommandContext? context)
     {
         if (context is null)
         {
-            return MissingContext("/tree");
+            return new(MissingContext("/tree"));
         }
 
-        return await SlashCommandAdvanced.TreeAsync(session, context).ConfigureAwait(false);
+        return SlashCommandAdvanced.TreeAsync(session);
     }
 
     private static async ValueTask<SlashCommandResult> ExecuteForkAsync(ChatSession session, SlashCommandContext? context)
@@ -216,18 +213,9 @@ internal static class SlashCommandProcessor
 
         SessionDeletionService service = new(context.SessionFactory);
         string? activeSessionPath = session.SessionManager.SessionFilePath;
-        bool isTui = context.TreePickerAsync is not null;
 
         if (string.IsNullOrWhiteSpace(argument))
         {
-            if (isTui)
-            {
-                return SlashCommandResult.Handled([
-                    "Error: Please specify the session ID or path to delete (e.g. `/delete 7a866815`).",
-                    "Interactive deletion is not supported inside the TUI."
-                ]);
-            }
-
             var summaries = await context.SessionFactory.ListAsync(session.WorkspaceRoot, context.CancellationToken).ConfigureAwait(false);
             if (summaries.Count == 0)
             {
@@ -316,11 +304,14 @@ internal static class SlashCommandProcessor
         return lines;
     }
 
-    private static SlashCommandResult SelectSkill(ChatSession session, string argument)
+    private static async ValueTask<SlashCommandResult> SelectSkillAsync(
+        ChatSession session,
+        string argument,
+        SlashCommandContext? context)
     {
         if (argument.Length == 0)
         {
-            return SlashCommandResult.Handled(CreateSkillLines(session));
+            return await ListSkillsAsync(session, context).ConfigureAwait(false);
         }
 
         if (string.Equals(argument, "off", StringComparison.OrdinalIgnoreCase) ||
@@ -345,6 +336,163 @@ internal static class SlashCommandProcessor
     {
         string single = description.ReplaceLineEndings(" ").Trim();
         return single.Length <= 80 ? single : single[..77] + "...";
+    }
+
+    /// <summary>
+    /// Returns true when the console supports interactive prompts (stdin is not redirected).
+    /// </summary>
+    private static bool IsInteractive => !Console.IsInputRedirected;
+
+    private static ValueTask<SlashCommandResult> ListProvidersAsync(
+        WinHarnessOptions options,
+        ChatSession session,
+        SlashCommandContext? context)
+    {
+        if (options.Providers.Count == 0)
+        {
+            return new(SlashCommandResult.Handled(["No providers configured. Run 'winharness config wizard'."]));
+        }
+
+        if (!IsInteractive)
+        {
+            return new(SlashCommandResult.Handled(CreateProviderLines(options, session.ProviderId)));
+        }
+
+        string current = session.ProviderId;
+        SelectionPrompt<string> prompt = new()
+        {
+            Title = "Select a provider (Esc to cancel)"
+        };
+        prompt.PageSize(10)
+              .MoreChoicesText("[grey](move up and down to reveal more providers)[/]")
+              .AddChoices(options.Providers.Select(p =>
+                  $"{(string.Equals(p.Id, current, StringComparison.OrdinalIgnoreCase) ? "*" : " ")} {p.Id} {p.BaseUrl}"));
+
+        string selected = AnsiConsole.Prompt(prompt);
+        string providerId = ExtractFirstToken(selected);
+
+        // If the user re-selected the current provider, no-op.
+        if (string.Equals(providerId, current, StringComparison.OrdinalIgnoreCase))
+        {
+            return new(SlashCommandResult.Handled([$"Already on provider '{providerId}'."]));
+        }
+
+        return SwitchProviderAsync(options, session, providerId, context);
+    }
+
+    private static async ValueTask<SlashCommandResult> ListModelsAsync(
+        WinHarnessOptions options,
+        ChatSession session,
+        string argument,
+        SlashCommandContext? context)
+    {
+        string providerId = argument.Length > 0 ? argument : session.ProviderId;
+        ProviderOptions? provider = FindProvider(options, providerId);
+        if (provider is null)
+        {
+            return SlashCommandResult.Handled([$"Provider '{providerId}' is not configured."]);
+        }
+
+        if (provider.Models.Count == 0)
+        {
+            return SlashCommandResult.Handled([$"No models configured for '{provider.Id}'."]);
+        }
+
+        if (!IsInteractive)
+        {
+            return SlashCommandResult.Handled(CreateModelLines(options, provider.Id, session.ModelId));
+        }
+
+        string current = session.ModelId;
+        SelectionPrompt<string> prompt = new()
+        {
+            Title = $"Select a model for {provider.Id} (Esc to cancel)"
+        };
+        prompt.PageSize(10)
+              .MoreChoicesText("[grey](move up and down to reveal more models)[/]")
+              .AddChoices(provider.Models.Select(m =>
+                  $"{(string.Equals(m.Id, current, StringComparison.OrdinalIgnoreCase) ? "*" : " ")} {m.Id} {m.ProviderModelId}"));
+
+        string selected = AnsiConsole.Prompt(prompt);
+        string modelId = ExtractFirstToken(selected);
+
+        // If the user re-selected the current model, no-op.
+        if (string.Equals(modelId, current, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(provider.Id, session.ProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            return SlashCommandResult.Handled([$"Already on model '{modelId}'."]);
+        }
+
+        // Ensure the provider is active, then switch the model.
+        if (!string.Equals(provider.Id, session.ProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            session.ProviderId = provider.Id;
+            await AppendModelChangeIfPersistedAsync(session, context).ConfigureAwait(false);
+        }
+
+        return await SwitchModelAsync(options, session, modelId, context).ConfigureAwait(false);
+    }
+
+    private static ValueTask<SlashCommandResult> ListSkillsAsync(
+        ChatSession session,
+        SlashCommandContext? context)
+    {
+        _ = context;
+
+        if (session.Skills.Count == 0)
+        {
+            return new(SlashCommandResult.Handled(
+                ["No skills found. Add SKILL.md files under .winharness/skills, .agents/skills, or %APPDATA%/WinHarness/skills."]));
+        }
+
+        if (!IsInteractive)
+        {
+            return new(SlashCommandResult.Handled(CreateSkillLines(session)));
+        }
+
+        SkillDefinition? current = session.SelectedSkill;
+        SelectionPrompt<string> prompt = new()
+        {
+            Title = "Select a skill (Esc to cancel)"
+        };
+        prompt.PageSize(10)
+              .MoreChoicesText("[grey](move up and down to reveal more skills)[/]")
+              .AddChoices(session.Skills.Select(s =>
+                  $"{(ReferenceEquals(s, current) ? "*" : " ")} {s.Name} - {Summarize(s.Description)}"));
+
+        string selected = AnsiConsole.Prompt(prompt);
+        string skillName = ExtractFirstToken(selected);
+
+        SkillDefinition? skill = session.Skills.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, skillName, StringComparison.OrdinalIgnoreCase));
+        if (skill is null)
+        {
+            return new(SlashCommandResult.Handled([$"Skill '{skillName}' not found."]));
+        }
+
+        if (ReferenceEquals(skill, current))
+        {
+            return new(SlashCommandResult.Handled([$"Skill '{skill.Name}' is already active."]));
+        }
+
+        session.SelectedSkill = skill;
+        return new(SlashCommandResult.Handled([$"Skill '{skill.Name}' activated."]));
+    }
+
+    /// <summary>
+    /// Extracts the first whitespace-delimited token from a formatted choice line.
+    /// </summary>
+    private static string ExtractFirstToken(string choice)
+    {
+        // Choices are formatted as "[*] id extra..." — skip the marker and take the id.
+        ReadOnlySpan<char> span = choice.AsSpan().TrimStart();
+        if (span.Length > 0 && span[0] is '*' or ' ')
+        {
+            span = span[1..].TrimStart();
+        }
+
+        int space = span.IndexOf(' ');
+        return space < 0 ? span.ToString() : span[..space].ToString();
     }
 
     private static IReadOnlyList<string> CreateProviderLines(WinHarnessOptions options, string currentProviderId)
@@ -395,7 +543,7 @@ internal static class SlashCommandProcessor
     {
         if (providerId.Length == 0)
         {
-            return SlashCommandResult.Handled(CreateProviderLines(options, session.ProviderId));
+            return await ListProvidersAsync(options, session, context).ConfigureAwait(false);
         }
 
         ProviderOptions? provider = FindProvider(options, providerId);
@@ -428,7 +576,7 @@ internal static class SlashCommandProcessor
 
         if (modelId.Length == 0)
         {
-            return SlashCommandResult.Handled(CreateModelLines(options, session.ProviderId, session.ModelId));
+            return await ListModelsAsync(options, session, argument: session.ProviderId, context).ConfigureAwait(false);
         }
 
         ModelOptions? model = provider.Models.FirstOrDefault(candidate =>

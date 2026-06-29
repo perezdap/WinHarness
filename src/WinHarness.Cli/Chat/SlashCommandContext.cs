@@ -8,5 +8,4 @@ internal sealed record SlashCommandContext(
     IServiceProvider Services,
     SessionManagerFactory SessionFactory,
     IAgentRuntime AgentRuntime,
-    CancellationToken CancellationToken,
-    Func<ISessionManager, ValueTask<IReadOnlyList<string>>>? TreePickerAsync = null);
+    CancellationToken CancellationToken);
