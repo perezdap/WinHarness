@@ -17,15 +17,28 @@ internal sealed class TranscriptDataSource : IListDataSource, IDisposable
 {
     private readonly ObservableCollection<TranscriptRow> _rows;
     private bool _disposed;
+    private int _maxItemLength;
 
     public TranscriptDataSource(ObservableCollection<TranscriptRow> rows)
     {
         _rows = rows;
+        _rows.CollectionChanged += OnCollectionChanged;
+        RecalculateMaxItemLength();
+    }
+
+    private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        RecalculateMaxItemLength();
+    }
+
+    private void RecalculateMaxItemLength()
+    {
+        _maxItemLength = _rows.Count == 0 ? 0 : _rows.Max(static r => r.Text.Length);
     }
 
     public int Count => _rows.Count;
 
-    public int MaxItemLength => _rows.Count == 0 ? 0 : _rows.Max(static r => r.Text.Length);
+    public int MaxItemLength => _maxItemLength;
 
     public bool SuspendCollectionChangedEvent { get; set; }
 
@@ -63,6 +76,11 @@ internal sealed class TranscriptDataSource : IListDataSource, IDisposable
         if (row.Kind == TranscriptRowKind.Content && row.BlockStyle != MarkdownBlockStyle.None)
         {
             baseAttr = MarkdownTuiStyles.ForBlock(row.BlockStyle, baseAttr);
+        }
+
+        if (selected && container.HasFocus)
+        {
+            baseAttr = new Attribute(Color.White, Color.DarkGray);
         }
 
         string text = row.Text;
@@ -138,6 +156,7 @@ internal sealed class TranscriptDataSource : IListDataSource, IDisposable
             return;
         }
 
+        _rows.CollectionChanged -= OnCollectionChanged;
         _disposed = true;
     }
 }

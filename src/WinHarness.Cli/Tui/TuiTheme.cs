@@ -11,8 +11,8 @@ internal static class TuiTheme
     public static readonly Attribute DimText = new(Color.Gray, Color.Black);
     public static readonly Attribute AccentText = new(Color.BrightCyan, Color.Black);
     public static readonly Attribute RoleLabel = new(Color.BrightBlue, Color.Black);
-    public static readonly Attribute UserText = new(Color.White, Color.DarkGray);
-    public static readonly Attribute UserRoleLabel = new(Color.BrightCyan, Color.DarkGray);
+    public static readonly Attribute UserText = new(Color.White, Color.Black);
+    public static readonly Attribute UserRoleLabel = new(Color.BrightCyan, Color.Black);
     public static readonly Attribute SystemText = new(Color.BrightGreen, Color.Black);
     public static readonly Attribute SystemRoleLabel = new(Color.BrightGreen, Color.Black);
     public static readonly Attribute AssistantRoleLabel = new(Color.BrightBlue, Color.Black);
