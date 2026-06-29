@@ -1037,6 +1037,51 @@ internal static class ChatRepl
             writer = new AssistantStreamWriter();
         }
 
+        // Renders a persistent, non-overwriting line for a tool activity event
+        // so the user sees a running log of every tool call in the scrollback.
+        void RenderToolActivityLine(ToolActivityInfo info)
+        {
+            string name = Markup.Escape(info.ToolName);
+
+            switch (info.Phase)
+            {
+                case ToolActivityPhase.Started:
+                    AnsiConsole.MarkupLine($"[dim]⠋[/] [bold]{name}[/]");
+                    break;
+
+                case ToolActivityPhase.Completed:
+                {
+                    string icon = info.Succeeded == false ? "[red]✗[/]" : "[green]✓[/]";
+                    string duration = FormatDuration(info.Duration);
+                    AnsiConsole.MarkupLine($"{icon} [bold]{name}[/] [dim]({duration})[/]");
+                    break;
+                }
+
+                case ToolActivityPhase.Failed:
+                {
+                    string duration = FormatDuration(info.Duration);
+                    string exc = info.ExceptionTypeName is null
+                        ? ""
+                        : $" [red]{Markup.Escape(info.ExceptionTypeName)}[/]";
+                    AnsiConsole.MarkupLine($"[red]✗[/] [bold]{name}[/] [dim]({duration})[/]{exc}");
+                    break;
+                }
+            }
+        }
+
+        static string FormatDuration(TimeSpan? duration)
+        {
+            if (duration is null)
+            {
+                return "";
+            }
+
+            double ms = duration.Value.TotalMilliseconds;
+            return ms >= 1000
+                ? ms.ToString("F0", CultureInfo.InvariantCulture) + " ms"
+                : ms.ToString("F0", CultureInfo.InvariantCulture) + " ms";
+        }
+
         if (interactive)
         {
             thinking.Start();
@@ -1058,12 +1103,26 @@ internal static class ChatRepl
                     case AgentEventKind.ToolActivity:
                         if (interactive)
                         {
-                            // A tool runs after some assistant text: close the current
-                            // segment (markdown render or newline) and resume the
-                            // spinner for the tool.
+                            // Close any in-progress assistant text segment, then
+                            // render a persistent per-tool line that stays in the
+                            // scrollback (like Claude Code / Codex do).
                             await FinalizeSegmentAsync().ConfigureAwait(false);
+                            await thinking.StopAsync().ConfigureAwait(false);
+
+                            if (agentEvent.ToolActivity is { } info)
+                            {
+                                RenderToolActivityLine(info);
+                            }
+                            else
+                            {
+                                // Fallback for events without structured payload.
+                                AnsiConsole.MarkupLine("[dim]" + Markup.Escape(agentEvent.Message) + "[/]");
+                            }
+
+                            // Resume the spinner on a fresh line for the next
+                            // operation (next tool, or assistant text).
+                            thinking.SetLabel("thinking");
                             thinking.Start();
-                            thinking.SetLabel(agentEvent.Message);
                         }
 
                         break;

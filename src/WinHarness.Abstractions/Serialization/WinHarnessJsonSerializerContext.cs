@@ -32,6 +32,8 @@ namespace WinHarness.Serialization;
 [JsonSerializable(typeof(ProjectContext))]
 [JsonSerializable(typeof(AgentRunRequest))]
 [JsonSerializable(typeof(AgentEvent))]
+[JsonSerializable(typeof(ToolActivityInfo))]
+[JsonSerializable(typeof(ToolActivityPhase))]
 [JsonSerializable(typeof(TurnArtifacts))]
 [JsonSerializable(typeof(SessionHeader))]
 [JsonSerializable(typeof(SessionEntry))]

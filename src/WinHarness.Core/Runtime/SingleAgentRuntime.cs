@@ -449,18 +449,36 @@ Command execution rules:
 
         public void ToolStarted(string toolName)
         {
-            _events.Enqueue(new AgentEvent(AgentEventKind.ToolActivity, $"tool started: {toolName}"));
+            _events.Enqueue(new AgentEvent(
+                AgentEventKind.ToolActivity,
+                $"tool started: {toolName}",
+                ToolActivity: new ToolActivityInfo(toolName, ToolActivityPhase.Started)));
         }
 
         public void ToolCompleted(string toolName, ToolResult result, TimeSpan duration)
         {
             string status = result.Succeeded ? "completed" : "failed";
-            _events.Enqueue(new AgentEvent(AgentEventKind.ToolActivity, $"tool {status}: {toolName} ({duration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)} ms)"));
+            _events.Enqueue(new AgentEvent(
+                AgentEventKind.ToolActivity,
+                $"tool {status}: {toolName} ({duration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)} ms)",
+                ToolActivity: new ToolActivityInfo(
+                    toolName,
+                    ToolActivityPhase.Completed,
+                    Succeeded: result.Succeeded,
+                    Duration: duration)));
         }
 
         public void ToolFailed(string toolName, Exception exception, TimeSpan duration)
         {
-            _events.Enqueue(new AgentEvent(AgentEventKind.ToolActivity, $"tool exception: {toolName} ({duration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)} ms) {exception.GetType().Name}"));
+            _events.Enqueue(new AgentEvent(
+                AgentEventKind.ToolActivity,
+                $"tool exception: {toolName} ({duration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)} ms) {exception.GetType().Name}",
+                ToolActivity: new ToolActivityInfo(
+                    toolName,
+                    ToolActivityPhase.Failed,
+                    Succeeded: false,
+                    Duration: duration,
+                    ExceptionTypeName: exception.GetType().Name)));
         }
 
         public IReadOnlyList<AgentEvent> Drain()

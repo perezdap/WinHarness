@@ -31,8 +31,46 @@ public sealed record AgentRunRequest(
 /// A runtime event emitted during an agent run. The terminal
 /// <see cref="AgentEventKind.Completed"/> event carries
 /// <see cref="TurnArtifacts"/> for the caller to append to its conversation.
+/// <see cref="ToolActivity"/> carries structured tool details for the caller
+/// to render a persistent per-tool line.
 /// </summary>
-public sealed record AgentEvent(AgentEventKind Kind, string Message, TurnArtifacts? TurnArtifacts = null);
+public sealed record AgentEvent(
+    AgentEventKind Kind,
+    string Message,
+    TurnArtifacts? TurnArtifacts = null,
+    ToolActivityInfo? ToolActivity = null);
+
+/// <summary>
+/// Structured tool-activity details carried by an <see cref="AgentEvent"/>
+/// whose <see cref="AgentEvent.Kind"/> is <see cref="AgentEventKind.ToolActivity"/>.
+/// </summary>
+public sealed record ToolActivityInfo(
+    string ToolName,
+    ToolActivityPhase Phase,
+    bool? Succeeded = null,
+    TimeSpan? Duration = null,
+    string? ExceptionTypeName = null);
+
+/// <summary>
+/// The phase of a tool activity event.
+/// </summary>
+public enum ToolActivityPhase
+{
+    /// <summary>
+    /// The tool has started running.
+    /// </summary>
+    Started,
+
+    /// <summary>
+    /// The tool completed (success or failure).
+    /// </summary>
+    Completed,
+
+    /// <summary>
+    /// The tool threw an exception.
+    /// </summary>
+    Failed,
+}
 
 /// <summary>
 /// Agent runtime event kinds.
