@@ -46,16 +46,21 @@ public sealed class ToolAIFunctionAdapter : AIFunction
         _tool = tool;
         _diagnosticSink = diagnosticSink;
         _activitySink = activitySink;
+        _sanitizedName = SanitizeName(tool.Name);
+        _sanitizedSchema = ToolSchemaSanitizer.Sanitize(tool.InputSchema);
     }
 
+    private readonly string _sanitizedName;
+    private readonly JsonElement _sanitizedSchema;
+
     /// <inheritdoc />
-    public override string Name => _tool.Name;
+    public override string Name => _sanitizedName;
 
     /// <inheritdoc />
     public override string Description => _tool.Description;
 
     /// <inheritdoc />
-    public override JsonElement JsonSchema => _tool.InputSchema;
+    public override JsonElement JsonSchema => _sanitizedSchema;
 
     /// <inheritdoc />
     protected override async ValueTask<object?> InvokeCoreAsync(
@@ -112,6 +117,26 @@ public sealed class ToolAIFunctionAdapter : AIFunction
                 CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+    }
+
+    private static string SanitizeName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return "tool";
+        }
+
+        Span<char> buffer = name.Length <= 128 ? stackalloc char[name.Length] : new char[name.Length];
+        int written = 0;
+        foreach (char ch in name)
+        {
+            buffer[written++] = char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-' ? ch : '_';
+        }
+
+        string sanitized = new(buffer[..written]);
+        return char.IsAsciiLetterOrDigit(sanitized[0]) || sanitized[0] is '_'
+            ? sanitized
+            : "tool_" + sanitized;
     }
 
     private static JsonElement ConvertArguments(AIFunctionArguments arguments)
@@ -185,6 +210,142 @@ public sealed class ToolAIFunctionAdapter : AIFunction
         }
 
         return properties;
+    }
+
+    private static class ToolSchemaSanitizer
+    {
+        public static JsonElement Sanitize(JsonElement schema)
+        {
+            ArrayBufferWriter<byte> buffer = new();
+            using (Utf8JsonWriter writer = new(buffer))
+            {
+                WriteSchemaNode(writer, schema);
+            }
+
+            using JsonDocument document = JsonDocument.Parse(buffer.WrittenMemory);
+            return document.RootElement.Clone();
+        }
+
+        // Writes a single JSON-Schema node (an object describing a type, or a
+        // composition/array of such). Normalizes the node so Gemini's
+        // OpenAI-compatible tool bridge accepts it.
+        private static void WriteSchemaNode(Utf8JsonWriter writer, JsonElement node)
+        {
+            if (node.ValueKind != JsonValueKind.Object)
+            {
+                node.WriteTo(writer);
+                return;
+            }
+
+            bool hasType = false;
+            bool hasProperties = false;
+            bool hasItems = false;
+            bool hasRef = false;
+            bool hasCompositionKeyword = false;
+
+            foreach (JsonProperty property in node.EnumerateObject())
+            {
+                hasType |= property.NameEquals("type");
+                hasProperties |= property.NameEquals("properties");
+                hasItems |= property.NameEquals("items");
+                hasRef |= property.NameEquals("$ref");
+                hasCompositionKeyword |= property.NameEquals("anyOf") || property.NameEquals("oneOf") || property.NameEquals("allOf");
+            }
+
+            writer.WriteStartObject();
+            foreach (JsonProperty property in node.EnumerateObject())
+            {
+                // Gemini rejects non-string enums (e.g. boolean-only `enum: [true]`),
+                // sometimes by returning an empty 200 stream. Drop those entirely.
+                if (property.NameEquals("enum") && !IsStringEnum(property.Value))
+                {
+                    continue;
+                }
+
+                writer.WritePropertyName(property.Name);
+
+                if (property.NameEquals("properties"))
+                {
+                    WritePropertiesMap(writer, property.Value);
+                }
+                else if (property.NameEquals("items"))
+                {
+                    WriteSchemaNode(writer, property.Value);
+                }
+                else if (property.NameEquals("anyOf") || property.NameEquals("oneOf") || property.NameEquals("allOf"))
+                {
+                    WriteSchemaArray(writer, property.Value);
+                }
+                else
+                {
+                    property.Value.WriteTo(writer);
+                }
+            }
+
+            // Some MCP tools expose untyped property definitions (a `value` field with
+            // only a description). Gemini requires a concrete type, so default to
+            // string when nothing else constrains the node.
+            if (!hasType && !hasProperties && !hasItems && !hasRef && !hasCompositionKeyword)
+            {
+                writer.WriteString("type", "string");
+            }
+
+            writer.WriteEndObject();
+        }
+
+        // Writes a JSON-Schema `properties` map: each value is itself a schema node.
+        private static void WritePropertiesMap(Utf8JsonWriter writer, JsonElement propertiesMap)
+        {
+            if (propertiesMap.ValueKind != JsonValueKind.Object)
+            {
+                propertiesMap.WriteTo(writer);
+                return;
+            }
+
+            writer.WriteStartObject();
+            foreach (JsonProperty property in propertiesMap.EnumerateObject())
+            {
+                writer.WritePropertyName(property.Name);
+                WriteSchemaNode(writer, property.Value);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        private static void WriteSchemaArray(Utf8JsonWriter writer, JsonElement array)
+        {
+            if (array.ValueKind != JsonValueKind.Array)
+            {
+                array.WriteTo(writer);
+                return;
+            }
+
+            writer.WriteStartArray();
+            foreach (JsonElement item in array.EnumerateArray())
+            {
+                WriteSchemaNode(writer, item);
+            }
+
+            writer.WriteEndArray();
+        }
+
+        private static bool IsStringEnum(JsonElement value)
+        {
+            if (value.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            foreach (JsonElement item in value.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
     }
 
     private sealed class NullDiagnosticSink : IDiagnosticSink

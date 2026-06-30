@@ -110,7 +110,8 @@ public sealed class ProviderConfigurator
         bool makeDefault,
         int? contextWindow,
         List<string>? supportedReasoningEfforts,
-        CancellationToken cancellationToken)
+        string? reasoningEffort = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
@@ -133,7 +134,8 @@ public sealed class ProviderConfigurator
                 ProviderModelId = providerModelId,
                 Capabilities = capabilities,
                 ContextWindow = contextWindow,
-                SupportedReasoningEfforts = supportedReasoningEfforts
+                SupportedReasoningEfforts = supportedReasoningEfforts,
+                ReasoningEffort = reasoningEffort
             };
             provider.Models.Add(model);
         }
@@ -143,6 +145,7 @@ public sealed class ProviderConfigurator
             existing.Capabilities = capabilities;
             existing.ContextWindow = contextWindow;
             existing.SupportedReasoningEfforts = supportedReasoningEfforts;
+            existing.ReasoningEffort = reasoningEffort;
             model = existing;
         }
 

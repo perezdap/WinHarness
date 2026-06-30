@@ -185,7 +185,7 @@ internal sealed class ProviderWizard
                 makeDefault: false,
                 catalogModel?.ContextWindow,
                 catalogModel?.SupportedReasoningEfforts,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             AnsiConsole.MarkupLine($"[green]✓[/] Model [bold]{Markup.Escape(alias)}[/] [dim]{Markup.Escape(providerModelId)}[/] saved.");
         }
@@ -243,7 +243,7 @@ internal sealed class ProviderWizard
             makeDefault: false,
             contextWindow: null,
             supportedReasoningEfforts: null,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         AnsiConsole.MarkupLine($"[green]✓[/] Model [bold]{Markup.Escape(modelId)}[/] saved.");
     }

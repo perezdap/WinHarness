@@ -185,13 +185,14 @@ app.Add("models add", async (
     bool reasoning = false,
     int? contextWindow = null,
     string[]? reasoningEfforts = null,
+    string? reasoningEffort = null,
     bool setDefault = false,
     CancellationToken cancellationToken = default) =>
 {
     ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
     ProviderCapabilities capabilities = new(streaming, toolCalling, vision, promptCaching, structuredOutput, reasoning);
     System.Collections.Generic.List<string>? efforts = reasoningEfforts is null ? null : [.. reasoningEfforts];
-    ModelOptions model = await configurator.AddModelAsync(providerId, id, providerModelId, capabilities, setDefault, contextWindow, efforts, cancellationToken).ConfigureAwait(false);
+    ModelOptions model = await configurator.AddModelAsync(providerId, id, providerModelId, capabilities, setDefault, contextWindow, efforts, reasoningEffort, cancellationToken).ConfigureAwait(false);
     Console.WriteLine($"Model '{model.Id}' ({model.ProviderModelId}) saved under '{providerId}'.");
 });
 
@@ -956,8 +957,9 @@ internal static class ChatRepl
     private static void WriteBanner(ChatSession session)
     {
         AnsiConsole.Write(new Rule("[bold]WinHarness chat[/]").LeftJustified());
+        string effort = session.ReasoningEffort ?? "default";
         AnsiConsole.MarkupLine(
-            $"[dim]provider[/] [bold]{Markup.Escape(session.ProviderId)}[/]  [dim]model[/] [bold]{Markup.Escape(session.ModelId)}[/]  [dim]markdown[/] {(session.RenderMarkdown ? "[green]on[/]" : "[grey]off[/]")}");
+            $"[dim]provider[/] [bold]{Markup.Escape(session.ProviderId)}[/]  [dim]model[/] [bold]{Markup.Escape(session.ModelId)}[/]  [dim]effort[/] [bold]{Markup.Escape(effort)}[/]  [dim]markdown[/] {(session.RenderMarkdown ? "[green]on[/]" : "[grey]off[/]")}");
 
         if (session.IsEphemeral)
         {
@@ -1041,6 +1043,12 @@ internal static class ChatRepl
         bool segmentActive = false;
         bool rawLabelWritten = false;
         bool plainLabelWritten = false;
+
+        // Tracks whether the turn produced any assistant text or ended in a failure,
+        // so an empty provider completion (stream closed with no content) can be
+        // surfaced to the user instead of silently returning to the prompt.
+        bool producedAssistantText = false;
+        bool turnFailed = false;
 
         // Ends the current assistant text segment. In markdown mode the spinner is
         // stopped and the buffered segment is rendered as formatted markdown; in raw
@@ -1165,6 +1173,7 @@ internal static class ChatRepl
                         break;
 
                     case AgentEventKind.Failed:
+                        turnFailed = true;
                         if (interactive)
                         {
                             await FinalizeSegmentAsync().ConfigureAwait(false);
@@ -1185,6 +1194,10 @@ internal static class ChatRepl
 
                     case AgentEventKind.AssistantDelta:
                         assistantBuffer.Append(agentEvent.Message);
+                        if (!string.IsNullOrEmpty(agentEvent.Message))
+                        {
+                            producedAssistantText = true;
+                        }
 
                         if (interactive)
                         {
@@ -1230,6 +1243,15 @@ internal static class ChatRepl
         if (interactive)
         {
             await FinalizeSegmentAsync().ConfigureAwait(false);
+
+            // The provider can close the stream with no text and no failure (e.g. an
+            // empty completion or a response that was entirely reasoning tokens). Without
+            // a notice the turn looks like a silent no-op, so tell the user explicitly.
+            if (!producedAssistantText && !turnFailed)
+            {
+                AnsiConsole.MarkupLine("[yellow]The model returned an empty response. Try resending, or switch models with /model.[/]");
+            }
+
             return;
         }
 
@@ -1245,6 +1267,11 @@ internal static class ChatRepl
         else if (plainLabelWritten)
         {
             Console.WriteLine();
+        }
+
+        if (!producedAssistantText && !turnFailed)
+        {
+            Console.Error.WriteLine("The model returned an empty response.");
         }
     }
 

@@ -40,6 +40,7 @@ internal static class SlashCommandProcessor
             "/clear" => Clear(session),
             "/tree" => await ExecuteTreeAsync(session, context).ConfigureAwait(false),
             "/fork" => await ExecuteForkAsync(session, context).ConfigureAwait(false),
+            "/effort" => SetEffort(session, argument),
             "/compact" => await ExecuteCompactAsync(session, argument, context).ConfigureAwait(false),
             _ => SlashCommandResult.Handled([$"Unknown command '{command}'. Try /help."])
         };
@@ -100,6 +101,7 @@ internal static class SlashCommandProcessor
             "/markdown             Toggle markdown rendering",
             "/tree                 Navigate session branch",
             "/fork                 Copy active branch to a new session file",
+            "/effort [level]        Show or set reasoning effort (none/low/medium/high/extra-high)",
             "/compact [text]       Summarize older context and keep recent messages",
             "/clear                Clear the in-memory conversation view",
             "/exit, /quit          Leave the session"
@@ -712,6 +714,25 @@ internal static class SlashCommandProcessor
             session.ProviderId,
             session.ModelId,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static SlashCommandResult SetEffort(ChatSession session, string argument)
+    {
+        if (string.IsNullOrWhiteSpace(argument))
+        {
+            string current = session.ReasoningEffort ?? "default (provider default or model default)";
+            return SlashCommandResult.Handled([$"Current reasoning effort: {current}"]);
+        }
+
+        string normalized = argument.Trim().ToLowerInvariant();
+        if (normalized is "none" or "low" or "medium" or "high" or "extra-high" or "extrahigh" or "default")
+        {
+            session.ReasoningEffort = normalized == "default" ? null : normalized;
+            string setMsg = normalized == "default" ? "Reset reasoning effort to default." : $"Reasoning effort set to '{normalized}'.";
+            return SlashCommandResult.Handled([setMsg]);
+        }
+
+        return SlashCommandResult.Handled(["Unknown effort level. Valid values: none, low, medium, high, extra-high, default"]);
     }
 
     private static SlashCommandResult ToggleMarkdown(ChatSession session)
