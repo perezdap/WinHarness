@@ -104,6 +104,75 @@ public sealed class SingleAgentRuntimeTests
     }
 
     [TestMethod]
+    public async Task StopsLowNoveltyRepetitionLoopUnderSizeCap()
+    {
+        // Mirrors the observed failure: the model restates the same intent with slight
+        // rewording and re-emits empty PowerShell code boxes of varying width. Stays far
+        // under the 256 KB byte cap, so only the novelty detector can catch it.
+        List<string> updates = [];
+        for (int cycle = 0; cycle < 12; cycle++)
+        {
+            int width = 60 + cycle; // vary box width so borders are not byte-identical
+            updates.Add($"Let me set session.ReasoningEffort in RunTurnAsync (attempt {cycle % 2}):\n");
+            updates.Add("╭─code" + new string('─', width) + "╮\n");
+            updates.Add("│ " + new string(' ', width) + " │\n");
+            updates.Add("│ Let me set the effort after creating the session: ```pwsh" + new string(' ', cycle) + " │\n");
+            updates.Add("╰" + new string('─', width + 4) + "╯\n");
+            updates.Add("\n");
+        }
+
+        RecordingDiagnosticSink diagnostics = new();
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory(updates),
+            [],
+            diagnostics,
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        List<AgentEvent> events = [];
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           CreateRequest("prompt"),
+                           CancellationToken.None))
+        {
+            events.Add(agentEvent);
+        }
+
+        AgentEvent failed = events.Single(static agentEvent => agentEvent.Kind == AgentEventKind.Failed);
+        StringAssert.Contains(failed.Message, "repeating low-novelty output");
+        AgentEvent completed = events.Single(static agentEvent => agentEvent.Kind == AgentEventKind.Completed);
+        Assert.AreEqual("partial", completed.Message);
+        Assert.IsTrue(completed.TurnArtifacts!.Messages[1].Text.Length < 256 * 1024);
+        Assert.IsTrue(diagnostics.Records.Any(static record => record.EventName == "provider.failed"));
+        Assert.IsFalse(diagnostics.Records.Any(static record => record.EventName == "provider.completed"));
+    }
+
+    [TestMethod]
+    public async Task DoesNotFlagNormalVariedOutputAsRepetitionLoop()
+    {
+        // A long but genuinely varied response must stream to completion untouched.
+        List<string> updates = [];
+        for (int line = 0; line < 80; line++)
+        {
+            updates.Add($"Step {line}: do a distinct thing involving widget {line} and value {line * 7}.\n");
+        }
+
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory(updates),
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        List<AgentEvent> events = [];
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           CreateRequest("prompt"),
+                           CancellationToken.None))
+        {
+            events.Add(agentEvent);
+        }
+
+        Assert.IsFalse(events.Any(static agentEvent => agentEvent.Kind == AgentEventKind.Failed));
+        AgentEvent completed = events.Single(static agentEvent => agentEvent.Kind == AgentEventKind.Completed);
+        Assert.AreEqual("completed", completed.Message);
+    }
+
+    [TestMethod]
     public async Task HonorsCancellationDuringStreaming()
     {
         SingleAgentRuntime runtime = new(

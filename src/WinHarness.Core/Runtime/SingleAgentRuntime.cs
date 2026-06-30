@@ -39,6 +39,13 @@ Command execution rules:
     private const int MaxAssistantCharactersPerTurn = 256 * 1024;
     private const int MaxStreamingUpdatesPerTurn = 100_000;
 
+    // Catches degenerate repetition loops that stay under the size cap: a model that
+    // restates the same paragraph (slightly reworded) and re-emits empty code fences.
+    // Once a sliding window of recent normalized lines is full, an extremely low count
+    // of distinct lines means the response is stuck repeating itself.
+    private const int OutputLoopWindowLines = 32;
+    private const int OutputLoopMaxDistinctLines = 12;
+
     private static readonly IDiagnosticSink NoDiagnostics = new NullDiagnosticSink();
 
     private readonly IContextFileLoader? _contextFileLoader;
@@ -115,8 +122,9 @@ Command execution rules:
             cancellationToken).ConfigureAwait(false);
 
         RuntimeToolActivitySink toolActivitySink = new();
-        ChatOptions? options = await CreateChatOptionsAsync(toolActivitySink, cancellationToken).ConfigureAwait(false);
+        ChatOptions? options = await CreateChatOptionsAsync(toolActivitySink, request.ReasoningEffort, cancellationToken).ConfigureAwait(false);
         StringBuilder assistantText = new();
+        OutputLoopDetector loopDetector = new(OutputLoopWindowLines, OutputLoopMaxDistinctLines);
 
         await using IAsyncEnumerator<ChatResponseUpdate> updates = client.GetStreamingResponseAsync(
                 messages,
@@ -228,6 +236,29 @@ Command execution rules:
                 }
 
                 assistantText.Append(text);
+                if (loopDetector.Observe(text))
+                {
+                    string message = "Response appears to be repeating low-novelty output and was stopped to prevent a runaway loop.";
+                    await WriteProviderDiagnosticAsync(
+                        "provider.failed",
+                        provider,
+                        stopwatch,
+                        CancellationToken.None,
+                        new InvalidOperationException(message)).ConfigureAwait(false);
+                    yield return new AgentEvent(AgentEventKind.Failed, message);
+
+                    ConversationMessage failedUserMessage = request.Conversation.Messages[^1];
+                    yield return new AgentEvent(
+                        AgentEventKind.Completed,
+                        "partial",
+                        new TurnArtifacts(
+                        [
+                            failedUserMessage,
+                            ConversationMessage.FromText(ConversationRole.Assistant, assistantText.ToString())
+                        ]));
+                    yield break;
+                }
+
                 yield return new AgentEvent(AgentEventKind.AssistantDelta, text);
             }
         }
@@ -431,6 +462,7 @@ Command execution rules:
 
     private async ValueTask<ChatOptions?> CreateChatOptionsAsync(
         IToolActivitySink activitySink,
+        string? reasoningEffort,
         CancellationToken cancellationToken)
     {
         List<AITool> tools = [];
@@ -450,7 +482,43 @@ Command execution rules:
             }
         }
 
-        return tools.Count == 0 ? null : new ChatOptions { Tools = tools };
+        ReasoningOptions? reasoning = ParseReasoningEffort(reasoningEffort);
+        if (tools.Count == 0 && reasoning is null)
+        {
+            return null;
+        }
+
+        ChatOptions options = new();
+        if (tools.Count > 0)
+        {
+            options.Tools = tools;
+        }
+
+        if (reasoning is not null)
+        {
+            options.Reasoning = reasoning;
+        }
+
+        return options;
+    }
+
+    private static ReasoningOptions? ParseReasoningEffort(string? effort)
+    {
+        if (string.IsNullOrWhiteSpace(effort))
+        {
+            return null;
+        }
+
+        ReasoningEffort parsed = effort.Trim().ToLowerInvariant() switch
+        {
+            "none" => ReasoningEffort.None,
+            "low" => ReasoningEffort.Low,
+            "medium" => ReasoningEffort.Medium,
+            "high" => ReasoningEffort.High,
+            "extra-high" or "extrahigh" => ReasoningEffort.ExtraHigh,
+            _ => throw new InvalidOperationException($"Unknown reasoning effort '{effort}'. Valid values: none, low, medium, high, extra-high.")
+        };
+        return new ReasoningOptions { Effort = parsed };
     }
 
     private async ValueTask WriteProviderDiagnosticAsync(
@@ -490,6 +558,125 @@ Command execution rules:
                 $"{provider.ProviderId}/{provider.ModelId}",
                 properties),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed class OutputLoopDetector
+    {
+        private readonly Dictionary<string, int> _lineCounts = new(StringComparer.Ordinal);
+        private readonly Queue<string> _recentLines = [];
+        private readonly StringBuilder _pendingLine = new();
+        private readonly int _windowLines;
+        private readonly int _maxDistinctLines;
+
+        public OutputLoopDetector(int windowLines, int maxDistinctLines)
+        {
+            _windowLines = windowLines;
+            _maxDistinctLines = maxDistinctLines;
+        }
+
+        public bool Observe(string text)
+        {
+            foreach (char ch in text)
+            {
+                if (ch == '\n')
+                {
+                    if (AddLine(_pendingLine.ToString()))
+                    {
+                        _pendingLine.Clear();
+                        return true;
+                    }
+
+                    _pendingLine.Clear();
+                    continue;
+                }
+
+                if (ch != '\r')
+                {
+                    _pendingLine.Append(ch);
+                }
+            }
+
+            return false;
+        }
+
+        private bool AddLine(string line)
+        {
+            string normalized = NormalizeLine(line);
+            _recentLines.Enqueue(normalized);
+            _lineCounts[normalized] = _lineCounts.GetValueOrDefault(normalized) + 1;
+
+            if (_recentLines.Count > _windowLines)
+            {
+                string removed = _recentLines.Dequeue();
+                int count = _lineCounts[removed] - 1;
+                if (count == 0)
+                {
+                    _lineCounts.Remove(removed);
+                }
+                else
+                {
+                    _lineCounts[removed] = count;
+                }
+            }
+
+            return _recentLines.Count == _windowLines && _lineCounts.Count <= _maxDistinctLines;
+        }
+
+        private static string NormalizeLine(string line)
+        {
+            string trimmed = NormalizeWhitespace(line.Trim());
+            if (trimmed.Length == 0)
+            {
+                return "<blank>";
+            }
+
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                return "<fence>";
+            }
+
+            if (trimmed.Contains('╭', StringComparison.Ordinal) && trimmed.Contains('╮', StringComparison.Ordinal))
+            {
+                return "<box-top>";
+            }
+
+            if (trimmed.Contains('╰', StringComparison.Ordinal) && trimmed.Contains('╯', StringComparison.Ordinal))
+            {
+                return "<box-bottom>";
+            }
+
+            if (trimmed.StartsWith('│') && trimmed.EndsWith('│'))
+            {
+                string inner = NormalizeWhitespace(trimmed.Trim('│', ' ').Trim());
+                return inner.Length == 0 ? "<box-empty>" : "<box-content>:" + inner;
+            }
+
+            return trimmed;
+        }
+
+        private static string NormalizeWhitespace(string value)
+        {
+            StringBuilder builder = new(value.Length);
+            bool previousWasWhitespace = false;
+            foreach (char ch in value)
+            {
+                if (char.IsWhiteSpace(ch))
+                {
+                    if (!previousWasWhitespace)
+                    {
+                        builder.Append(' ');
+                        previousWasWhitespace = true;
+                    }
+
+                    continue;
+                }
+
+                builder.Append(ch);
+                previousWasWhitespace = false;
+            }
+
+            return builder.ToString().Trim();
+        }
     }
 
     private sealed class RuntimeToolActivitySink : IToolActivitySink

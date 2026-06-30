@@ -56,6 +56,8 @@ internal sealed class ChatSession
 
     public bool RenderMarkdown { get; set; }
 
+    public string? ReasoningEffort { get; set; }
+
     public IReadOnlyList<SkillDefinition> Skills { get; }
 
     public SkillDefinition? SelectedSkill { get; set; }

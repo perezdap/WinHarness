@@ -25,7 +25,8 @@ public sealed record AgentRunRequest(
     string ModelId,
     ConversationState Conversation,
     string WorkspaceRoot = "",
-    ProjectContext? ProjectContext = null);
+    ProjectContext? ProjectContext = null,
+    string? ReasoningEffort = null);
 
 /// <summary>
 /// A runtime event emitted during an agent run. The terminal

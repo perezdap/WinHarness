@@ -88,6 +88,13 @@ public sealed class ModelOptions
     /// Gets or sets the reasoning effort levels supported by this model (e.g. "low", "medium", "high").
     /// </summary>
     public System.Collections.Generic.List<string>? SupportedReasoningEfforts { get; set; }
+
+    /// <summary>
+    /// Gets or sets the default reasoning effort to send when this model is used
+    /// (e.g. "low", "medium", "high"). When null, no effort is sent and the
+    /// provider's default applies.
+    /// </summary>
+    public string? ReasoningEffort { get; set; }
 }
 
 /// <summary>

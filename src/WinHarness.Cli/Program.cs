@@ -205,6 +205,7 @@ app.Add("chat", async (
     bool resume = false,
     string? session = null,
     string? name = null,
+    string? reasoningEffort = null,
     CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
@@ -233,6 +234,7 @@ app.Add("chat", async (
                 resolvedModelId,
                 effectiveRenderMarkdown,
                 bootstrapRequest,
+                reasoningEffort,
                 cancellationToken)
             .ConfigureAwait(false);
         return;
@@ -245,6 +247,7 @@ app.Add("chat", async (
         prompt,
         effectiveRenderMarkdown,
         bootstrapRequest,
+        reasoningEffort,
         cancellationToken).ConfigureAwait(false);
 });
 
@@ -860,6 +863,7 @@ internal static class ChatRepl
         string modelId,
         bool renderMarkdown,
         ChatSessionBootstrapRequest bootstrapRequest,
+        string? reasoningEffort,
         CancellationToken cancellationToken)
     {
         WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
@@ -871,6 +875,7 @@ internal static class ChatRepl
             bootstrapRequest,
             cancellationToken).ConfigureAwait(false);
 
+        session.ReasoningEffort = reasoningEffort;
         WriteBanner(session);
 
         SlashCommandContext slashContext = new(
@@ -990,6 +995,7 @@ internal static class ChatRepl
         string prompt,
         bool renderMarkdown,
         ChatSessionBootstrapRequest bootstrapRequest,
+        string? reasoningEffort,
         CancellationToken cancellationToken)
     {
         ChatSession session = await CreateSessionAsync(
@@ -999,6 +1005,7 @@ internal static class ChatRepl
             renderMarkdown,
             bootstrapRequest,
             cancellationToken).ConfigureAwait(false);
+        session.ReasoningEffort = reasoningEffort;
         await RunTurnAsync(
             services,
             session,
@@ -1124,7 +1131,8 @@ internal static class ChatRepl
                                    session.ModelId,
                                    runConversation,
                                    session.WorkspaceRoot,
-                                   session.ProjectContext),
+                                   session.ProjectContext,
+                                   session.ReasoningEffort),
                                cancellationToken).ConfigureAwait(false))
             {
                 switch (agentEvent.Kind)
