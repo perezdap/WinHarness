@@ -44,8 +44,58 @@ internal static class SlashCommandProcessor
             "/compact" => await ExecuteCompactAsync(session, argument, context).ConfigureAwait(false),
             "/usage" => ExecuteUsage(options, session),
             "/trust" => ExecuteTrust(session, argument),
+            "/templates" => ListTemplates(session),
+            "/t" => ExpandTemplate(session, argument),
             _ => SlashCommandResult.Handled([$"Unknown command '{command}'. Try /help."])
         };
+    }
+
+    private static SlashCommandResult ListTemplates(ChatSession session)
+    {
+        if (session.Templates.Count == 0)
+        {
+            return SlashCommandResult.Handled(
+                ["No prompt templates found. Add .md files under .winharness/prompts, .agents/prompts, or the global prompts directory."]);
+        }
+
+        List<string> lines = ["Prompt templates:"];
+        foreach (PromptTemplate template in session.Templates)
+        {
+            lines.Add($"  {template.Name}  {template.Description}");
+        }
+
+        lines.Add("Usage: /t <name> [key=value ...] [free text for {{input}}]");
+        return SlashCommandResult.Handled(lines);
+    }
+
+    private static SlashCommandResult ExpandTemplate(ChatSession session, string argument)
+    {
+        string trimmed = argument.Trim();
+        if (trimmed.Length == 0)
+        {
+            return ListTemplates(session);
+        }
+
+        int space = trimmed.IndexOf(' ', StringComparison.Ordinal);
+        string name = space < 0 ? trimmed : trimmed[..space];
+        string rest = space < 0 ? string.Empty : trimmed[(space + 1)..].Trim();
+
+        PromptTemplate? template = session.Templates.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (template is null)
+        {
+            return SlashCommandResult.Handled([$"Template '{name}' not found. /templates lists available templates."]);
+        }
+
+        (Dictionary<string, string> named, string freeText) = PromptTemplateRegistry.ParseArguments(rest);
+        (string prompt, IReadOnlyList<string> missing) = PromptTemplateRegistry.Expand(template, named, freeText);
+        if (missing.Count > 0)
+        {
+            return SlashCommandResult.Handled(
+                [$"Template '{template.Name}' has unfilled placeholders: {string.Join(", ", missing)}. Provide them as key=value arguments."]);
+        }
+
+        return SlashCommandResult.Expanded(prompt);
     }
 
     private static SlashCommandResult ExecuteTrust(ChatSession session, string argument)
@@ -147,6 +197,8 @@ internal static class SlashCommandProcessor
             "/compact [text]       Summarize older context and keep recent messages",
             "/usage                Show model, context %, and token usage totals",
             "/trust [always|never]  Save a project trust decision for this folder",
+            "/templates            List prompt templates",
+            "/t <name> [args]      Expand a prompt template and run it",
             "/clear                Clear the in-memory conversation view",
             "/exit, /quit          Leave the session"
         ];
@@ -817,9 +869,11 @@ internal static class SlashCommandProcessor
     }
 }
 
-internal sealed record SlashCommandResult(bool ShouldExit, IReadOnlyList<string> Messages)
+internal sealed record SlashCommandResult(bool ShouldExit, IReadOnlyList<string> Messages, string? ExpandedPrompt = null)
 {
     public static SlashCommandResult Handled(IReadOnlyList<string> messages) => new(false, messages);
 
     public static SlashCommandResult Exit() => new(true, []);
+
+    public static SlashCommandResult Expanded(string prompt) => new(false, [], prompt);
 }

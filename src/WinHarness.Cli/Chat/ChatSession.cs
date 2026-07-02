@@ -43,6 +43,7 @@ internal sealed class ChatSession
         ModelId = modelId;
         RenderMarkdown = renderMarkdown;
         Skills = SkillRegistry.Discover(workspaceRoot, trustProjectLocal);
+        Templates = PromptTemplateRegistry.Discover(workspaceRoot, trustProjectLocal);
     }
 
     public ISessionManager SessionManager { get; private set; }
@@ -68,6 +69,8 @@ internal sealed class ChatSession
     public SteeringQueue Steering { get; } = new();
 
     public IReadOnlyList<SkillDefinition> Skills { get; }
+
+    public IReadOnlyList<PromptTemplate> Templates { get; }
 
     public SkillDefinition? SelectedSkill { get; set; }
 

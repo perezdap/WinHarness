@@ -124,6 +124,8 @@ One-shot `winharness chat --prompt "..."` is **ephemeral by default**. Pass `--c
 | `/compact [instructions]` | Summarize older context; recent messages stay in the active branch |
 | `/usage` | Show model, estimated context %, last-turn and session token totals |
 | `/trust [always\|never]` | Show or save the project trust decision for this folder |
+| `/templates` | List discovered prompt templates |
+| `/t <name> [key=value …] [text]` | Expand a prompt template and run it (`{{input}}` receives the trailing text) |
 
 **Automatic compaction** is enabled by default for persisted sessions. Before each turn, WinHarness estimates the active-branch tokens against the model's configured `contextWindow` (fallback 8192 when unset) and compacts proactively when within `reserveTokens` (default 4096) of the limit. When a provider rejects a request for context overflow, WinHarness compacts and retries the turn once. Configure via the `compaction` block in `config.json`:
 
@@ -174,6 +176,22 @@ The REPL startup banner includes a `context:` line when any of these files are l
 ### Project trust
 
 Workspaces containing project-local resources (`.winharness\` or `.agents\skills`) require a trust decision before those resources are loaded, since project `SYSTEM.md` and skills can steer the model. Interactive chat prompts once (`always` / `once` / `never`; `always`/`never` persist to `%APPDATA%\WinHarness\trust.json`, and a decision covers all child folders). Non-interactive runs (`--prompt`, `--output json`) never prompt: they use the `defaultProjectTrust` setting (`ask` — default, treated as untrusted — `always`, or `never`), overridable per run with `--approve` / `--no-approve`. Untrusted workspaces still load plain `AGENTS.md`/`CLAUDE.md` context and all global resources. Use `/trust always|never` in the REPL to save a decision.
+
+### Prompt templates
+
+Reusable prompts as Markdown files with optional YAML frontmatter (`name`, `description`) and `{{placeholder}}` slots. Discovered from `.winharness/prompts/` and `.agents/prompts/` in the workspace (trust-gated) and `%APPDATA%\WinHarness\prompts\`:
+
+```markdown
+---
+name: review
+description: Code review with a focus area
+---
+Review this code for bugs and {{focus}} issues.
+
+{{input}}
+```
+
+In the REPL: `/t review focus=security look at the parser`. One-shot: `winharness chat --template review --template-args "focus=security" --prompt "look at the parser"` (`--prompt` fills `{{input}}`). Unfilled placeholders are reported instead of silently sent.
 
 ### Skills
 

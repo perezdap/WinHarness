@@ -202,12 +202,16 @@ reuses these event shapes.
 - `/import <file.jsonl>` / `--import` — validate entries, copy into the workspace session dir, resume.
 - `/clone` — duplicate the active branch into a new session file at the current position (complement to existing `/fork`).
 
-### PR-C5: Prompt templates
+### PR-C5: Prompt templates (DONE)
 
-- Markdown files with optional YAML frontmatter (`name`, `description`) and `{{placeholder}}` slots.
-- Discovery mirrors skills: `.winharness/prompts/`, `%APPDATA%\WinHarness\prompts\`, plus `.agents/prompts/` for cross-tool sharing.
-- REPL: `/t <name> [args]` expands into the editor buffer; bare placeholders prompt interactively. `{{input}}` receives trailing args.
-- One-shot: `--template review --template-args "focus=security"`.
+Implemented: `PromptTemplateRegistry` (frontmatter parsing, `{{placeholder}}`
+expansion, `{{input}}` from trailing text, append-when-no-input-slot,
+key=value + quoted argument parsing); discovery from `.winharness/prompts`,
+`.agents/prompts` (trust-gated), and the global prompts dir with
+project-shadows-global precedence; REPL `/templates` + `/t <name> [args]`
+(expanded text echoes then runs as the turn); one-shot `--template` +
+`--template-args` with `--prompt` filling `{{input}}`. Missing placeholders
+error instead of sending silently. Interactive placeholder prompting deferred.
 
 ### PR-C6: Project trust (DONE)
 

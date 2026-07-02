@@ -214,6 +214,8 @@ app.Add("chat", async (
     string? output = null,
     bool approve = false,
     bool noApprove = false,
+    string? template = null,
+    string? templateArgs = null,
     CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
@@ -228,6 +230,15 @@ app.Add("chat", async (
     if (string.IsNullOrWhiteSpace(resolvedProviderId) || string.IsNullOrWhiteSpace(resolvedModelId))
     {
         throw new InvalidOperationException("Configure defaultProvider/defaultModel or pass --provider-id and --model-id.");
+    }
+
+    // --template expands a prompt template into the one-shot prompt (before
+    // IsOneShot is computed, so --template alone routes to one-shot mode).
+    if (!string.IsNullOrWhiteSpace(template))
+    {
+        bool templateTrust = approve || (!noApprove && new TrustStore().GetDecision(Environment.CurrentDirectory) == true) ||
+            !TrustStore.HasProjectLocalResources(Environment.CurrentDirectory);
+        prompt = ChatRepl.ExpandTemplateForOneShot(template, templateArgs, prompt, templateTrust);
     }
 
     ChatSessionBootstrapRequest bootstrapRequest = new(
@@ -1202,6 +1213,31 @@ internal static class ChatRepl
     }
 
     /// <summary>
+    /// Expands --template for one-shot chat: named args come from
+    /// --template-args ("key=value key2=value2"), and --prompt (when present)
+    /// fills {{input}}. Returns the expanded prompt.
+    /// </summary>
+    public static string ExpandTemplateForOneShot(string templateName, string? templateArgs, string? prompt, bool trustProjectLocal)
+    {
+        IReadOnlyList<PromptTemplate> templates = PromptTemplateRegistry.Discover(Environment.CurrentDirectory, trustProjectLocal);
+        PromptTemplate templateDefinition = templates.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, templateName, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException(
+                $"Template '{templateName}' not found. Available: {(templates.Count == 0 ? "(none)" : string.Join(", ", templates.Select(static t => t.Name)))}.");
+
+        (Dictionary<string, string> named, string extraFree) = PromptTemplateRegistry.ParseArguments(templateArgs ?? string.Empty);
+        string freeText = string.Join(" ", new[] { extraFree, prompt ?? string.Empty }.Where(static part => part.Length > 0));
+        (string expanded, IReadOnlyList<string> missing) = PromptTemplateRegistry.Expand(templateDefinition, named, freeText);
+        if (missing.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Template '{templateDefinition.Name}' has unfilled placeholders: {string.Join(", ", missing)}. Provide them via --template-args \"key=value\".");
+        }
+
+        return expanded;
+    }
+
+    /// <summary>
     /// Assembles the one-shot prompt: piped stdin (when redirected) is
     /// prepended as a fenced block, --files attachments and inline @tokens
     /// expand through the same code path as the interactive editor.
@@ -1411,7 +1447,18 @@ internal static class ChatRepl
                     return;
                 }
 
-                continue;
+                // Prompt templates expand to a regular prompt; fall through and
+                // run the expanded text as this turn's input.
+                if (result.ExpandedPrompt is { Length: > 0 } expanded)
+                {
+                    input = expanded;
+                    AnsiConsole.MarkupLine("[dim]template expanded:[/]");
+                    Console.WriteLine(expanded);
+                }
+                else
+                {
+                    continue;
+                }
             }
 
             switch (EditorInput.Classify(input))
