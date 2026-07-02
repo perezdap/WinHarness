@@ -65,7 +65,7 @@ public sealed class ProviderConfiguratorTests
             makeDefault: false,
             contextWindow: null,
             supportedReasoningEfforts: null,
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
         Assert.AreEqual("coder", model.Id);
 
@@ -88,7 +88,7 @@ public sealed class ProviderConfiguratorTests
             makeDefault: true,
             contextWindow: null,
             supportedReasoningEfforts: null,
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
         ProviderCapabilities capabilities = new(
             Streaming: true,

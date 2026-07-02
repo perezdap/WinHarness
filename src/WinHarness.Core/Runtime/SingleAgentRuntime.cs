@@ -473,12 +473,13 @@ Command execution rules:
             IReadOnlyList<ITool> providerTools = await provider.ListToolsAsync(cancellationToken).ConfigureAwait(false);
             foreach (ITool tool in providerTools)
             {
-                if (!names.Add(tool.Name))
+                ToolAIFunctionAdapter adapter = new(tool, _diagnosticSink, activitySink);
+                if (!names.Add(adapter.Name))
                 {
-                    throw new InvalidOperationException($"Duplicate tool name '{tool.Name}'.");
+                    throw new InvalidOperationException($"Duplicate model-facing tool name '{adapter.Name}'.");
                 }
 
-                tools.Add(new ToolAIFunctionAdapter(tool, _diagnosticSink, activitySink));
+                tools.Add(adapter);
             }
         }
 
