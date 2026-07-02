@@ -206,11 +206,13 @@ public sealed class BuiltinToolProvider : IToolProvider
             string path = ResolveWorkspacePath(invocation.Arguments);
             int maxBytes = OptionalInt32(invocation.Arguments, "maxBytes", 256 * 1024);
 
-            byte[] bytes = await File.ReadAllBytesAsync(NormalizeForIo(path), cancellationToken).ConfigureAwait(false);
-            if (bytes.Length > maxBytes)
+            string normalizedPath = NormalizeForIo(path);
+            if (new FileInfo(normalizedPath).Length > maxBytes)
             {
-                return new ToolResult(false, $"File exceeds maxBytes ({bytes.Length} > {maxBytes}).", "file_too_large");
+                return new ToolResult(false, $"File exceeds maxBytes ({new FileInfo(normalizedPath).Length} > {maxBytes}).", "file_too_large");
             }
+
+            byte[] bytes = await File.ReadAllBytesAsync(normalizedPath, cancellationToken).ConfigureAwait(false);
 
             return new ToolResult(true, Encoding.UTF8.GetString(bytes));
         }
