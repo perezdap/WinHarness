@@ -72,7 +72,7 @@ jobs:
           if (-not $exe) {
             throw "Published WinHarness executable was not found."
           }
-          $env:APPDATA = Join-Path $PWD "artifacts/appdata"
+          $env:WINHARNESS_CONFIG_DIR = Join-Path $PWD "artifacts/appdata"
           & $exe.FullName diagnostics aot
           & $exe.FullName diagnostics write --message "ci smoke"
           & $exe.FullName config init
