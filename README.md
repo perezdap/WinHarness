@@ -119,6 +119,7 @@ One-shot `winharness chat --prompt "..."` is **ephemeral by default**. Pass `--c
 | `/tree` | Navigate session branches (numbered picker; `*` marks the active branch) |
 | `/fork` | Copy the active branch into a new session file in the same workspace folder |
 | `/compact [instructions]` | Summarize older context; recent messages stay in the active branch |
+| `/usage` | Show model, estimated context %, last-turn and session token totals |
 
 **Automatic compaction** is enabled by default for persisted sessions. Before each turn, WinHarness estimates the active-branch tokens against the model's configured `contextWindow` (fallback 8192 when unset) and compacts proactively when within `reserveTokens` (default 4096) of the limit. When a provider rejects a request for context overflow, WinHarness compacts and retries the turn once. Configure via the `compaction` block in `config.json`:
 

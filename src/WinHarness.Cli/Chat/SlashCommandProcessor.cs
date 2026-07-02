@@ -42,8 +42,20 @@ internal static class SlashCommandProcessor
             "/fork" => await ExecuteForkAsync(session, context).ConfigureAwait(false),
             "/effort" => SetEffort(session, argument),
             "/compact" => await ExecuteCompactAsync(session, argument, context).ConfigureAwait(false),
+            "/usage" => ExecuteUsage(options, session),
             _ => SlashCommandResult.Handled([$"Unknown command '{command}'. Try /help."])
         };
+    }
+
+    private static SlashCommandResult ExecuteUsage(WinHarnessOptions options, ChatSession session)
+    {
+        if (session.IsEphemeral)
+        {
+            return SlashCommandResult.Handled(["/usage requires a persisted session (usage is read from session entries)."]);
+        }
+
+        return SlashCommandResult.Handled(
+            [UsageFooter.Format(session, options, UsageFooter.FindLastTurnUsage(session))]);
     }
 
     private static ValueTask<SlashCommandResult> ExecuteTreeAsync(ChatSession session, SlashCommandContext? context)
@@ -103,6 +115,7 @@ internal static class SlashCommandProcessor
             "/fork                 Copy active branch to a new session file",
             "/effort [level]        Show or set reasoning effort (none/low/medium/high/extra-high)",
             "/compact [text]       Summarize older context and keep recent messages",
+            "/usage                Show model, context %, and token usage totals",
             "/clear                Clear the in-memory conversation view",
             "/exit, /quit          Leave the session"
         ];

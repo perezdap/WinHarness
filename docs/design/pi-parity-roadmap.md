@@ -69,17 +69,13 @@ Implemented: `--tools`, `--exclude-tools`, `--no-tools` on `winharness chat`; `T
 
 Deferred from original scope: a persistent `tools` block in config for per-workspace policy — revisit alongside PR-C6 (project trust) since workspace-scoped tool policy has the same trust surface.
 
-### PR-A4: Footer/status information
+### PR-A4: Footer/status information (DONE)
 
-Line-based REPL equivalent of pi's footer. After each turn, print a dim one-liner:
-
-```text
-[gpt-primary @ openai-main | ctx ~38% (30.4k/80k) | turn: ↑2.1k ↓0.8k | session: ↑41k ↓12k | 14 msgs]
-```
-
-- Capture `usage` from responses (the OpenAI SDK exposes it on streaming completions); accumulate per-session.
-- Show cost only if the model config carries optional `pricing` (per-1M input/output) — add as optional capability metadata, never required.
-- `/usage` slash command to print the same on demand.
+Implemented: `UsageFooter` renders a dim one-liner after each persisted-session
+turn — `[model @ provider | ctx ~N% (est/window) | turn ↑in ↓out | session ↑in ↓out]` —
+from assistant-message `Usage` on the active branch, plus a `/usage` slash
+command. Cost display deferred: needs optional per-model `pricing` metadata,
+revisit with the OAuth catalogs (Track B) where pricing is known.
 
 ### PR-A5: Editor upgrades
 

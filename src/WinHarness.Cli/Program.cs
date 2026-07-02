@@ -1111,6 +1111,12 @@ internal static class ChatRepl
                 followUps,
                 cancellationToken).ConfigureAwait(false);
 
+            if (!session.IsEphemeral)
+            {
+                string footer = UsageFooter.Format(session, options, UsageFooter.FindLastTurnUsage(session));
+                AnsiConsole.MarkupLine("[dim]" + Markup.Escape(footer) + "[/]");
+            }
+
             // Trailing blank line closes the turn before the next prompt.
             AnsiConsole.WriteLine();
         }
