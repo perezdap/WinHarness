@@ -120,6 +120,16 @@ One-shot `winharness chat --prompt "..."` is **ephemeral by default**. Pass `--c
 | `/fork` | Copy the active branch into a new session file in the same workspace folder |
 | `/compact [instructions]` | Summarize older context; recent messages stay in the active branch |
 
+**Automatic compaction** is enabled by default for persisted sessions. Before each turn, WinHarness estimates the active-branch tokens against the model's configured `contextWindow` (fallback 8192 when unset) and compacts proactively when within `reserveTokens` (default 4096) of the limit. When a provider rejects a request for context overflow, WinHarness compacts and retries the turn once. Configure via the `compaction` block in `config.json`:
+
+```json
+{
+  "compaction": { "autoCompact": true, "reserveTokens": 4096 }
+}
+```
+
+Set `"autoCompact": false` to rely on manual `/compact` only. Ephemeral sessions (`--no-session`) are never auto-compacted.
+
 Existing commands still work: `/provider`, `/model`, `/skills`, `/skill`, `/markdown`, `/clear`, `/help`, `/exit`. `/provider` and `/model` append `model_change` entries when the session is persisted.
 
 ### Context files

@@ -28,7 +28,7 @@ _Avoid_: Current thread.
 All ConversationMessages produced during one agent run: user input, assistant segments (text + tool calls), and tool results. The caller appends these to the session, not just the final assistant text.
 
 **Compaction**:
-A session entry that replaces older messages in the *active context* with a summary. Full history remains in the JSONL file.
+A session entry that replaces older messages in the *active context* with a summary. Full history remains in the JSONL file. Triggered manually (`/compact`) or automatically (proactive near the model's context window, or reactive retry-once on a provider context-overflow failure).
 
 **Provider**:
 A configured OpenAI-compatible endpoint (id, base URL, optional credential). Distinct from Model.

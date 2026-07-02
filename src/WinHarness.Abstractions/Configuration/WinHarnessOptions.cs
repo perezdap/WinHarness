@@ -26,6 +26,30 @@ public sealed class WinHarnessOptions
     /// Gets or sets configured MCP servers.
     /// </summary>
     public List<McpServerOptions> McpServers { get; set; } = [];
+
+    /// <summary>
+    /// Gets or sets compaction behavior.
+    /// </summary>
+    public CompactionOptions Compaction { get; set; } = new();
+}
+
+/// <summary>
+/// Compaction configuration.
+/// </summary>
+public sealed class CompactionOptions
+{
+    /// <summary>
+    /// Gets or sets whether automatic compaction is enabled (proactive before a
+    /// turn when near the model's context window, and reactive retry-once on a
+    /// provider context-overflow failure).
+    /// </summary>
+    public bool AutoCompact { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the token headroom reserved below the model's context
+    /// window before proactive compaction triggers.
+    /// </summary>
+    public int ReserveTokens { get; set; } = 4096;
 }
 
 /// <summary>

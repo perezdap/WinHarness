@@ -1198,6 +1198,51 @@ internal static class ChatRepl
         string prompt,
         CancellationToken cancellationToken)
     {
+        WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
+        IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
+
+        // Proactive: compact before the turn when the active branch is close to
+        // the model's context window.
+        string? notice = await AutoCompactionService.TryProactiveCompactAsync(
+            options,
+            session,
+            runtime,
+            cancellationToken).ConfigureAwait(false);
+        if (notice is not null)
+        {
+            AnsiConsole.MarkupLine("[dim]" + Markup.Escape(notice) + "[/]");
+        }
+
+        string? failureMessage = await ExecuteTurnCoreAsync(services, session, prompt, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Reactive: when the provider rejected the request for context overflow,
+        // compact and retry the turn once. A second failure is surfaced as-is.
+        if (failureMessage is not null && AutoCompactionService.IsContextOverflow(failureMessage))
+        {
+            notice = await AutoCompactionService.TryReactiveCompactAsync(
+                options,
+                session,
+                runtime,
+                cancellationToken).ConfigureAwait(false);
+            if (notice is not null)
+            {
+                AnsiConsole.MarkupLine("[dim]" + Markup.Escape(notice) + "[/]");
+                await ExecuteTurnCoreAsync(services, session, prompt, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs one turn and renders its events. Returns the failure message when
+    /// the turn ended in <see cref="AgentEventKind.Failed"/>, null on success.
+    /// </summary>
+    private static async ValueTask<string?> ExecuteTurnCoreAsync(
+        IServiceProvider services,
+        ChatSession session,
+        string prompt,
+        CancellationToken cancellationToken)
+    {
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
         Conversation runConversation = session.CreateRunConversation(prompt);
 
@@ -1226,6 +1271,7 @@ internal static class ChatRepl
         // surfaced to the user instead of silently returning to the prompt.
         bool producedAssistantText = false;
         bool turnFailed = false;
+        string? failureMessage = null;
 
         // Ends the current assistant text segment. In markdown mode the spinner is
         // stopped and the buffered segment is rendered as formatted markdown; in raw
@@ -1355,6 +1401,7 @@ internal static class ChatRepl
 
                     case AgentEventKind.Failed:
                         turnFailed = true;
+                        failureMessage = agentEvent.Message;
                         if (interactive)
                         {
                             await FinalizeSegmentAsync().ConfigureAwait(false);
@@ -1433,7 +1480,7 @@ internal static class ChatRepl
                 AnsiConsole.MarkupLine("[yellow]The model returned an empty response. Try resending, or switch models with /model.[/]");
             }
 
-            return;
+            return failureMessage;
         }
 
         if (session.RenderMarkdown)
@@ -1454,6 +1501,8 @@ internal static class ChatRepl
         {
             Console.Error.WriteLine("The model returned an empty response.");
         }
+
+        return failureMessage;
     }
 
     /// <summary>
