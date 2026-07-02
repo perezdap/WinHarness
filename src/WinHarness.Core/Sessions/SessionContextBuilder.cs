@@ -23,11 +23,13 @@ public static class SessionContextBuilder
         }
 
         CompactionSessionEntry? compaction = null;
+        int compactionIndex = -1;
         for (int index = activeBranch.Count - 1; index >= 0; index--)
         {
             if (activeBranch[index] is CompactionSessionEntry compactionEntry)
             {
                 compaction = compactionEntry;
+                compactionIndex = index;
                 break;
             }
         }
@@ -37,13 +39,24 @@ public static class SessionContextBuilder
         {
             conversation.Add(ConversationMessage.FromText(ConversationRole.System, compaction.Summary));
 
+            bool found = false;
             for (int index = 0; index < activeBranch.Count; index++)
             {
                 if (activeBranch[index].Id == compaction.FirstKeptEntryId)
                 {
                     startIndex = index;
+                    found = true;
                     break;
                 }
+            }
+
+            // If FirstKeptEntryId is no longer present (e.g. the branch was
+            // pruned), replay from just after the compaction entry instead of
+            // the whole branch, so already-summarized entries are not replayed
+            // alongside the summary.
+            if (!found)
+            {
+                startIndex = Math.Min(compactionIndex + 1, activeBranch.Count);
             }
         }
 
