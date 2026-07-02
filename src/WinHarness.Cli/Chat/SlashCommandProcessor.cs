@@ -40,6 +40,9 @@ internal static class SlashCommandProcessor
             "/clear" => Clear(session),
             "/tree" => await ExecuteTreeAsync(session, context).ConfigureAwait(false),
             "/fork" => await ExecuteForkAsync(session, context).ConfigureAwait(false),
+            "/clone" => await ExecuteCloneAsync(session, context).ConfigureAwait(false),
+            "/export" => SlashCommandAdvanced.Export(session, argument),
+            "/import" => await ExecuteImportAsync(session, argument, context).ConfigureAwait(false),
             "/effort" => SetEffort(session, argument),
             "/compact" => await ExecuteCompactAsync(session, argument, context).ConfigureAwait(false),
             "/usage" => ExecuteUsage(options, session),
@@ -158,6 +161,29 @@ internal static class SlashCommandProcessor
         return await SlashCommandAdvanced.ForkAsync(session, context).ConfigureAwait(false);
     }
 
+    private static async ValueTask<SlashCommandResult> ExecuteCloneAsync(ChatSession session, SlashCommandContext? context)
+    {
+        if (context is null)
+        {
+            return MissingContext("/clone");
+        }
+
+        return await SlashCommandAdvanced.CloneAsync(session, context).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<SlashCommandResult> ExecuteImportAsync(
+        ChatSession session,
+        string argument,
+        SlashCommandContext? context)
+    {
+        if (context is null)
+        {
+            return MissingContext("/import");
+        }
+
+        return await SlashCommandAdvanced.ImportAsync(session, argument, context).ConfigureAwait(false);
+    }
+
     private static async ValueTask<SlashCommandResult> ExecuteCompactAsync(
         ChatSession session,
         string instructions,
@@ -199,6 +225,9 @@ internal static class SlashCommandProcessor
             "/trust [always|never]  Save a project trust decision for this folder",
             "/templates            List prompt templates",
             "/t <name> [args]      Expand a prompt template and run it",
+            "/clone                Copy the active branch into a new session file",
+            "/export [file]        Export the active branch to HTML or JSONL",
+            "/import <file.jsonl>  Import a JSONL session file and switch to it",
             "/clear                Clear the in-memory conversation view",
             "/exit, /quit          Leave the session"
         ];

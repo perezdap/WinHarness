@@ -1,4 +1,6 @@
 using WinHarness.Configuration;
+using WinHarness.Conversation;
+using WinHarness.Sessions;
 
 namespace WinHarness.Cli.Chat;
 
@@ -34,12 +36,27 @@ internal static class SlashCommandAdvanced
         ChatSession session,
         SlashCommandContext context)
     {
+        return await CloneCoreAsync(session, context, "/fork").ConfigureAwait(false);
+    }
+
+    public static async ValueTask<SlashCommandResult> CloneAsync(
+        ChatSession session,
+        SlashCommandContext context)
+    {
+        return await CloneCoreAsync(session, context, "/clone").ConfigureAwait(false);
+    }
+
+    private static async ValueTask<SlashCommandResult> CloneCoreAsync(
+        ChatSession session,
+        SlashCommandContext context,
+        string command)
+    {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(context);
 
         if (!session.SessionManager.IsPersisted)
         {
-            return SlashCommandResult.Handled(["/fork requires a persisted session."]);
+            return SlashCommandResult.Handled([$"{command} requires a persisted session."]);
         }
 
         SessionForkService forkService = new(context.SessionFactory);
@@ -51,7 +68,59 @@ internal static class SlashCommandAdvanced
         session.ReplaceSessionManager(result.SessionManager);
         session.SyncConversationFromSession();
 
-        return SlashCommandResult.Handled([$"Forked to new session: {result.FilePath}"]);
+        return SlashCommandResult.Handled([$"Copied active branch to new session: {result.FilePath}"]);
+    }
+
+    public static SlashCommandResult Export(ChatSession session, string argument)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (!session.SessionManager.IsPersisted)
+        {
+            return SlashCommandResult.Handled(["/export requires a persisted session."]);
+        }
+
+        string output = argument.Trim();
+        if (output.Length == 0)
+        {
+            output = $"session-{session.SessionManager.Header.Id}.html";
+        }
+
+        string written = SessionExportService.Export(session.SessionManager, output);
+        return SlashCommandResult.Handled([$"Exported active branch to {written}"]);
+    }
+
+    public static async ValueTask<SlashCommandResult> ImportAsync(
+        ChatSession session,
+        string argument,
+        SlashCommandContext context)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(context);
+
+        string path = argument.Trim();
+        if (path.Length == 0)
+        {
+            return SlashCommandResult.Handled(["Usage: /import <file.jsonl>"]);
+        }
+
+        IReadOnlyList<SessionEntry> entries = SessionExportService.ValidateImportFile(path);
+
+        ISessionManager imported = await context.SessionFactory
+            .CreateAsync(session.WorkspaceRoot, context.CancellationToken).ConfigureAwait(false);
+        List<ConversationMessage> messages = entries
+            .OfType<MessageSessionEntry>()
+            .Select(static entry => entry.Message)
+            .ToList();
+        if (messages.Count > 0)
+        {
+            await imported.AppendMessagesAsync(messages, context.CancellationToken).ConfigureAwait(false);
+        }
+
+        session.ReplaceSessionManager(imported);
+        session.SyncConversationFromSession();
+        return SlashCommandResult.Handled(
+            [$"Imported {messages.Count} messages into new session: {imported.SessionFilePath}"]);
     }
 
     public static async ValueTask<SlashCommandResult> CompactAsync(

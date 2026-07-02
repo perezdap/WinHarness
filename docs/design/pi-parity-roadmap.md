@@ -196,11 +196,16 @@ reuses these event shapes.
 - This is the embedding story for non-.NET hosts (editors, other agents). Prioritize over any .NET SDK packaging — that audience can already reference the assemblies.
 - Ship a tiny reference client script under `samples/`.
 
-### PR-C4: Session export / import / clone
+### PR-C4: Session export / import / clone (DONE)
 
-- `/export [file.html|file.jsonl]` and `winharness sessions export --session <id> [--format html|jsonl]`. HTML export = single self-contained file, active branch rendered, tool calls collapsible (`<details>`), no JS dependencies.
-- `/import <file.jsonl>` / `--import` — validate entries, copy into the workspace session dir, resume.
-- `/clone` — duplicate the active branch into a new session file at the current position (complement to existing `/fork`).
+Implemented: `SessionExportService` — `/export [file]` writes the active
+branch as a self-contained HTML page (no JS, collapsible `<details>` tool
+calls, HTML-escaped) or JSONL by extension; `/import <file.jsonl>` validates
+entries (line-numbered errors, parent-reference checking) and switches to a
+new session with the imported messages; `/clone` copies the active branch at
+the current position (shares `SessionForkService` with `/fork`). Top-level
+`sessions export` CLI command deferred — `/export` covers the interactive
+need; revisit if scripting demand appears.
 
 ### PR-C5: Prompt templates (DONE)
 

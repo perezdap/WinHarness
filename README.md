@@ -121,6 +121,9 @@ One-shot `winharness chat --prompt "..."` is **ephemeral by default**. Pass `--c
 | `/resume` | In-session picker (same as `--resume`) |
 | `/tree` | Navigate session branches (numbered picker; `*` marks the active branch) |
 | `/fork` | Copy the active branch into a new session file in the same workspace folder |
+| `/clone` | Same copy as `/fork` at the current position (alias with pi-compatible naming) |
+| `/export [file]` | Export the active branch to a self-contained HTML page (default) or JSONL (`.jsonl` extension) |
+| `/import <file.jsonl>` | Validate a JSONL session file and switch to a new session containing its messages |
 | `/compact [instructions]` | Summarize older context; recent messages stay in the active branch |
 | `/usage` | Show model, estimated context %, last-turn and session token totals |
 | `/trust [always\|never]` | Show or save the project trust decision for this folder |
