@@ -653,6 +653,12 @@ app.Add("mcp tools", async (CancellationToken cancellationToken) =>
     }
 });
 
+app.Add("rpc", async (CancellationToken cancellationToken) =>
+{
+    WinHarness.Cli.Rpc.RpcHost rpcHost = new(host.Services);
+    await rpcHost.RunAsync(cancellationToken).ConfigureAwait(false);
+});
+
 app.Add("login", async (string provider, string? enterpriseDomain = null, CancellationToken cancellationToken = default) =>
 {
     if (!string.Equals(provider, "copilot", StringComparison.OrdinalIgnoreCase))

@@ -189,12 +189,16 @@ stdout (`turn_start`, `assistant_delta`, `tool`, `assistant_message`, `usage`,
 `docs/design/json-events.md` (additive-only stability rule). RPC mode (PR-C3)
 reuses these event shapes.
 
-### PR-C3: RPC mode
+### PR-C3: RPC mode (DONE)
 
-- `winharness rpc` — long-lived process, JSON-RPC-ish request/response + server-pushed events over stdin/stdout, strict LF framing (mirror pi's warning: no Unicode-separator line splitting).
-- Requests: `prompt`, `steer`, `abort`, `set_model`, `set_provider`, `compact`, `get_session`, `list_sessions`, `new_session`, `resume_session`. Responses correlate by `id`; turn events reuse PR-C2's event types.
-- This is the embedding story for non-.NET hosts (editors, other agents). Prioritize over any .NET SDK packaging — that audience can already reference the assemblies.
-- Ship a tiny reference client script under `samples/`.
+Implemented: `winharness rpc` — LF-delimited JSON requests on stdin
+(`prompt`, `steer`, `abort`, `new_session`, `get_session`, `set_model`,
+`shutdown`), responses correlated by id, turn events reusing the PR-C2
+`JsonChatEvent` shapes wrapped with the initiating request id. One session at
+a time, prompts serial, steering/abort act on the running turn; trust is
+non-interactive (saved decision or `defaultProjectTrust: always` only).
+Protocol in `docs/design/rpc.md`; reference client `samples/rpc-client.ps1`.
+Multi-session concurrency deferred until an embedder needs it.
 
 ### PR-C4: Session export / import / clone (DONE)
 
