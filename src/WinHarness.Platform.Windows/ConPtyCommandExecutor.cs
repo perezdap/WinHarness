@@ -17,6 +17,15 @@ public static partial class ConPtyCommandExecutor
     private const uint ProcThreadAttributePseudoConsole = 0x00020016;
 
     /// <summary>
+    /// Hard ceiling on captured interactive output to bound the read loop. The
+    /// <see cref="MemoryStream"/> in <see cref="ReadAllOutputAsync"/> grows
+    /// without limit otherwise; interactive output is normally small.
+    /// </summary>
+    private const int MaxInteractiveOutputBytes = 8 * 1024 * 1024;
+
+    private const string OutputTruncatedSuffix = "[interactive output truncated]";
+
+    /// <summary>
     /// Executes an interactive command path.
     /// </summary>
     public static async ValueTask<CommandResult> ExecuteInteractiveAsync(CommandRequest request, CancellationToken cancellationToken)
@@ -192,8 +201,9 @@ public static partial class ConPtyCommandExecutor
     {
         using MemoryStream buffer = new();
         byte[] bytes = new byte[4096];
+        bool truncated = false;
 
-        while (true)
+        while (buffer.Length < MaxInteractiveOutputBytes)
         {
             int read = await output.ReadAsync(bytes, cancellationToken).ConfigureAwait(false);
             if (read == 0)
@@ -201,10 +211,24 @@ public static partial class ConPtyCommandExecutor
                 break;
             }
 
-            buffer.Write(bytes, 0, read);
+            // Clamp the final write so the buffer never exceeds the budget.
+            int remaining = (int)(MaxInteractiveOutputBytes - buffer.Length);
+            buffer.Write(bytes, 0, Math.Min(read, remaining));
+            if (buffer.Length >= MaxInteractiveOutputBytes)
+            {
+                truncated = true;
+                break;
+            }
         }
 
-        return Encoding.UTF8.GetString(buffer.ToArray());
+        // Drain any remaining output the child still produces so the pipe does
+        // not stay full and block the process from exiting, but discard it.
+        while (await output.ReadAsync(bytes, cancellationToken).ConfigureAwait(false) != 0)
+        {
+        }
+
+        string text = Encoding.UTF8.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length));
+        return truncated ? text + Environment.NewLine + OutputTruncatedSuffix : text;
     }
 
     private static string BuildCommandLine(string fileName, IReadOnlyList<string> arguments)
@@ -279,9 +303,6 @@ public static partial class ConPtyCommandExecutor
         IntPtr hOutput,
         uint dwFlags,
         out IntPtr phPC);
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial int ResizePseudoConsole(IntPtr hPC, Coord size);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial void ClosePseudoConsole(IntPtr hPC);
