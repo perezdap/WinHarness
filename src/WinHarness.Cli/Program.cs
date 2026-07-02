@@ -806,7 +806,7 @@ internal static class ConfigFileUpdater
             document?.Dispose();
         }
 
-        await File.WriteAllBytesAsync(path, buffer.WrittenMemory.ToArray(), cancellationToken).ConfigureAwait(false);
+        await AtomicFile.WriteAllBytesAsync(path, buffer.WrittenMemory.ToArray(), cancellationToken).ConfigureAwait(false);
     }
 }
 
