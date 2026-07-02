@@ -211,6 +211,7 @@ app.Add("chat", async (
     string[]? excludeTools = null,
     bool noTools = false,
     string[]? files = null,
+    string? output = null,
     CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
@@ -254,6 +255,11 @@ app.Add("chat", async (
 
     if (string.IsNullOrWhiteSpace(prompt))
     {
+        if (string.Equals(output, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("--output json requires --prompt (one-shot mode).");
+        }
+
         await ChatRepl.RunAsync(
                 host.Services,
                 resolvedProviderId,
@@ -264,6 +270,20 @@ app.Add("chat", async (
                 toolFilter,
                 cancellationToken)
             .ConfigureAwait(false);
+        return;
+    }
+
+    if (string.Equals(output, "json", StringComparison.OrdinalIgnoreCase))
+    {
+        await ChatRepl.RunJsonTurnAsync(
+            host.Services,
+            resolvedProviderId,
+            resolvedModelId,
+            prompt,
+            bootstrapRequest,
+            reasoningEffort,
+            toolFilter,
+            cancellationToken).ConfigureAwait(false);
         return;
     }
 
@@ -1086,6 +1106,98 @@ internal static class CliValidation
 
 internal static class ChatRepl
 {
+    /// <summary>
+    /// One-shot turn with LF-delimited JSONL events on stdout. All human
+    /// output goes to stderr; stdout carries only events. Exits the process
+    /// nonzero on turn failure so scripts can branch without parsing.
+    /// </summary>
+    public static async ValueTask RunJsonTurnAsync(
+        IServiceProvider services,
+        string providerId,
+        string modelId,
+        string prompt,
+        ChatSessionBootstrapRequest bootstrapRequest,
+        string? reasoningEffort,
+        ToolFilter? toolFilter,
+        CancellationToken cancellationToken)
+    {
+        ChatSession session = await CreateSessionAsync(
+            services,
+            providerId,
+            modelId,
+            renderMarkdown: false,
+            bootstrapRequest,
+            cancellationToken).ConfigureAwait(false);
+        session.ReasoningEffort = reasoningEffort;
+        session.ToolFilter = toolFilter;
+
+        IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
+        Conversation runConversation = session.CreateRunConversation(prompt);
+
+        static void Emit(JsonChatEvent chatEvent) =>
+            Console.Out.WriteLine(JsonSerializer.Serialize(chatEvent, JsonChatEventContext.Default.JsonChatEvent));
+
+        Emit(JsonChatEvent.TurnStart(session.ProviderId, session.ModelId));
+        bool failed = false;
+        StringBuilder assistantText = new();
+
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(
+                           new AgentRunRequest(
+                               session.ProviderId,
+                               session.ModelId,
+                               runConversation,
+                               session.WorkspaceRoot,
+                               session.ProjectContext,
+                               session.ReasoningEffort,
+                               session.ToolFilter),
+                           cancellationToken).ConfigureAwait(false))
+        {
+            switch (agentEvent.Kind)
+            {
+                case AgentEventKind.AssistantDelta:
+                    assistantText.Append(agentEvent.Message);
+                    Emit(JsonChatEvent.AssistantDelta(agentEvent.Message));
+                    break;
+
+                case AgentEventKind.ToolActivity when agentEvent.ToolActivity is { } info:
+                    Emit(JsonChatEvent.Tool(info));
+                    break;
+
+                case AgentEventKind.Failed:
+                    failed = true;
+                    Emit(JsonChatEvent.FromError(agentEvent.Message));
+                    break;
+
+                case AgentEventKind.Completed:
+                    if (agentEvent.TurnArtifacts is { } artifacts)
+                    {
+                        await session.AppendTurnAsync(artifacts, cancellationToken).ConfigureAwait(false);
+                        ConversationMessage? assistant = artifacts.Messages
+                            .LastOrDefault(static message => message.Role == ConversationRole.Assistant);
+                        Emit(JsonChatEvent.AssistantMessage(assistant?.Text ?? assistantText.ToString()));
+                        if (assistant?.Usage is { } usage)
+                        {
+                            Emit(JsonChatEvent.Usage(usage.InputTokens, usage.OutputTokens));
+                        }
+                    }
+
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        if (!failed)
+        {
+            Emit(JsonChatEvent.TurnEnd());
+        }
+        else
+        {
+            Environment.ExitCode = 1;
+        }
+    }
+
     /// <summary>
     /// Assembles the one-shot prompt: piped stdin (when redirected) is
     /// prepended as a fenced block, --files attachments and inline @tokens

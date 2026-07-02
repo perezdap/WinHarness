@@ -180,11 +180,14 @@ limits and formatting match the interactive editor. Missing `--files` paths
 error; missing inline tokens are left alone. Image parts deferred until a
 vision-capable content-block path exists end to end.
 
-### PR-C2: JSON event stream (`--output json`)
+### PR-C2: JSON event stream (`--output json`) (DONE)
 
-- `winharness chat --prompt "..." --output json` emits LF-delimited JSONL events on stdout: `turn_start`, `assistant_delta` (text), `tool_call`, `tool_result`, `assistant_message`, `usage`, `turn_end`, `error`.
-- Event types live in `WinHarness.Abstractions` with a source-gen JSON context; the runtime already surfaces these moments internally — this PR is mostly a serializer sink on the existing turn pipeline.
-- Contract: stdout carries only JSONL; all human/diagnostic output goes to stderr. Stable `type` discriminator field; document in `docs/design/json-events.md`.
+Implemented: `chat --prompt "..." --output json` emits LF-delimited JSONL on
+stdout (`turn_start`, `assistant_delta`, `tool`, `assistant_message`, `usage`,
+`turn_end`, `error`); human output on stderr; nonzero exit on error.
+`JsonChatEvent` + source-gen context in Abstractions; contract documented in
+`docs/design/json-events.md` (additive-only stability rule). RPC mode (PR-C3)
+reuses these event shapes.
 
 ### PR-C3: RPC mode
 
