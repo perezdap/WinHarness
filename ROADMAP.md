@@ -1,23 +1,36 @@
 # WinHarness Roadmap
 
-## Deferred from v0.1
+Feature planning lives in [`docs/design/pi-parity-roadmap.md`](docs/design/pi-parity-roadmap.md),
+which tracks three delivery tracks against [pi](https://github.com/earendil-works/pi):
 
-### Anthropic-native provider
+| Track | Scope | Status |
+|-------|-------|--------|
+| A — Interactive UX (v0.3) | Auto-compaction, steering, tool gating, usage footer, editor input, thinking/model UX, config-dir override | Complete |
+| B — OAuth subscription providers (v0.4) | Auth abstraction, `login`/`logout`, Copilot device flow; Anthropic + OpenAI Codex flows | B0–B2 done; B3/B4 pending |
+| C — Programmatic modes (v0.5) | Piped stdin, `@file` args, JSON events, prompt templates, project trust, export/import/clone, RPC mode | C1–C2, C4–C6 done; C3 (RPC) pending |
 
-Anthropic-native support is intentionally deferred from v0.1.
+Architectural decisions are recorded in `docs/adr/` (ADR-0004: MCP as the
+extension mechanism; ADR-0005: OAuth subscription providers).
 
-Reason:
+## Deferred items
 
-- Native AOT is a release gate for WinHarness.
-- The official `Anthropic` package currently appears to have unresolved Native AOT support concerns.
-- v0.1 focuses on OpenAI-compatible endpoints to keep the dependency graph smaller and more likely to publish with zero IL/trimming/AOT warnings.
+### Anthropic-native provider (Track B, PR-B3)
 
-Revisit when one of the following is true:
+Deferred from v0.1 (ADR-0003) because the official `Anthropic` SDK had
+unresolved Native AOT concerns. ADR-0005 supersedes the SDK question: the
+planned path is a hand-rolled, source-generated Messages API client with no
+SDK dependency. Implementation is parked until subscription demand justifies
+it; the Copilot flow (OpenAI-compatible) shipped first.
 
-- the official Anthropic SDK publishes cleanly under Native AOT with zero warnings in WinHarness' representative code path,
-- an ADR approves a source-generated REST adapter,
-- an ADR approves another mitigation that preserves the single-file Native AOT release goal.
+### OpenAI Codex / Responses API provider (Track B, PR-B4)
+
+Same posture as Anthropic: requires a native Responses API client plus
+`chatgpt_account_id` JWT handling. Parked behind PR-B3.
 
 ### Plugin provider implementation
 
-`FuturePluginToolProvider` remains an architectural extension point only. Runtime plugin loading is deferred because arbitrary plugin loading conflicts with the v0.1 Native AOT and single-executable constraints.
+`FuturePluginToolProvider` remains an architectural extension point only.
+ADR-0004 rejects runtime plugin loading while the Native AOT gate stands;
+MCP servers, skills, and prompt templates are the supported extension
+surface. The candidate escape hatch, if hook demand appears, is git-hook
+style processes over stdio (future ADR).

@@ -52,3 +52,15 @@ _Avoid_: Function (reserved for the provider-transport AIFunction), plugin, comm
 **Tool filter**:
 An optional per-run gating policy over Tools by raw name: allowlist, denylist, or disable-all. Applied when building the model-facing tool list for a Turn; does not affect `tools call` or discovery.
 _Avoid_: Permissions, sandbox (different concerns).
+
+**Prompt template**:
+A Markdown file with optional YAML frontmatter and `{{placeholder}}` slots, expanded into a Turn's prompt via `/t` or `--template`. `{{input}}` receives trailing free text. Distinct from Skill (persistent per-turn instructions) — a template produces one prompt.
+_Avoid_: Macro, snippet.
+
+**Trust decision**:
+A persisted always/never choice (trust.json, keyed by normalized path, ancestors cover children) governing whether a workspace's project-local resources (`.winharness\` prompts/skills/SYSTEM.md, `.agents\skills`) load. Untrusted workspaces keep `AGENTS.md` context and global resources.
+_Avoid_: Permission, sandbox.
+
+**Auth scheme**:
+How a Provider resolves its bearer credential: `api-key` (static secret via credentialName) or `oauth` (token set under `WinHarness:oauth:<provider-id>`, refreshed per request through a flow-specific refresher).
+_Avoid_: Login (the command), credential (the stored secret).
