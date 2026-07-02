@@ -115,17 +115,15 @@ directory is resolved via the known-folder API, so setting `APPDATA` has no effe
 
 The adoption gap: users with Claude Pro/Max, ChatGPT Plus/Pro, or GitHub Copilot subscriptions can't use WinHarness without separate API-key billing.
 
-### 4.1 Reality check (do this first, PR-B0)
+### 4.1 Reality check (PR-B0: DONE — see ADR-0005)
 
-These flows ride **unofficial/undocumented** endpoints that the vendors ship for their own CLIs (Claude Code, Codex CLI, Copilot). Terms-of-service risk and breakage risk are real; pi and OpenCode accept that risk, and so must we, explicitly:
-
-- **PR-B0 is a spike + ADR**, not feature work. For each of the three providers, verify against current open-source implementations (pi's provider code, OpenCode, Copilot API proxies) what the flow is *today*:
-  - **Anthropic (Claude Pro/Max):** OAuth 2.0 + PKCE against `claude.ai` authorize endpoint, token exchange, then Anthropic Messages API with OAuth bearer + the beta header Claude Code sends. **Note: this is the Anthropic-native API, not OpenAI-compatible — see 4.3.**
-  - **OpenAI (ChatGPT/Codex):** OAuth + PKCE with local loopback redirect (localhost callback server), tokens scoped to the Codex/Responses backend. Also Responses API, not chat-completions.
-  - **GitHub Copilot:** OAuth **device code flow** (no local server needed) → GitHub token → exchange at Copilot's token endpoint for a short-lived bearer → OpenAI-compatible chat-completions at `api.githubcopilot.com` (with required editor headers). **This one lands on the existing OpenAI-compatible path — least new surface.**
-- ADR-0005 records: which providers ship in v0.4, the ToS-risk acceptance, and the auth-scheme abstraction below.
-
-**Recommended order: Copilot first** (device flow is simplest, endpoint is chat-completions-compatible, reuses the entire existing provider stack), **then Anthropic, then OpenAI/Codex.**
+Flows verified against pi's shipping implementation (`@earendil-works/pi-ai`
+`utils/oauth/`): Copilot device flow + `copilot_internal/v2/token` exchange +
+OpenAI-compatible proxy baseUrl; Anthropic PKCE via `claude.ai/oauth/authorize`
++ Messages API with `oauth-2025-04-20` beta header; OpenAI Codex PKCE at
+`auth.openai.com` (fixed port 1455) + `chatgpt.com/backend-api/codex/responses`.
+ToS-risk acceptance, ship order (Copilot → Anthropic → Codex), and drift
+containment recorded in `docs/adr/ADR-0005-oauth-subscription-providers.md`.
 
 ### 4.2 Auth-scheme abstraction (PR-B1)
 
