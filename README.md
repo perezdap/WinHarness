@@ -79,6 +79,8 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness mcp disable --id filesystem`
 - `winharness mcp remove --id filesystem`
 - `winharness mcp tools`
+- `winharness login --provider copilot [--enterprise-domain ghe.example.com]` — GitHub Copilot subscription auth via device code flow (see [Subscription auth](#subscription-auth-oauth))
+- `winharness login status` / `winharness logout --provider copilot`
 - `winharness credentials set|get|list|delete`
 
 ### Sessions
@@ -202,6 +204,12 @@ Set the `WINHARNESS_CONFIG_DIR` environment variable to redirect the entire conf
 
 API keys must be stored in Windows Credential Manager, not configuration files.
 WinHarness credential target names must use the `WinHarness:` prefix, for example `WinHarness:openai-main`.
+
+### Subscription auth (OAuth)
+
+`winharness login --provider copilot` signs in with a GitHub Copilot subscription using the OAuth device code flow: visit the printed URL, enter the code, and WinHarness stores the token set in Windows Credential Manager under `WinHarness:oauth:copilot`. The command creates (or updates) a `copilot` provider pointing at your account's Copilot API endpoint; short-lived bearers refresh automatically during chat. Anthropic (Claude Pro/Max) and OpenAI (ChatGPT/Codex) flows are planned — see `docs/adr/ADR-0005-oauth-subscription-providers.md`.
+
+> **Note:** subscription auth rides the unofficial endpoints the vendors ship for their own CLIs. They can change or be revoked at any time (ADR-0005 records this risk acceptance).
 
 Example configuration files are in `samples/`, including `session.example.jsonl` for the persisted session format and a separate `model-capabilities.example.json` shape for model capability metadata.
 

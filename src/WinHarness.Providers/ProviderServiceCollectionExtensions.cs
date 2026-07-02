@@ -13,7 +13,11 @@ public static class ProviderServiceCollectionExtensions
     public static IServiceCollection AddWinHarnessProviders(this IServiceCollection services)
     {
         services.AddSingleton<IModelCapabilityRegistry, ConfigurationModelCapabilityRegistry>();
-        services.AddSingleton<IProviderFactory, OpenAiCompatibleProviderFactory>();
+        services.AddSingleton<IOAuthTokenRefresher>(static _ => new GitHubCopilotOAuthFlow(new HttpClient()));
+        services.AddSingleton<IProviderFactory>(static provider => new OpenAiCompatibleProviderFactory(
+            provider.GetRequiredService<Configuration.WinHarnessOptions>(),
+            provider.GetRequiredService<Platform.ICredentialStore>(),
+            provider.GetServices<IOAuthTokenRefresher>()));
         services.AddSingleton<IModelCatalog, OpenAiCompatibleModelCatalog>();
         services.AddSingleton<IModelCapabilityInferrer, ModelCapabilityInferrer>();
         services.AddSingleton<IOpenRouterModelCatalog, OpenRouterModelCatalog>();

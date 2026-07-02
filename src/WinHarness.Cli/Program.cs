@@ -607,6 +607,94 @@ app.Add("mcp tools", async (CancellationToken cancellationToken) =>
     }
 });
 
+app.Add("login", async (string provider, string? enterpriseDomain = null, CancellationToken cancellationToken = default) =>
+{
+    if (!string.Equals(provider, "copilot", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidOperationException($"OAuth provider '{provider}' is not supported yet. Available: copilot.");
+    }
+
+    ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
+    ConfigStore configStore = host.Services.GetRequiredService<ConfigStore>();
+    using HttpClient http = new();
+    GitHubCopilotOAuthFlow flow = new(http, enterpriseDomain ?? "github.com");
+
+    CopilotDeviceCode device = await flow.StartDeviceFlowAsync(cancellationToken).ConfigureAwait(false);
+    AnsiConsole.MarkupLine($"Visit [bold blue]{Markup.Escape(device.VerificationUri)}[/] and enter code [bold]{Markup.Escape(device.UserCode)}[/]");
+    AnsiConsole.MarkupLine("[dim]Waiting for authorization… (Ctrl+C to cancel)[/]");
+
+    string githubToken = await flow.PollForGitHubTokenAsync(device, cancellationToken).ConfigureAwait(false);
+    OAuthTokenSet tokens = await flow.ExchangeForBearerAsync(githubToken, cancellationToken).ConfigureAwait(false);
+
+    const string providerId = "copilot";
+    await store.SetSecretAsync(
+        OAuthCredentialNames.ForProvider(providerId),
+        JsonSerializer.Serialize(tokens, WinHarnessJsonSerializerContext.Default.OAuthTokenSet),
+        cancellationToken).ConfigureAwait(false);
+
+    // Create or update the provider entry pointing at the token's proxy endpoint.
+    WinHarnessOptions current = await configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+    ProviderOptions? existing = current.Providers.FirstOrDefault(candidate =>
+        string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
+    if (existing is null)
+    {
+        existing = new ProviderOptions { Id = providerId, Kind = "openai-compatible" };
+        current.Providers.Add(existing);
+    }
+
+    existing.BaseUrl = tokens.BaseUrl ?? GitHubCopilotOAuthFlow.DefaultBaseUrl;
+    existing.Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "copilot" };
+    if (existing.Models.Count == 0)
+    {
+        existing.Models.Add(new ModelOptions
+        {
+            Id = "gpt-4o",
+            ProviderModelId = "gpt-4o",
+            Capabilities = new ProviderCapabilities(
+                Streaming: true, ToolCalling: true, Vision: true,
+                PromptCaching: false, StructuredOutput: true, Reasoning: false),
+            ContextWindow = 128_000
+        });
+    }
+
+    await configStore.SaveAsync(current, cancellationToken).ConfigureAwait(false);
+    AnsiConsole.MarkupLine($"[green]Logged in.[/] Provider '{providerId}' configured at {Markup.Escape(existing.BaseUrl)}.");
+    AnsiConsole.MarkupLine("[dim]Discover more models with: winharness models discover --provider-id copilot[/]");
+});
+
+app.Add("login status", async (CancellationToken cancellationToken) =>
+{
+    ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
+    IReadOnlyList<string> names = await store.ListTargetNamesAsync(cancellationToken).ConfigureAwait(false);
+    bool any = false;
+    foreach (string name in names.Where(static name => name.StartsWith("WinHarness:oauth:", StringComparison.Ordinal)))
+    {
+        any = true;
+        string providerId = name["WinHarness:oauth:".Length..];
+        string? secret = await store.GetSecretAsync(name, cancellationToken).ConfigureAwait(false);
+        string expiry = "unknown";
+        if (secret is not null &&
+            JsonSerializer.Deserialize(secret, WinHarnessJsonSerializerContext.Default.OAuthTokenSet) is { } tokens)
+        {
+            expiry = tokens.ExpiresAt?.ToString("u", CultureInfo.InvariantCulture) ?? "no expiry";
+        }
+
+        Console.WriteLine($"{providerId}\toauth\texpires {expiry}");
+    }
+
+    if (!any)
+    {
+        Console.WriteLine("No OAuth logins stored.");
+    }
+});
+
+app.Add("logout", async (string provider, CancellationToken cancellationToken) =>
+{
+    ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
+    await store.DeleteSecretAsync(OAuthCredentialNames.ForProvider(provider), cancellationToken).ConfigureAwait(false);
+    Console.WriteLine($"OAuth tokens for '{provider}' deleted.");
+});
+
 app.Add("credentials set", async (string targetName, string secret, CancellationToken cancellationToken) =>
 {
     CliValidation.ValidateCredentialTargetName(targetName);

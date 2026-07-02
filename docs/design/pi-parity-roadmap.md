@@ -138,14 +138,16 @@ rotated tokens last-writer-wins). `ProviderOptions.Auth` block
 resolves the token source per provider; not-logged-in errors point at
 `winharness login`.
 
-### PR-B2: `winharness login` / `logout` + `/login` `/logout`
+### PR-B2: `winharness login` / `logout` (DONE — Copilot)
 
-- `winharness login --provider copilot|anthropic|openai` and matching REPL slash commands.
-- **Device-code UX (Copilot):** print `Visit https://github.com/login/device and enter code XXXX-XXXX`, poll for completion. No browser automation, no local server. Works over SSH.
-- **PKCE + loopback UX (Anthropic, OpenAI):** start `HttpListener` on `127.0.0.1:<ephemeral>`, open browser via `Process.Start` with `UseShellExecute = true` (Windows) and print the URL as fallback, receive the code, exchange, store.
-- `winharness login status` — list providers, scheme, token expiry.
-- `logout` deletes the Credential Manager entries.
-- On successful login, offer to auto-create the provider + known models (subscription endpoints have fixed model lists; ship them as static catalogs updated with releases, like pi does).
+Implemented: `GitHubCopilotOAuthFlow` (device code start, RFC 8628 polling with
+slow_down handling, `copilot_internal/v2/token` bearer exchange, proxy-ep →
+baseUrl extraction, enterprise domain support) registered as the first
+`IOAuthTokenRefresher`; `login --provider copilot` prints the code, polls,
+stores the token set, and auto-creates/updates the `copilot` provider entry;
+`login status` lists stored OAuth token sets with expiry; `logout` deletes
+them. REPL `/login` deferred — the CLI command works while chat is closed,
+which covers the core need. Anthropic/OpenAI flows land with PR-B3/PR-B4.
 
 ### 4.3 Non-OpenAI-compatible transports (PR-B3, the hard one)
 
