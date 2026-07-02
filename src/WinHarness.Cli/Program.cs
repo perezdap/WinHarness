@@ -1394,25 +1394,11 @@ internal static class ChatRepl
             services.GetRequiredService<IAgentRuntime>(),
             cancellationToken);
 
-        // Persistent background stdin reader so the user can type while a turn
-        // is running (steering). Lines are consumed from the channel both by
-        // the idle prompt loop and by the in-turn steering listener.
-        System.Threading.Channels.Channel<string?> stdin =
-            System.Threading.Channels.Channel.CreateUnbounded<string?>();
-        _ = Task.Run(
-            () =>
-            {
-                while (true)
-                {
-                    string? line = Console.ReadLine();
-                    if (!stdin.Writer.TryWrite(line) || line is null)
-                    {
-                        return;
-                    }
-                }
-            },
-            CancellationToken.None);
-
+        // Idle input uses plain blocking Console.ReadLine so interactive
+        // pickers (Spectre prompts in /models, /tree, trust) own the console
+        // exclusively. Steering input during a turn is read via
+        // Console.KeyAvailable polling inside RunTurnWithSteeringAsync — never
+        // from a competing background reader.
         Queue<string> followUps = new();
 
         while (!cancellationToken.IsCancellationRequested)
@@ -1426,7 +1412,7 @@ internal static class ChatRepl
             else
             {
                 AnsiConsole.Markup("[bold green]›[/] ");
-                input = await stdin.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+                input = Console.ReadLine();
             }
 
             if (input is null)
@@ -1471,7 +1457,7 @@ internal static class ChatRepl
             {
                 case EditorInputKind.MultiLineStart:
                 {
-                    string? block = await ReadMultiLineBlockAsync(input, stdin.Reader, cancellationToken).ConfigureAwait(false);
+                    string? block = ReadMultiLineBlock(input);
                     if (block is null)
                     {
                         return;
@@ -1520,7 +1506,6 @@ internal static class ChatRepl
                 services,
                 session,
                 input,
-                stdin.Reader,
                 followUps,
                 cancellationToken).ConfigureAwait(false);
 
@@ -1536,40 +1521,42 @@ internal static class ChatRepl
     }
 
     /// <summary>
-    /// Runs a turn on a background task while listening for typed input:
+    /// Runs a turn on a background task while polling for typed input:
     /// plain lines queue steering (delivered between tool round-trips),
     /// "&gt;&gt; text" queues a follow-up turn, and /abort cancels the turn.
+    /// Uses Console.KeyAvailable polling, never a background reader, so
+    /// interactive pickers outside turns own the console exclusively. When
+    /// input is redirected, in-turn steering is unavailable and the turn is
+    /// simply awaited.
     /// </summary>
     private static async ValueTask RunTurnWithSteeringAsync(
         IServiceProvider services,
         ChatSession session,
         string prompt,
-        System.Threading.Channels.ChannelReader<string?> stdin,
         Queue<string> followUps,
         CancellationToken cancellationToken)
     {
         using CancellationTokenSource turnCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task turn = RunTurnAsync(services, session, prompt, turnCts.Token).AsTask();
 
+        if (Console.IsInputRedirected)
+        {
+            await AwaitTurnAsync(turn, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        StringBuilder pending = new();
         while (!turn.IsCompleted)
         {
-            Task<string?> readTask = stdin.ReadAsync(CancellationToken.None).AsTask();
-            Task finished = await Task.WhenAny(turn, readTask).ConfigureAwait(false);
-            if (finished == turn)
+            string? line = TryReadLineNonBlocking(pending);
+            if (line is null)
             {
-                // Turn ended; re-queue an already-typed line as a follow-up so
-                // it is not lost. It races the completion, so treat it as input
-                // for the next prompt rather than steering.
-                if (readTask.IsCompletedSuccessfully && readTask.Result is { Length: > 0 } tail)
-                {
-                    followUps.Enqueue(StripFollowUpPrefix(tail.Trim()));
-                }
-
-                break;
+                await Task.WhenAny(turn, Task.Delay(50, CancellationToken.None)).ConfigureAwait(false);
+                continue;
             }
 
-            string? line = readTask.Result?.Trim();
-            if (string.IsNullOrEmpty(line))
+            line = line.Trim();
+            if (line.Length == 0)
             {
                 continue;
             }
@@ -1604,6 +1591,17 @@ internal static class ChatRepl
             AnsiConsole.MarkupLine("[dim]queued steering (delivered after current tool calls)[/]");
         }
 
+        // A partial line typed as the turn ended becomes the next prompt seed.
+        if (pending.Length > 0)
+        {
+            followUps.Enqueue(StripFollowUpPrefix(pending.ToString().Trim()));
+        }
+
+        await AwaitTurnAsync(turn, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask AwaitTurnAsync(Task turn, CancellationToken cancellationToken)
+    {
         try
         {
             await turn.ConfigureAwait(false);
@@ -1614,6 +1612,45 @@ internal static class ChatRepl
         }
     }
 
+    /// <summary>
+    /// Drains available keys without blocking. Returns a completed line when
+    /// Enter arrives, null otherwise; partial input accumulates in the buffer.
+    /// Backspace edits the buffer; other control keys are ignored.
+    /// </summary>
+    private static string? TryReadLineNonBlocking(StringBuilder pending)
+    {
+        while (Console.KeyAvailable)
+        {
+            ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Enter)
+            {
+                Console.WriteLine();
+                string line = pending.ToString();
+                pending.Clear();
+                return line;
+            }
+
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (pending.Length > 0)
+                {
+                    pending.Length--;
+                    Console.Write("\b \b");
+                }
+
+                continue;
+            }
+
+            if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
+            {
+                pending.Append(key.KeyChar);
+                Console.Write(key.KeyChar);
+            }
+        }
+
+        return null;
+    }
+
     private static string StripFollowUpPrefix(string line) =>
         line.StartsWith(">>", StringComparison.Ordinal) ? line[2..].Trim() : line;
 
@@ -1622,10 +1659,7 @@ internal static class ChatRepl
     /// on the same line becomes the first line of the block. Returns null on
     /// EOF, the joined block otherwise.
     /// </summary>
-    private static async ValueTask<string?> ReadMultiLineBlockAsync(
-        string openingLine,
-        System.Threading.Channels.ChannelReader<string?> stdin,
-        CancellationToken cancellationToken)
+    private static string? ReadMultiLineBlock(string openingLine)
     {
         List<string> lines = [];
         string remainder = openingLine[EditorInput.MultiLineMarker.Length..].Trim();
@@ -1637,7 +1671,7 @@ internal static class ChatRepl
         AnsiConsole.MarkupLine("[dim]multi-line input — end with \"\"\" on its own line[/]");
         while (true)
         {
-            string? line = await stdin.ReadAsync(cancellationToken).ConfigureAwait(false);
+            string? line = Console.ReadLine();
             if (line is null)
             {
                 return null;
