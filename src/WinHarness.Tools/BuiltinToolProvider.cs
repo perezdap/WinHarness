@@ -574,13 +574,22 @@ public sealed class BuiltinToolProvider : IToolProvider
 
         private static string Truncate(string content, int maxOutputBytes)
         {
-            if (Encoding.UTF8.GetByteCount(content) <= maxOutputBytes)
+            byte[] bytes = Encoding.UTF8.GetBytes(content);
+            if (bytes.Length <= maxOutputBytes)
             {
                 return content;
             }
 
-            byte[] bytes = Encoding.UTF8.GetBytes(content);
-            return Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Max(0, maxOutputBytes))) + Environment.NewLine + "[output truncated]";
+            // Avoid splitting a multi-byte UTF-8 sequence: walk back from the
+            // cut point past any trailing continuation bytes (0b10xxxxxx) so the
+            // slice ends on a complete character boundary.
+            int limit = Math.Max(0, maxOutputBytes);
+            while (limit > 0 && (bytes[limit] & 0xC0) == 0x80)
+            {
+                limit--;
+            }
+
+            return Encoding.UTF8.GetString(bytes.AsSpan(0, limit)) + Environment.NewLine + "[output truncated]";
         }
     }
 
