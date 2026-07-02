@@ -132,6 +132,18 @@ Set `"autoCompact": false` to rely on manual `/compact` only. Ephemeral sessions
 
 Existing commands still work: `/provider`, `/model`, `/skills`, `/skill`, `/markdown`, `/clear`, `/help`, `/exit`. `/provider` and `/model` append `model_change` entries when the session is persisted.
 
+### Steering (typing while the agent works)
+
+While a turn is running you can keep typing in the REPL:
+
+| Input | Behavior |
+|-------|----------|
+| `some text` + Enter | **Steering**: delivered to the model after the current tool calls finish, within the same turn |
+| `>> some text` + Enter | **Follow-up**: runs as the next prompt after the current turn completes |
+| `/abort` + Enter | Cancels the turn; unsent steering messages become follow-up input |
+
+Steering messages are persisted in the session as ordinary user messages.
+
 ### Context files
 
 Project instructions are loaded at startup and injected into the system prompt chain (not written to the session file):

@@ -110,7 +110,7 @@ Command execution rules:
         ProjectContext projectContext = ResolveProjectContext(request);
         IReadOnlyList<ChatMessage> messages = ProjectConversation(request.Conversation, projectContext);
         IChatProvider provider = _providerFactory.Create(request.ProviderId, request.ModelId);
-        (TurnRecorderChatClient recorder, IChatClient chatClient) = TurnRecorderChatClient.Create(provider.CreateChatClient());
+        (TurnRecorderChatClient recorder, IChatClient chatClient) = TurnRecorderChatClient.Create(provider.CreateChatClient(), request.Steering);
         using IChatClient client = chatClient;
 
         _logger.ProviderRequestStarting(provider.ProviderId, provider.ModelId);

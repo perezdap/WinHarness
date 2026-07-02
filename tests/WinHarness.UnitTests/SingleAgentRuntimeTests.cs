@@ -236,6 +236,47 @@ public sealed class SingleAgentRuntimeTests
     }
 
     [TestMethod]
+    public async Task SteeringMessagesInjectedBetweenToolRoundTrips()
+    {
+        List<IReadOnlyList<ChatMessage>> captured = [];
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory([], captureMessages: captured.Add),
+            [new FakeToolProvider()],
+            new RecordingDiagnosticSink(),
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        Conversation.Conversation conversation = new();
+        conversation.Add(ConversationMessage.FromText(ConversationRole.User, "prompt"));
+        SteeringQueue steering = new();
+        steering.Enqueue("also check the tests");
+        AgentRunRequest request = new(
+            "test-provider",
+            "test-model",
+            conversation,
+            Steering: steering);
+
+        List<AgentEvent> events = [];
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(request, CancellationToken.None))
+        {
+            events.Add(agentEvent);
+        }
+
+        // The second inner call (after the tool result) must carry the steering
+        // message as a user message after the tool result.
+        Assert.AreEqual(2, captured.Count);
+        Assert.IsFalse(captured[0].Any(static message =>
+            message.Role == ChatRole.User && message.Text == "also check the tests"));
+        Assert.IsTrue(captured[1].Any(static message =>
+            message.Role == ChatRole.User && message.Text == "also check the tests"));
+        Assert.AreEqual(0, steering.Count);
+
+        // Steering must be persisted in the turn artifacts.
+        AgentEvent completed = events.Single(static agentEvent => agentEvent.Kind == AgentEventKind.Completed);
+        Assert.IsTrue(completed.TurnArtifacts!.Messages.Any(static message =>
+            message.Role == ConversationRole.User && message.Text == "also check the tests"));
+    }
+
+    [TestMethod]
     public async Task PassesToolsToChatClient()
     {
         RecordingDiagnosticSink diagnostics = new();
@@ -515,15 +556,18 @@ public sealed class SingleAgentRuntimeTests
         private readonly IReadOnlyList<string> _updates;
         private readonly bool _failOnStream;
         private readonly int _failAfterUpdates;
+        private readonly Action<IReadOnlyList<ChatMessage>>? _captureEachCall;
 
         public FakeProviderFactory(
             IReadOnlyList<string> updates,
             bool failOnStream = false,
-            int failAfterUpdates = -1)
+            int failAfterUpdates = -1,
+            Action<IReadOnlyList<ChatMessage>>? captureMessages = null)
         {
             _updates = updates;
             _failOnStream = failOnStream;
             _failAfterUpdates = failAfterUpdates;
+            _captureEachCall = captureMessages;
         }
 
         public IReadOnlyList<ChatMessage> LastMessages { get; private set; } = [];
@@ -536,7 +580,11 @@ public sealed class SingleAgentRuntimeTests
                 _updates,
                 _failOnStream,
                 _failAfterUpdates,
-                messages => LastMessages = messages);
+                messages =>
+                {
+                    LastMessages = messages;
+                    _captureEachCall?.Invoke(messages);
+                });
         }
     }
 

@@ -61,6 +61,8 @@ internal sealed class ChatSession
 
     public ToolFilter? ToolFilter { get; set; }
 
+    public SteeringQueue Steering { get; } = new();
+
     public IReadOnlyList<SkillDefinition> Skills { get; }
 
     public SkillDefinition? SelectedSkill { get; set; }

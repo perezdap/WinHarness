@@ -52,20 +52,16 @@ Write `docs/adr/ADR-0004-mcp-as-extension-mechanism.md`:
 
 Implemented: `CompactionOptions` (`autoCompact`, `reserveTokens`) on `WinHarnessOptions`; `AutoCompactionService` in the CLI layer with proactive (chars/4 estimate vs `contextWindow` minus reserve before each turn) and reactive (context-overflow failure message match → compact → retry turn once) triggers; REPL notices when auto-compaction fires; skips ephemeral sessions and respects `autoCompact=false`. Token estimation refinement via real usage data lands with PR-A4.
 
-### PR-A2: Message queue and steering
+### PR-A2: Message queue and steering (DONE)
 
-Pi's most-felt interactive feature: type while the agent works.
-
-- Domain language (add to `CONTEXT.md`):
-  - **Steering message** — queued user input delivered after the current assistant segment finishes its tool calls, within the same Turn.
-  - **Follow-up message** — queued input delivered after the Turn fully completes.
-- Runtime: `SingleAgentRuntime` gets a check between tool round-trips — after executing tool calls and before the next model call, drain pending steering messages into the Conversation as user messages.
-- REPL: input loop must accept keystrokes while a turn is streaming. This forces the REPL off blocking `Console.ReadLine` during turns:
-  - Run the turn on a background task; foreground reads lines. Plain **Enter** on a non-empty line queues steering; a configurable prefix (e.g. `>>`) or `/followup` queues a follow-up. (Alt+Enter is unreliable across Windows terminals; don't depend on it.)
-  - **Esc** aborts the turn (`CancellationTokenSource`) and restores queued messages into the editor buffer.
-- Persist steering messages as normal user-message artifacts in the session.
-- Settings: `steeringMode` = `one-at-a-time` (default) | `all`.
-- Tests: runtime-level steering injection between round-trips; abort restores queue; queued messages persisted in order.
+Implemented: `SteeringQueue` in Abstractions; `AgentRunRequest.Steering`;
+`TurnRecorderChatClient` drains the queue between tool round-trips (only when
+the input ends with a tool result, so steering never splices into a turn's
+first request) and records injected messages in turn artifacts. REPL runs the
+turn on a background task with a persistent stdin channel: plain lines queue
+steering, `>>` prefix queues follow-ups, `/abort` cancels and converts unsent
+steering to follow-ups. Line-based (no raw key handling); Esc-abort deferred
+until a raw-mode editor exists.
 
 ### PR-A3: Tool gating flags (DONE)
 

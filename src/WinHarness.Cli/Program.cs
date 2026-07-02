@@ -1037,10 +1037,41 @@ internal static class ChatRepl
             services.GetRequiredService<IAgentRuntime>(),
             cancellationToken);
 
+        // Persistent background stdin reader so the user can type while a turn
+        // is running (steering). Lines are consumed from the channel both by
+        // the idle prompt loop and by the in-turn steering listener.
+        System.Threading.Channels.Channel<string?> stdin =
+            System.Threading.Channels.Channel.CreateUnbounded<string?>();
+        _ = Task.Run(
+            () =>
+            {
+                while (true)
+                {
+                    string? line = Console.ReadLine();
+                    if (!stdin.Writer.TryWrite(line) || line is null)
+                    {
+                        return;
+                    }
+                }
+            },
+            CancellationToken.None);
+
+        Queue<string> followUps = new();
+
         while (!cancellationToken.IsCancellationRequested)
         {
-            AnsiConsole.Markup("[bold green]›[/] ");
-            string? input = Console.ReadLine();
+            string? input;
+            if (followUps.Count > 0)
+            {
+                input = followUps.Dequeue();
+                AnsiConsole.MarkupLine("[dim]› (follow-up)[/] " + Markup.Escape(input));
+            }
+            else
+            {
+                AnsiConsole.Markup("[bold green]›[/] ");
+                input = await stdin.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             if (input is null)
             {
                 return;
@@ -1072,16 +1103,100 @@ internal static class ChatRepl
             // boundary is obvious in the scrollback.
             AnsiConsole.WriteLine();
 
-            await RunTurnAsync(
+            await RunTurnWithSteeringAsync(
                 services,
                 session,
                 input,
+                stdin.Reader,
+                followUps,
                 cancellationToken).ConfigureAwait(false);
 
             // Trailing blank line closes the turn before the next prompt.
             AnsiConsole.WriteLine();
         }
     }
+
+    /// <summary>
+    /// Runs a turn on a background task while listening for typed input:
+    /// plain lines queue steering (delivered between tool round-trips),
+    /// "&gt;&gt; text" queues a follow-up turn, and /abort cancels the turn.
+    /// </summary>
+    private static async ValueTask RunTurnWithSteeringAsync(
+        IServiceProvider services,
+        ChatSession session,
+        string prompt,
+        System.Threading.Channels.ChannelReader<string?> stdin,
+        Queue<string> followUps,
+        CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource turnCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task turn = RunTurnAsync(services, session, prompt, turnCts.Token).AsTask();
+
+        while (!turn.IsCompleted)
+        {
+            Task<string?> readTask = stdin.ReadAsync(CancellationToken.None).AsTask();
+            Task finished = await Task.WhenAny(turn, readTask).ConfigureAwait(false);
+            if (finished == turn)
+            {
+                // Turn ended; re-queue an already-typed line as a follow-up so
+                // it is not lost. It races the completion, so treat it as input
+                // for the next prompt rather than steering.
+                if (readTask.IsCompletedSuccessfully && readTask.Result is { Length: > 0 } tail)
+                {
+                    followUps.Enqueue(StripFollowUpPrefix(tail.Trim()));
+                }
+
+                break;
+            }
+
+            string? line = readTask.Result?.Trim();
+            if (string.IsNullOrEmpty(line))
+            {
+                continue;
+            }
+
+            if (string.Equals(line, "/abort", StringComparison.OrdinalIgnoreCase))
+            {
+                AnsiConsole.MarkupLine("[yellow]aborting turn…[/]");
+                await turnCts.CancelAsync().ConfigureAwait(false);
+
+                // Restore unsent steering messages as follow-up input.
+                foreach (string queued in session.Steering.DrainAll())
+                {
+                    followUps.Enqueue(queued);
+                }
+
+                break;
+            }
+
+            if (line.StartsWith(">>", StringComparison.Ordinal))
+            {
+                string followUp = line[2..].Trim();
+                if (followUp.Length > 0)
+                {
+                    followUps.Enqueue(followUp);
+                    AnsiConsole.MarkupLine("[dim]queued follow-up (runs after this turn)[/]");
+                }
+
+                continue;
+            }
+
+            session.Steering.Enqueue(line);
+            AnsiConsole.MarkupLine("[dim]queued steering (delivered after current tool calls)[/]");
+        }
+
+        try
+        {
+            await turn.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            AnsiConsole.MarkupLine("[yellow]turn aborted.[/]");
+        }
+    }
+
+    private static string StripFollowUpPrefix(string line) =>
+        line.StartsWith(">>", StringComparison.Ordinal) ? line[2..].Trim() : line;
 
     private static async ValueTask<ChatSession> CreateSessionAsync(
         IServiceProvider services,
@@ -1367,7 +1482,8 @@ internal static class ChatRepl
                                    session.WorkspaceRoot,
                                    session.ProjectContext,
                                    session.ReasoningEffort,
-                                   session.ToolFilter),
+                                   session.ToolFilter,
+                                   session.Steering),
                                cancellationToken).ConfigureAwait(false))
             {
                 switch (agentEvent.Kind)

@@ -28,7 +28,8 @@ public sealed record AgentRunRequest(
     string WorkspaceRoot = "",
     ProjectContext? ProjectContext = null,
     string? ReasoningEffort = null,
-    ToolFilter? ToolFilter = null);
+    ToolFilter? ToolFilter = null,
+    SteeringQueue? Steering = null);
 
 /// <summary>
 /// A runtime event emitted during an agent run. The terminal

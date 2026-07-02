@@ -14,6 +14,7 @@ internal sealed class TurnRecorderChatClient : DelegatingChatClient
     private readonly Dictionary<string, string> _toolCallNames = new(StringComparer.Ordinal);
     private readonly List<ChatMessage> _turnMessages = [];
     private List<ChatMessage> _lastInputSnapshot = [];
+    private SteeringQueue? _steering;
 
     private TurnRecorderChatClient(IChatClient inner)
         : base(inner)
@@ -23,9 +24,11 @@ internal sealed class TurnRecorderChatClient : DelegatingChatClient
     /// <summary>
     /// Wraps a raw provider client with turn recording inside function invocation middleware.
     /// </summary>
-    public static (TurnRecorderChatClient Recorder, IChatClient Client) Create(IChatClient innerClient)
+    public static (TurnRecorderChatClient Recorder, IChatClient Client) Create(
+        IChatClient innerClient,
+        SteeringQueue? steering = null)
     {
-        TurnRecorderChatClient recorder = new(innerClient);
+        TurnRecorderChatClient recorder = new(innerClient) { _steering = steering };
         IChatClient client = new ChatClientBuilder(recorder)
             .UseFunctionInvocation()
             .Build();
@@ -79,6 +82,7 @@ internal sealed class TurnRecorderChatClient : DelegatingChatClient
         CancellationToken cancellationToken = default)
     {
         List<ChatMessage> currentInput = messages.ToList();
+        InjectSteeringMessages(currentInput);
         BeginInnerCall(currentInput);
 
         ChatResponse response = await base.GetResponseAsync(currentInput, options, cancellationToken).ConfigureAwait(false);
@@ -94,6 +98,7 @@ internal sealed class TurnRecorderChatClient : DelegatingChatClient
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         List<ChatMessage> currentInput = messages.ToList();
+        InjectSteeringMessages(currentInput);
         BeginInnerCall(currentInput);
         List<ChatResponseUpdate> updates = [];
 
@@ -108,6 +113,33 @@ internal sealed class TurnRecorderChatClient : DelegatingChatClient
         ChatResponse response = updates.ToChatResponse();
         CaptureResponse(response.Messages);
         EndInnerCall(currentInput);
+    }
+
+    /// <summary>
+    /// Drains pending steering messages into the round-trip input as user
+    /// messages. Only applies when the input ends with tool results — i.e. the
+    /// model is being re-invoked after executing tool calls — so steering is
+    /// delivered after the current assistant segment finishes its tools, never
+    /// spliced into the first request of a turn.
+    /// </summary>
+    private void InjectSteeringMessages(List<ChatMessage> currentInput)
+    {
+        if (_steering is null || _steering.Count == 0 || currentInput.Count == 0)
+        {
+            return;
+        }
+
+        if (currentInput[^1].Role != ChatRole.Tool)
+        {
+            return;
+        }
+
+        foreach (string text in _steering.DrainAll())
+        {
+            ChatMessage message = new(ChatRole.User, text);
+            currentInput.Add(message);
+            _turnMessages.Add(message);
+        }
     }
 
     private void BeginInnerCall(IReadOnlyList<ChatMessage> currentInput)
@@ -210,6 +242,17 @@ internal sealed class TurnRecorderChatClient : DelegatingChatClient
 
     private IEnumerable<ConversationMessage> ConvertCapturedMessages(ChatMessage message)
     {
+        if (message.Role == ChatRole.User)
+        {
+            // Steering messages injected mid-turn.
+            if (message.Text.Length > 0)
+            {
+                yield return ConversationMessage.FromText(ConversationRole.User, message.Text);
+            }
+
+            yield break;
+        }
+
         if (message.Role == ChatRole.Tool)
         {
             foreach (AIContent content in message.Contents)
