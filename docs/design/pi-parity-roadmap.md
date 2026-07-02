@@ -111,6 +111,13 @@ Each numbered item can be its own small PR; 1–2 land with PR-A5, 3–5 may tra
 - `/model` with no args → numbered picker across configured models (reuse the wizard's selection UI).
 - `--models "pattern1,pattern2"` to scope which models the picker offers.
 
+### PR-A8: Config directory override (DONE, added post-hoc)
+
+`WINHARNESS_CONFIG_DIR` environment variable redirects the whole configuration
+directory (config, sessions, logs, skills). Pi-parity with `PI_CODING_AGENT_DIR`.
+Motivated by the AOT gate smoke test touching the real per-user config: the
+directory is resolved via the known-folder API, so setting `APPDATA` has no effect.
+
 ---
 
 ## 4. Track B — OAuth Subscription Providers (v0.4)

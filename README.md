@@ -176,6 +176,8 @@ Runtime configuration will live under:
 %APPDATA%\WinHarness
 ```
 
+Set the `WINHARNESS_CONFIG_DIR` environment variable to redirect the entire configuration directory (config, sessions, logs, skills) to another path — useful for smoke tests and CI so runs never touch the real per-user configuration. Note that setting `APPDATA` alone has no effect: the directory is resolved through the Windows known-folder API, not the environment variable.
+
 API keys must be stored in Windows Credential Manager, not configuration files.
 WinHarness credential target names must use the `WinHarness:` prefix, for example `WinHarness:openai-main`.
 

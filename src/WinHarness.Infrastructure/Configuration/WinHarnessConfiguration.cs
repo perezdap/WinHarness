@@ -10,10 +10,24 @@ namespace WinHarness.Infrastructure.Configuration;
 public static class WinHarnessConfiguration
 {
     /// <summary>
-    /// Gets the per-user WinHarness configuration directory.
+    /// Environment variable that overrides the configuration directory.
+    /// Useful for smoke tests and CI so runs never touch the real per-user
+    /// configuration under %APPDATA%\WinHarness.
+    /// </summary>
+    public const string ConfigDirEnvironmentVariable = "WINHARNESS_CONFIG_DIR";
+
+    /// <summary>
+    /// Gets the per-user WinHarness configuration directory. Honors
+    /// <see cref="ConfigDirEnvironmentVariable"/> when set to a non-empty value.
     /// </summary>
     public static string GetConfigurationDirectory()
     {
+        string? overrideDir = Environment.GetEnvironmentVariable(ConfigDirEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(overrideDir))
+        {
+            return Path.GetFullPath(overrideDir);
+        }
+
         string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         return Path.Combine(appData, "WinHarness");
     }
