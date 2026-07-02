@@ -309,6 +309,40 @@ public sealed class BuiltinToolProviderTests
         CollectionAssert.AreEqual(new[] { "--version" }, executor.LastRequest.Arguments.ToArray());
     }
 
+    [TestMethod]
+    public async Task RunCommandDoesNotLongPathPrefixWorkingDirectory()
+    {
+        // Regression: the \\?\ prefix from long-path normalization is not a valid
+        // process working directory. MSBuild running under \\?\C:\... fails to
+        // resolve Directory.Build.props imports (the '?' gets escaped to %3f).
+        string root = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(root, "sub"));
+        FakeCommandExecutor executor = new();
+        BuiltinToolProvider provider = new(root, executor, new PrefixingLongPathService());
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult result = await tools.Single(static tool => tool.Name == "run_command")
+            .ExecuteAsync(
+                new ToolInvocation("run_command", Json("""{"command":"dotnet","arguments":["--info"],"workingDirectory":"sub","timeoutSeconds":10}""")),
+                CancellationToken.None);
+
+        Assert.IsTrue(result.Succeeded);
+        Assert.IsNotNull(executor.LastRequest);
+        Assert.IsFalse(
+            executor.LastRequest!.WorkingDirectory!.StartsWith(@"\\?\", StringComparison.Ordinal),
+            $"Working directory must not carry the long-path prefix: {executor.LastRequest.WorkingDirectory}");
+        Assert.AreEqual(Path.Combine(root, "sub"), executor.LastRequest.WorkingDirectory);
+    }
+
+    private sealed class PrefixingLongPathService : ILongPathService
+    {
+        public string Normalize(string path)
+        {
+            string fullPath = Path.GetFullPath(path);
+            return fullPath.StartsWith(@"\\?\", StringComparison.Ordinal) ? fullPath : @"\\?\" + fullPath;
+        }
+    }
+
     private sealed class RecordingLongPathService : ILongPathService
     {
         public List<string> Paths { get; } = [];

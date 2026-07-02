@@ -480,8 +480,12 @@ public sealed class BuiltinToolProvider : IToolProvider
                 request = new CommandRequest(
                     FileName: fileName,
                     Arguments: commandArguments,
+                    // Deliberately not NormalizeForIo: the \\?\ long-path prefix is a
+                    // file-API affordance and is not a valid process working directory
+                    // (CreateProcess passes it through verbatim, breaking tools such as
+                    // MSBuild that treat the cwd as a plain path).
                     WorkingDirectory: invocation.Arguments.TryGetProperty("workingDirectory", out JsonElement workingDirectory) && workingDirectory.ValueKind == JsonValueKind.String
-                        ? NormalizeForIo(ResolveWorkspacePath(invocation.Arguments, "workingDirectory"))
+                        ? ResolveWorkspacePath(invocation.Arguments, "workingDirectory")
                         : WorkspaceRoot,
                     Mode: executionMode,
                     Timeout: TimeSpan.FromSeconds(OptionalInt32(invocation.Arguments, "timeoutSeconds", 60)),
