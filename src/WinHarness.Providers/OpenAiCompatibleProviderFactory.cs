@@ -14,14 +14,27 @@ public sealed class OpenAiCompatibleProviderFactory : IProviderFactory
 {
     private readonly WinHarnessOptions _options;
     private readonly ICredentialStore _credentialStore;
+    private readonly IEnumerable<IOAuthTokenRefresher> _refreshers;
 
     /// <summary>
     /// Creates a factory.
     /// </summary>
     public OpenAiCompatibleProviderFactory(WinHarnessOptions options, ICredentialStore credentialStore)
+        : this(options, credentialStore, [])
+    {
+    }
+
+    /// <summary>
+    /// Creates a factory with OAuth flow refreshers.
+    /// </summary>
+    public OpenAiCompatibleProviderFactory(
+        WinHarnessOptions options,
+        ICredentialStore credentialStore,
+        IEnumerable<IOAuthTokenRefresher> refreshers)
     {
         _options = options;
         _credentialStore = credentialStore;
+        _refreshers = refreshers;
     }
 
     /// <inheritdoc />
@@ -35,7 +48,28 @@ public sealed class OpenAiCompatibleProviderFactory : IProviderFactory
             string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{providerId}'.");
 
-        return new OpenAiCompatibleChatProvider(provider, model, _credentialStore);
+        return new OpenAiCompatibleChatProvider(provider, model, CreateTokenSource(provider));
+    }
+
+    /// <summary>
+    /// Resolves the auth token source for a configured provider: OAuth when the
+    /// auth block requests it (and a matching flow refresher is registered),
+    /// api-key otherwise.
+    /// </summary>
+    public IAuthTokenSource CreateTokenSource(ProviderOptions provider)
+    {
+        if (provider.Auth is { Scheme: var scheme } auth &&
+            string.Equals(scheme, "oauth", StringComparison.OrdinalIgnoreCase))
+        {
+            IOAuthTokenRefresher refresher = _refreshers.FirstOrDefault(candidate =>
+                string.Equals(candidate.OAuthProviderId, auth.OAuthProvider, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException(
+                    $"Provider '{provider.Id}' uses OAuth flow '{auth.OAuthProvider}', but no such flow is available.");
+
+            return new OAuthTokenSource(_credentialStore, refresher, provider.Id);
+        }
+
+        return new ApiKeyTokenSource(_credentialStore, provider.CredentialName);
     }
 }
 
@@ -43,16 +77,16 @@ internal sealed class OpenAiCompatibleChatProvider : IChatProvider
 {
     private readonly ProviderOptions _provider;
     private readonly ModelOptions _model;
-    private readonly ICredentialStore _credentialStore;
+    private readonly IAuthTokenSource _tokenSource;
 
     public OpenAiCompatibleChatProvider(
         ProviderOptions provider,
         ModelOptions model,
-        ICredentialStore credentialStore)
+        IAuthTokenSource tokenSource)
     {
         _provider = provider;
         _model = model;
-        _credentialStore = credentialStore;
+        _tokenSource = tokenSource;
     }
 
     public string ProviderId => _provider.Id;
@@ -78,15 +112,11 @@ internal sealed class OpenAiCompatibleChatProvider : IChatProvider
 
     private string ResolveApiKey()
     {
-        if (string.IsNullOrWhiteSpace(_provider.CredentialName))
-        {
-            return "not-required";
-        }
-
-        return _credentialStore.GetSecretAsync(_provider.CredentialName, CancellationToken.None)
+        // Providers resolve the credential per client creation; OAuth token
+        // sources refresh transparently inside GetAccessTokenAsync.
+        return _tokenSource.GetAccessTokenAsync(CancellationToken.None)
             .AsTask()
             .GetAwaiter()
-            .GetResult()
-            ?? throw new InvalidOperationException($"Credential '{_provider.CredentialName}' was not found.");
+            .GetResult();
     }
 }

@@ -21,6 +21,8 @@ namespace WinHarness.Serialization;
 [JsonSerializable(typeof(ModelOptions))]
 [JsonSerializable(typeof(McpServerOptions))]
 [JsonSerializable(typeof(CompactionOptions))]
+[JsonSerializable(typeof(ProviderAuthOptions))]
+[JsonSerializable(typeof(OAuthTokenSet))]
 [JsonSerializable(typeof(ProviderCapabilities))]
 [JsonSerializable(typeof(global::WinHarness.Conversation.Conversation))]
 [JsonSerializable(typeof(ConversationMessage))]

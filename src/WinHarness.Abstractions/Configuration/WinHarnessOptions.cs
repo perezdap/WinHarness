@@ -78,9 +78,32 @@ public sealed class ProviderOptions
     public string? CredentialName { get; set; }
 
     /// <summary>
+    /// Gets or sets the authentication scheme. When null, defaults to
+    /// "api-key" (credentialName-based) behavior.
+    /// </summary>
+    public ProviderAuthOptions? Auth { get; set; }
+
+    /// <summary>
     /// Gets or sets configured models for this provider.
     /// </summary>
     public List<ModelOptions> Models { get; set; } = [];
+}
+
+/// <summary>
+/// Provider authentication configuration.
+/// </summary>
+public sealed class ProviderAuthOptions
+{
+    /// <summary>
+    /// Gets or sets the auth scheme: "api-key" (default) or "oauth".
+    /// </summary>
+    public string Scheme { get; set; } = "api-key";
+
+    /// <summary>
+    /// Gets or sets the OAuth flow id for oauth scheme: "copilot",
+    /// "anthropic", or "openai-codex".
+    /// </summary>
+    public string? OAuthProvider { get; set; }
 }
 
 /// <summary>

@@ -41,6 +41,21 @@ public static class WinHarnessOptionsValidator
                 throw new InvalidOperationException($"Provider '{provider.Id}' credentialName must start with 'WinHarness:'.");
             }
 
+            if (provider.Auth is { } auth)
+            {
+                bool isApiKey = string.Equals(auth.Scheme, "api-key", StringComparison.OrdinalIgnoreCase);
+                bool isOAuth = string.Equals(auth.Scheme, "oauth", StringComparison.OrdinalIgnoreCase);
+                if (!isApiKey && !isOAuth)
+                {
+                    throw new InvalidOperationException($"Provider '{provider.Id}' auth scheme '{auth.Scheme}' is not supported. Use api-key or oauth.");
+                }
+
+                if (isOAuth && string.IsNullOrWhiteSpace(auth.OAuthProvider))
+                {
+                    throw new InvalidOperationException($"Provider '{provider.Id}' uses the oauth scheme but is missing auth.oauthProvider.");
+                }
+            }
+
             HashSet<string> modelIds = new(StringComparer.OrdinalIgnoreCase);
             foreach (ModelOptions model in provider.Models)
             {

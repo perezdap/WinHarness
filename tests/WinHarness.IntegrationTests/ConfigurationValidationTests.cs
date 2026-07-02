@@ -10,6 +10,53 @@ namespace WinHarness.IntegrationTests;
 public sealed class ConfigurationValidationTests
 {
     [TestMethod]
+    public void RejectsUnsupportedAuthScheme()
+    {
+        WinHarnessOptions options = new();
+        options.Providers.Add(new ProviderOptions
+        {
+            Id = "sub",
+            Kind = "openai-compatible",
+            Auth = new ProviderAuthOptions { Scheme = "basic" }
+        });
+
+        InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(
+            () => WinHarnessOptionsValidator.Validate(options));
+        StringAssert.Contains(exception.Message, "auth scheme");
+    }
+
+    [TestMethod]
+    public void RejectsOAuthSchemeWithoutFlowId()
+    {
+        WinHarnessOptions options = new();
+        options.Providers.Add(new ProviderOptions
+        {
+            Id = "sub",
+            Kind = "openai-compatible",
+            Auth = new ProviderAuthOptions { Scheme = "oauth" }
+        });
+
+        InvalidOperationException exception = Assert.ThrowsExactly<InvalidOperationException>(
+            () => WinHarnessOptionsValidator.Validate(options));
+        StringAssert.Contains(exception.Message, "oauthProvider");
+    }
+
+    [TestMethod]
+    public void AcceptsOAuthSchemeWithFlowId()
+    {
+        WinHarnessOptions options = new();
+        options.Providers.Add(new ProviderOptions
+        {
+            Id = "sub",
+            Kind = "openai-compatible",
+            BaseUrl = "https://api.individual.githubcopilot.com",
+            Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "copilot" }
+        });
+
+        WinHarnessOptionsValidator.Validate(options);
+    }
+
+    [TestMethod]
     public void RejectsUnsupportedProviderKind()
     {
         WinHarnessOptions options = new();

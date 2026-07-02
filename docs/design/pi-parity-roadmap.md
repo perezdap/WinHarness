@@ -125,19 +125,18 @@ OpenAI-compatible proxy baseUrl; Anthropic PKCE via `claude.ai/oauth/authorize`
 ToS-risk acceptance, ship order (Copilot → Anthropic → Codex), and drift
 containment recorded in `docs/adr/ADR-0005-oauth-subscription-providers.md`.
 
-### 4.2 Auth-scheme abstraction (PR-B1)
+### 4.2 Auth-scheme abstraction (PR-B1: DONE)
 
-Current model: provider → static API key from Credential Manager. Generalize:
-
-```text
-ProviderConfig gains:  "auth": { "scheme": "api-key" | "oauth", "oauthProvider": "copilot" | "anthropic" | "openai-codex" }
-```
-
-- New abstraction in `WinHarness.Abstractions`: `IAuthTokenSource` with `GetAccessTokenAsync(CancellationToken)` — returns a valid bearer, refreshing transparently.
-- `ApiKeyTokenSource` (reads Credential Manager, current behavior) and `OAuthTokenSource` (reads stored token set, refreshes when near expiry, persists rotated refresh tokens back to Credential Manager).
-- Token set stored as one JSON secret per provider: `WinHarness:oauth:<provider-id>` → `{ accessToken, refreshToken, expiresAt, scopes }`.
-- Provider factory resolves the token source per request instead of a fixed key. Copilot's short-lived bearer (~30 min) makes per-request resolution mandatory, so do it uniformly.
-- All JSON via source-generated contexts (AOT).
+Implemented: `IAuthTokenSource` (per-request resolution) with
+`ApiKeyTokenSource` (existing credentialName behavior) and `OAuthTokenSource`
+(loads `WinHarness:oauth:<provider-id>` token set, refreshes through a
+flow-specific `IOAuthTokenRefresher` when within the 5-minute skew, persists
+rotated tokens last-writer-wins). `ProviderOptions.Auth` block
+(`scheme: api-key | oauth`, `oauthProvider`) validated by
+`WinHarnessOptionsValidator`; `OAuthTokenSet` carries optional `baseUrl`
+(Copilot proxy) and `accountId` (Codex JWT claim) for later PRs. Factory
+resolves the token source per provider; not-logged-in errors point at
+`winharness login`.
 
 ### PR-B2: `winharness login` / `logout` + `/login` `/logout`
 
