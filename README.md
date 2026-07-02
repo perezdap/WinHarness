@@ -58,7 +58,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness diagnostics write --message "..."`
 - `winharness config init`
 - `winharness config wizard` for guided, interactive provider/model setup
-- `winharness chat --prompt "..." [--render-markdown true] [--continue-session]`
+- `winharness chat --prompt "..." [--render-markdown true] [--continue-session]` — piped stdin is prepended as a fenced block (`Get-Content README.md | winharness chat --prompt "Summarize"`); attach files with `--files src\Program.cs` (repeatable) or inline `@path` tokens in the prompt
 - `winharness chat` for the terminal REPL (continues the most recent workspace session by default; see [Sessions](#sessions))
 - `winharness chat --tools read_file,grep,glob` to allowlist tools for the run; `--exclude-tools run_command` to deny specific tools; `--no-tools` to disable all tools (applies to built-in and MCP tools; unknown names warn instead of failing)
 - `winharness providers list`

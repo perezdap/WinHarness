@@ -210,6 +210,7 @@ app.Add("chat", async (
     string[]? tools = null,
     string[]? excludeTools = null,
     bool noTools = false,
+    string[]? files = null,
     CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
@@ -238,6 +239,17 @@ app.Add("chat", async (
     if (toolFilter is not null && !noTools)
     {
         await ChatRepl.WarnUnknownToolNamesAsync(host.Services, toolFilter, cancellationToken).ConfigureAwait(false);
+    }
+
+    // One-shot prompt assembly: piped stdin is prepended as a fenced block,
+    // --files and inline @tokens expand to fenced attachments.
+    if (!string.IsNullOrWhiteSpace(prompt))
+    {
+        prompt = await ChatRepl.AssembleOneShotPromptAsync(prompt, files, cancellationToken).ConfigureAwait(false);
+    }
+    else if (files is { Length: > 0 })
+    {
+        throw new InvalidOperationException("--files requires --prompt (interactive mode uses inline @path references).");
     }
 
     if (string.IsNullOrWhiteSpace(prompt))
@@ -1074,6 +1086,51 @@ internal static class CliValidation
 
 internal static class ChatRepl
 {
+    /// <summary>
+    /// Assembles the one-shot prompt: piped stdin (when redirected) is
+    /// prepended as a fenced block, --files attachments and inline @tokens
+    /// expand through the same code path as the interactive editor.
+    /// </summary>
+    public static async ValueTask<string> AssembleOneShotPromptAsync(
+        string prompt,
+        string[]? files,
+        CancellationToken cancellationToken)
+    {
+        if (Console.IsInputRedirected)
+        {
+            string piped = (await Console.In.ReadToEndAsync(cancellationToken).ConfigureAwait(false)).Trim();
+            if (piped.Length > 0)
+            {
+                prompt = "```stdin" + Environment.NewLine + piped + Environment.NewLine + "```" +
+                    Environment.NewLine + Environment.NewLine + prompt;
+            }
+        }
+
+        if (files is { Length: > 0 })
+        {
+            foreach (string file in files)
+            {
+                string fullPath = Path.GetFullPath(file);
+                if (!File.Exists(fullPath))
+                {
+                    throw new InvalidOperationException($"--files: '{file}' was not found.");
+                }
+
+                // Reuse the @token expansion so limits/formatting stay uniform.
+                prompt += Environment.NewLine + "@" + file;
+            }
+        }
+
+        (string expanded, IReadOnlyList<string> attached) =
+            EditorInput.ExpandFileReferences(prompt, Environment.CurrentDirectory);
+        if (attached.Count > 0)
+        {
+            Console.Error.WriteLine($"attached: {string.Join(", ", attached)}");
+        }
+
+        return expanded;
+    }
+
     private static readonly string[] KnownEfforts = ["off", "minimal", "low", "medium", "high"];
 
     /// <summary>

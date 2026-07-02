@@ -171,10 +171,14 @@ PR-B3 delivers `AnthropicMessagesChatProvider` behind the existing `IChatProvide
 
 Makes WinHarness embeddable and script-friendly, playing to the CLI-first design.
 
-### PR-C1: Piped stdin and `@file` arguments
+### PR-C1: Piped stdin and `@file` arguments (DONE)
 
-- `Get-Content README.md | winharness chat --prompt "Summarize"` — when stdin is redirected, read it fully and prepend to the prompt (fenced block).
-- `winharness chat @src\Program.cs @README.md --prompt "Review"` — `@`-prefixed args attach file contents; images become image parts when the model has `vision`. Shares the expansion code with PR-A5 item 3.
+Implemented: redirected stdin is read fully and prepended to `--prompt` as a
+fenced ```` ```stdin ```` block; `--files <path>` (repeatable) and inline
+`@path` tokens both route through `EditorInput.ExpandFileReferences`, so
+limits and formatting match the interactive editor. Missing `--files` paths
+error; missing inline tokens are left alone. Image parts deferred until a
+vision-capable content-block path exists end to end.
 
 ### PR-C2: JSON event stream (`--output json`)
 
