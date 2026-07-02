@@ -485,7 +485,8 @@ public sealed class BuiltinToolProvider : IToolProvider
                         : WorkspaceRoot,
                     Mode: executionMode,
                     Timeout: TimeSpan.FromSeconds(OptionalInt32(invocation.Arguments, "timeoutSeconds", 60)),
-                    StandardInput: OptionalString(invocation.Arguments, "input"));
+                    StandardInput: OptionalString(invocation.Arguments, "input"),
+                    MaxOutputBytes: OptionalInt32(invocation.Arguments, "maxOutputBytes", 128 * 1024));
             }
             catch (InvalidOperationException ex)
             {
@@ -499,15 +500,22 @@ public sealed class BuiltinToolProvider : IToolProvider
             CommandResult result = await _commandExecutor.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
             string content = string.Concat("mode: ", result.Mode, Environment.NewLine, "exit_code: ", result.ExitCode, Environment.NewLine, "stdout:", Environment.NewLine, result.StandardOutput, Environment.NewLine, "stderr:", Environment.NewLine, result.StandardError);
             content = Truncate(content, OptionalInt32(invocation.Arguments, "maxOutputBytes", 128 * 1024));
+            var metadata = new Dictionary<string, string>
+            {
+                ["command.mode"] = result.Mode.ToString(),
+                ["command.exit_code"] = result.ExitCode.ToString(CultureInfo.InvariantCulture)
+            };
+            if (result.OutputTruncated)
+            {
+                metadata["command.output_truncated"] = "true";
+            }
+
             return new ToolResult(
                 result.ExitCode == 0,
                 content,
                 result.ExitCode == 0 ? null : "nonzero_exit",
-                new Dictionary<string, string>
-                {
-                    ["command.mode"] = result.Mode.ToString(),
-                    ["command.exit_code"] = result.ExitCode.ToString(CultureInfo.InvariantCulture)
-                });
+                metadata
+                );
         }
 
         private static bool ContainsUnquotedSpace(string value)
@@ -618,8 +626,8 @@ public sealed class BuiltinToolProvider : IToolProvider
             using System.Diagnostics.Process process = startedProcess;
             await WriteStandardInputAsync(process, request.StandardInput).ConfigureAwait(false);
 
-            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
-            Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+            Task<(string Content, bool Truncated)> stdoutTask = ReadOutputWithLimitAsync(process.StandardOutput, request.MaxOutputBytes, cancellationToken);
+            Task<(string Content, bool Truncated)> stderrTask = ReadOutputWithLimitAsync(process.StandardError, request.MaxOutputBytes, cancellationToken);
             using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(request.Timeout);
 
@@ -637,16 +645,87 @@ public sealed class BuiltinToolProvider : IToolProvider
                 {
                 }
 
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-                string timedOutStdout = await stdoutTask.ConfigureAwait(false);
-                string timedOutStderr = await stderrTask.ConfigureAwait(false);
-                return new CommandResult(1, timedOutStdout, timedOutStderr + Environment.NewLine + "Process timed out.", CommandExecutionMode.Captured);
+                using CancellationTokenSource killTimeout = new(TimeSpan.FromSeconds(5));
+                try
+                {
+                    await process.WaitForExitAsync(killTimeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+
+                (string timedOutStdout, bool timedOutTruncated) = await stdoutTask.ConfigureAwait(false);
+                (string timedOutStderr, _) = await stderrTask.ConfigureAwait(false);
+                return new CommandResult(1, timedOutStdout, timedOutStderr + Environment.NewLine + "Process timed out.", CommandExecutionMode.Captured, timedOutTruncated);
             }
 
-            string stdout = await stdoutTask.ConfigureAwait(false);
-            string stderr = await stderrTask.ConfigureAwait(false);
+            (string stdout, bool stdoutTruncated) = await stdoutTask.ConfigureAwait(false);
+            (string stderr, bool stderrTruncated) = await stderrTask.ConfigureAwait(false);
 
-            return new CommandResult(process.ExitCode, stdout, stderr, CommandExecutionMode.Captured);
+            return new CommandResult(process.ExitCode, stdout, stderr, CommandExecutionMode.Captured, stdoutTruncated || stderrTruncated);
+        }
+
+        private static async Task<(string Content, bool Truncated)> ReadOutputWithLimitAsync(
+            StreamReader reader,
+            int? maxBytes,
+            CancellationToken cancellationToken)
+        {
+            if (maxBytes is not { } limit)
+            {
+                string content = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+                return (content, false);
+            }
+
+            var buffer = new char[4096];
+            var sb = new StringBuilder();
+            int totalBytes = 0;
+
+            while (true)
+            {
+                int charsRead = await reader.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                if (charsRead == 0)
+                {
+                    break;
+                }
+
+                string chunk = new(buffer, 0, charsRead);
+                int chunkBytes = Encoding.UTF8.GetByteCount(chunk);
+
+                if (totalBytes + chunkBytes > limit)
+                {
+                    int remaining = limit - totalBytes;
+                    for (int i = 0; i < charsRead && remaining > 0; i++)
+                    {
+                        int charBytes = Encoding.UTF8.GetByteCount(chunk, i, 1);
+                        if (charBytes > remaining)
+                        {
+                            break;
+                        }
+
+                        sb.Append(chunk[i]);
+                        remaining -= charBytes;
+                    }
+
+                    await DrainReaderAsync(reader, cancellationToken).ConfigureAwait(false);
+                    return (sb.ToString(), true);
+                }
+
+                sb.Append(chunk);
+                totalBytes += chunkBytes;
+            }
+
+            return (sb.ToString(), false);
+        }
+
+        private static async Task DrainReaderAsync(StreamReader reader, CancellationToken cancellationToken)
+        {
+            var discard = new char[4096];
+            try
+            {
+                while (await reader.ReadAsync(discard, cancellationToken).ConfigureAwait(false) > 0) { }
+            }
+            catch (OperationCanceledException) { }
+            catch (IOException) { }
         }
         private static async ValueTask WriteStandardInputAsync(System.Diagnostics.Process process, string? standardInput)
         {
