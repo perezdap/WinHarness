@@ -701,6 +701,19 @@ internal static class SlashCommandProcessor
             return await ListModelsAsync(options, session, argument: session.ProviderId, context).ConfigureAwait(false);
         }
 
+        // "model:effort" shorthand, e.g. "/model gpt-primary:high".
+        string? shorthandEffort = null;
+        int separator = modelId.LastIndexOf(':');
+        if (separator > 0 && separator < modelId.Length - 1)
+        {
+            string suffix = modelId[(separator + 1)..].ToLowerInvariant();
+            if (suffix is "off" or "minimal" or "low" or "medium" or "high")
+            {
+                shorthandEffort = suffix;
+                modelId = modelId[..separator];
+            }
+        }
+
         ModelOptions? model = provider.Models.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase));
         if (model is null)
@@ -709,8 +722,14 @@ internal static class SlashCommandProcessor
         }
 
         session.ModelId = model.Id;
+        if (shorthandEffort is not null)
+        {
+            session.ReasoningEffort = shorthandEffort == "off" ? null : shorthandEffort;
+        }
+
         await AppendModelChangeIfPersistedAsync(session, context).ConfigureAwait(false);
-        return SlashCommandResult.Handled([$"Model {session.ModelId}."]);
+        string effortNote = shorthandEffort is null ? "" : $" (effort {shorthandEffort})";
+        return SlashCommandResult.Handled([$"Model {session.ModelId}{effortNote}."]);
     }
 
     private static async ValueTask AppendModelChangeIfPersistedAsync(

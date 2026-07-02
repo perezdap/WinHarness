@@ -65,7 +65,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness providers add --id openai-main --base-url https://api.openai.com/v1 [--api-key sk-... --set-default]`
 - `winharness providers remove --id openai-main`
 - `winharness providers use --provider-id local-ollama`
-- `winharness models list --provider-id local-ollama`
+- `winharness models list --provider-id local-ollama` (add `--filter "local*"` for a case-insensitive wildcard over model ids across all providers)
 - `winharness models discover --base-url http://localhost:11434/v1 [--api-key sk-...]` to query the endpoint's `GET /v1/models`
 - `winharness models add --provider-id openai-main --id gpt-primary --provider-model-id gpt-4.1 [--tool-calling --vision --set-default]`
 - `winharness models set-capabilities --provider-id openai-main --model-id gpt-primary [--tool-calling --vision --reasoning ...]`

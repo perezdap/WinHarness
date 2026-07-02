@@ -89,19 +89,21 @@ Incremental improvements to the REPL input line. Implement in this order:
 
 Each numbered item can be its own small PR; 1–2 land with PR-A5, 3–5 may trail.
 
-### PR-A6: Thinking-level UX
+### PR-A6: Thinking-level UX (DONE)
 
-`/effort` exists. Round it out:
+Implemented: `model:effort` shorthand on `--model-id` and `/model`
+(e.g. `gpt-primary:high`, `minimax-m3:cloud:medium`); only known effort levels
+(off/minimal/low/medium/high) split, so colon-bearing model ids keep working.
+`--reasoning-effort` flag and `/effort` already existed. Per-session effort
+changes continue to ride `model_change` entries. Shift+Tab cycling deferred to
+PR-A5 raw-mode editor work.
 
-- `--effort <off|minimal|low|medium|high>` CLI flag for one-shot and REPL startup.
-- Model shorthand: `--model gpt-primary:high`.
-- Persist per-session effort changes as `model_change`-style session entries (matches existing pattern).
+### PR-A7: Model cycling and listing (DONE)
 
-### PR-A7: Model cycling and listing
-
-- `--list-models [pattern]` top-level command output for all configured providers (you have `models list` per provider; add the cross-provider view with wildcard match).
-- `/model` with no args → numbered picker across configured models (reuse the wizard's selection UI).
-- `--models "pattern1,pattern2"` to scope which models the picker offers.
+Implemented: `models list --filter <pattern>` — case-insensitive wildcard
+(`*`) or substring match over model id and providerModelId, across all
+providers or within `--provider-id`. Bare `/model` and `/models` grouped
+pickers already existed. Ctrl+P cycling deferred to PR-A5 raw-mode editor work.
 
 ### PR-A8: Config directory override (DONE, added post-hoc)
 

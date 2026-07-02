@@ -217,6 +217,10 @@ app.Add("chat", async (
     string resolvedModelId = modelId ?? options.DefaultModel;
     bool effectiveRenderMarkdown = renderMarkdown ?? true;
 
+    // "model:effort" shorthand, e.g. --model-id gpt-primary:high.
+    (resolvedModelId, string? shorthandEffort) = ChatRepl.SplitModelEffortShorthand(resolvedModelId);
+    reasoningEffort ??= shorthandEffort;
+
     if (string.IsNullOrWhiteSpace(resolvedProviderId) || string.IsNullOrWhiteSpace(resolvedModelId))
     {
         throw new InvalidOperationException("Configure defaultProvider/defaultModel or pass --provider-id and --model-id.");
@@ -397,9 +401,10 @@ app.Add("providers use", async (string providerId, CancellationToken cancellatio
     }
 });
 
-app.Add("models list", (string? providerId = null) =>
+app.Add("models list", (string? providerId = null, string? filter = null) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    Func<ModelOptions, bool> matches = CliValidation.CreateModelFilter(filter);
 
     // No argument: list every provider's models with a header per provider.
     if (string.IsNullOrWhiteSpace(providerId))
@@ -412,14 +417,20 @@ app.Add("models list", (string? providerId = null) =>
 
         foreach (ProviderOptions provider in options.Providers)
         {
+            List<ModelOptions> models = provider.Models.Where(matches).ToList();
+            if (filter is not null && models.Count == 0)
+            {
+                continue;
+            }
+
             Console.WriteLine($"{provider.Id}\t{provider.BaseUrl}");
-            if (provider.Models.Count == 0)
+            if (models.Count == 0)
             {
                 Console.WriteLine($"\t(no models configured)");
                 continue;
             }
 
-            foreach (ModelOptions model in provider.Models)
+            foreach (ModelOptions model in models)
             {
                 Console.WriteLine($"\t{model.Id}\t{model.ProviderModelId}");
             }
@@ -437,7 +448,7 @@ app.Add("models list", (string? providerId = null) =>
         throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
     }
 
-    foreach (ModelOptions model in filtered.Models)
+    foreach (ModelOptions model in filtered.Models.Where(matches))
     {
         Console.WriteLine($"{model.Id}\t{model.ProviderModelId}");
     }
@@ -941,6 +952,29 @@ internal static class StarterConfiguration
 
 internal static class CliValidation
 {
+    /// <summary>
+    /// Builds a case-insensitive wildcard predicate over model id and
+    /// providerModelId. Supports '*' (any run) in the pattern; a pattern
+    /// without '*' matches as a substring.
+    /// </summary>
+    public static Func<ModelOptions, bool> CreateModelFilter(string? pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern))
+        {
+            return static _ => true;
+        }
+
+        string regexPattern = pattern.Contains('*')
+            ? "^" + string.Join(".*", pattern.Split('*').Select(System.Text.RegularExpressions.Regex.Escape)) + "$"
+            : System.Text.RegularExpressions.Regex.Escape(pattern);
+        System.Text.RegularExpressions.Regex regex = new(
+            regexPattern,
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(1));
+
+        return model => regex.IsMatch(model.Id) || regex.IsMatch(model.ProviderModelId);
+    }
+
     public static void ValidateCredentialTargetName(string targetName)
     {
         if (!targetName.StartsWith("WinHarness:", StringComparison.Ordinal))
@@ -952,6 +986,27 @@ internal static class CliValidation
 
 internal static class ChatRepl
 {
+    private static readonly string[] KnownEfforts = ["off", "minimal", "low", "medium", "high"];
+
+    /// <summary>
+    /// Splits a "model:effort" shorthand (e.g. "gpt-primary:high") into model id
+    /// and effort. Returns the input unchanged when the suffix is not a known
+    /// effort level, so model ids containing colons keep working.
+    /// </summary>
+    public static (string ModelId, string? Effort) SplitModelEffortShorthand(string modelId)
+    {
+        int separator = modelId.LastIndexOf(':');
+        if (separator <= 0 || separator == modelId.Length - 1)
+        {
+            return (modelId, null);
+        }
+
+        string suffix = modelId[(separator + 1)..].ToLowerInvariant();
+        return KnownEfforts.Contains(suffix)
+            ? (modelId[..separator], suffix)
+            : (modelId, null);
+    }
+
     /// <summary>
     /// Builds a per-run tool gating policy from the chat command flags, or null
     /// when no gating was requested.
