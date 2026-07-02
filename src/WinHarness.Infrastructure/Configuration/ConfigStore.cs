@@ -63,6 +63,6 @@ public sealed class ConfigStore
             options,
             WinHarnessJsonSerializerContext.Default.WinHarnessOptions);
 
-        await File.WriteAllBytesAsync(_path, bytes, cancellationToken).ConfigureAwait(false);
+        await AtomicFile.WriteAllBytesAsync(_path, bytes, cancellationToken).ConfigureAwait(false);
     }
 }
