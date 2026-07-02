@@ -77,17 +77,14 @@ from assistant-message `Usage` on the active branch, plus a `/usage` slash
 command. Cost display deferred: needs optional per-model `pricing` metadata,
 revisit with the OAuth catalogs (Track B) where pricing is known.
 
-### PR-A5: Editor upgrades
+### PR-A5: Editor upgrades (DONE, items 1–3)
 
-Incremental improvements to the REPL input line. Implement in this order:
-
-1. **Multi-line input:** trailing backslash or triple-quote heredoc-style continuation (`"""` ... `"""`). Avoid raw key-handling complexity first pass.
-2. **`!command` / `!!command`:** `!` runs via the existing captured `run_command` executor and sends output to the model as a user message; `!!` runs and prints only.
-3. **`@` file reference:** on send, expand `@path` tokens to file contents (fenced, with path header). Fuzzy *interactive* search is a later nice-to-have; start with literal path + glob expansion.
-4. **Ctrl+G external editor:** write buffer to temp file, launch `$env:VISUAL` → `$env:EDITOR` → `notepad.exe`, read back on exit.
-5. **Image attach:** `@image.png` detection by extension → attach as image content part when the active model has `vision`. (Paste-from-clipboard deferred.)
-
-Each numbered item can be its own small PR; 1–2 land with PR-A5, 3–5 may trail.
+Implemented: `EditorInput` helper with (1) `"""` multi-line blocks, (2) `!`
+(run + send output to model) / `!!` (run + print only) command escapes through
+the captured executor, and (3) `@path` expansion to fenced attachments
+(whitespace-anchored regex so emails are ignored; missing paths left alone;
+256 KB per-file cap). Deferred: Ctrl+G external editor and image attach — both
+fit better once a raw-mode editor exists; interactive fuzzy `@` search likewise.
 
 ### PR-A6: Thinking-level UX (DONE)
 

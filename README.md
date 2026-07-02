@@ -145,6 +145,15 @@ While a turn is running you can keep typing in the REPL:
 
 Steering messages are persisted in the session as ordinary user messages.
 
+### Editor input
+
+| Input | Behavior |
+|-------|----------|
+| `"""` | Start multi-line input; finish with `"""` on its own line (text after the opening marker becomes the first line) |
+| `!command` | Run via `cmd.exe /c` (captured), print the output, and send it to the model as a user message |
+| `!!command` | Run and print only — nothing is sent to the model |
+| `@path` | Attach a file: the token stays in the prompt text and the file contents are appended as a fenced block (missing paths are left alone; files over 256 KB are skipped with a notice) |
+
 ### Context files
 
 Project instructions are loaded at startup and injected into the system prompt chain (not written to the session file):

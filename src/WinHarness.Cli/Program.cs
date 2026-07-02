@@ -1154,6 +1154,51 @@ internal static class ChatRepl
                 continue;
             }
 
+            switch (EditorInput.Classify(input))
+            {
+                case EditorInputKind.MultiLineStart:
+                {
+                    string? block = await ReadMultiLineBlockAsync(input, stdin.Reader, cancellationToken).ConfigureAwait(false);
+                    if (block is null)
+                    {
+                        return;
+                    }
+
+                    if (block.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    input = block;
+                    break;
+                }
+
+                case EditorInputKind.CommandLocal:
+                case EditorInputKind.CommandToModel:
+                {
+                    bool sendToModel = EditorInput.Classify(input) == EditorInputKind.CommandToModel;
+                    string? modelMessage = await RunEditorCommandAsync(
+                        services,
+                        EditorInput.StripCommandPrefix(input),
+                        sendToModel,
+                        cancellationToken).ConfigureAwait(false);
+                    if (modelMessage is null)
+                    {
+                        continue;
+                    }
+
+                    input = modelMessage;
+                    break;
+                }
+            }
+
+            // Expand @file references before the prompt is sent and persisted.
+            (input, IReadOnlyList<string> attached) = EditorInput.ExpandFileReferences(input, session.WorkspaceRoot);
+            if (attached.Count > 0)
+            {
+                AnsiConsole.MarkupLine("[dim]attached: " + Markup.Escape(string.Join(", ", attached)) + "[/]");
+            }
+
             // Visually separate the user's prompt from the agent's response so the
             // boundary is obvious in the scrollback.
             AnsiConsole.WriteLine();
@@ -1258,6 +1303,83 @@ internal static class ChatRepl
 
     private static string StripFollowUpPrefix(string line) =>
         line.StartsWith(">>", StringComparison.Ordinal) ? line[2..].Trim() : line;
+
+    /// <summary>
+    /// Reads lines until a closing \"\"\" marker. Text after the opening marker
+    /// on the same line becomes the first line of the block. Returns null on
+    /// EOF, the joined block otherwise.
+    /// </summary>
+    private static async ValueTask<string?> ReadMultiLineBlockAsync(
+        string openingLine,
+        System.Threading.Channels.ChannelReader<string?> stdin,
+        CancellationToken cancellationToken)
+    {
+        List<string> lines = [];
+        string remainder = openingLine[EditorInput.MultiLineMarker.Length..].Trim();
+        if (remainder.Length > 0)
+        {
+            lines.Add(remainder);
+        }
+
+        AnsiConsole.MarkupLine("[dim]multi-line input — end with \"\"\" on its own line[/]");
+        while (true)
+        {
+            string? line = await stdin.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (line is null)
+            {
+                return null;
+            }
+
+            if (line.Trim() == EditorInput.MultiLineMarker)
+            {
+                return string.Join(Environment.NewLine, lines).Trim();
+            }
+
+            lines.Add(line);
+        }
+    }
+
+    /// <summary>
+    /// Runs a `!`/`!!` editor command through the captured executor via cmd.exe
+    /// (or /bin/sh off Windows). Prints the output; returns a formatted user
+    /// message when the output should go to the model, null otherwise.
+    /// </summary>
+    private static async ValueTask<string?> RunEditorCommandAsync(
+        IServiceProvider services,
+        string command,
+        bool sendToModel,
+        CancellationToken cancellationToken)
+    {
+        if (command.Length == 0)
+        {
+            return null;
+        }
+
+        ICommandExecutor executor = services.GetRequiredService<ICommandExecutor>();
+        CommandRequest request = OperatingSystem.IsWindows()
+            ? new CommandRequest("cmd.exe", ["/c", command], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromSeconds(120))
+            : new CommandRequest("/bin/sh", ["-c", command], Environment.CurrentDirectory, CommandExecutionMode.Captured, TimeSpan.FromSeconds(120));
+
+        CommandResult result = await executor.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
+        if (result.StandardOutput.Length > 0)
+        {
+            Console.WriteLine(result.StandardOutput.TrimEnd());
+        }
+
+        if (result.StandardError.Length > 0)
+        {
+            Console.Error.WriteLine(result.StandardError.TrimEnd());
+        }
+
+        if (result.ExitCode != 0)
+        {
+            AnsiConsole.MarkupLine($"[yellow]exit code {result.ExitCode}[/]");
+        }
+
+        return sendToModel
+            ? EditorInput.FormatCommandOutputForModel(command, result.StandardOutput, result.StandardError, result.ExitCode)
+            : null;
+    }
 
     private static async ValueTask<ChatSession> CreateSessionAsync(
         IServiceProvider services,
