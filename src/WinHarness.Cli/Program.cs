@@ -207,6 +207,9 @@ app.Add("chat", async (
     string? session = null,
     string? name = null,
     string? reasoningEffort = null,
+    string[]? tools = null,
+    string[]? excludeTools = null,
+    bool noTools = false,
     CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
@@ -227,6 +230,12 @@ app.Add("chat", async (
         Session: session,
         Name: name);
 
+    ToolFilter? toolFilter = ChatRepl.CreateToolFilter(tools, excludeTools, noTools);
+    if (toolFilter is not null && !noTools)
+    {
+        await ChatRepl.WarnUnknownToolNamesAsync(host.Services, toolFilter, cancellationToken).ConfigureAwait(false);
+    }
+
     if (string.IsNullOrWhiteSpace(prompt))
     {
         await ChatRepl.RunAsync(
@@ -236,6 +245,7 @@ app.Add("chat", async (
                 effectiveRenderMarkdown,
                 bootstrapRequest,
                 reasoningEffort,
+                toolFilter,
                 cancellationToken)
             .ConfigureAwait(false);
         return;
@@ -249,6 +259,7 @@ app.Add("chat", async (
         effectiveRenderMarkdown,
         bootstrapRequest,
         reasoningEffort,
+        toolFilter,
         cancellationToken).ConfigureAwait(false);
 });
 
@@ -941,6 +952,62 @@ internal static class CliValidation
 
 internal static class ChatRepl
 {
+    /// <summary>
+    /// Builds a per-run tool gating policy from the chat command flags, or null
+    /// when no gating was requested.
+    /// </summary>
+    public static ToolFilter? CreateToolFilter(string[]? tools, string[]? excludeTools, bool noTools)
+    {
+        if (noTools)
+        {
+            return new ToolFilter(DisableAll: true);
+        }
+
+        IReadOnlyList<string>? allow = SplitToolNames(tools);
+        IReadOnlyList<string>? exclude = SplitToolNames(excludeTools);
+        if (allow is null && exclude is null)
+        {
+            return null;
+        }
+
+        return new ToolFilter(allow, exclude);
+    }
+
+    /// <summary>
+    /// Warns (does not fail) when a gating flag names a tool that is not
+    /// currently discoverable — MCP servers may be offline or disabled.
+    /// </summary>
+    public static async ValueTask WarnUnknownToolNamesAsync(
+        IServiceProvider services,
+        ToolFilter toolFilter,
+        CancellationToken cancellationToken)
+    {
+        ToolRegistry registry = services.GetRequiredService<ToolRegistry>();
+        IReadOnlyDictionary<string, ITool> known = await registry.ListToolsAsync(cancellationToken).ConfigureAwait(false);
+        HashSet<string> knownNames = new(known.Keys, StringComparer.OrdinalIgnoreCase);
+
+        foreach (string name in (toolFilter.Allow ?? []).Concat(toolFilter.Exclude ?? []))
+        {
+            if (!knownNames.Contains(name))
+            {
+                AnsiConsole.MarkupLine($"[yellow]warning:[/] unknown tool name '{Markup.Escape(name)}' in tool filter.");
+            }
+        }
+    }
+
+    // Accepts repeated flags and comma-separated values: --tools a,b --tools c.
+    private static IReadOnlyList<string>? SplitToolNames(string[]? values)
+    {
+        if (values is null || values.Length == 0)
+        {
+            return null;
+        }
+
+        List<string> names = [.. values
+            .SelectMany(static value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))];
+        return names.Count == 0 ? null : names;
+    }
+
     public static async ValueTask RunAsync(
         IServiceProvider services,
         string providerId,
@@ -948,6 +1015,7 @@ internal static class ChatRepl
         bool renderMarkdown,
         ChatSessionBootstrapRequest bootstrapRequest,
         string? reasoningEffort,
+        ToolFilter? toolFilter,
         CancellationToken cancellationToken)
     {
         WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
@@ -960,6 +1028,7 @@ internal static class ChatRepl
             cancellationToken).ConfigureAwait(false);
 
         session.ReasoningEffort = reasoningEffort;
+        session.ToolFilter = toolFilter;
         WriteBanner(session);
 
         SlashCommandContext slashContext = new(
@@ -1055,6 +1124,29 @@ internal static class ChatRepl
                 $"[dim]session[/] [bold]{Markup.Escape(display)}[/]  [dim]file[/] {Markup.Escape(session.SessionManager.SessionFilePath ?? string.Empty)}");
         }
 
+        if (session.ToolFilter is { } filter)
+        {
+            List<string> parts = [];
+            if (filter.DisableAll)
+            {
+                parts.Add("all tools disabled");
+            }
+            else
+            {
+                if (filter.Allow is { Count: > 0 } allow)
+                {
+                    parts.Add($"allow: {string.Join(",", allow)}");
+                }
+
+                if (filter.Exclude is { Count: > 0 } exclude)
+                {
+                    parts.Add($"exclude: {string.Join(",", exclude)}");
+                }
+            }
+
+            AnsiConsole.MarkupLine($"[dim]tools[/] [yellow]{Markup.Escape(string.Join("  ", parts))}[/]");
+        }
+
         string? contextLine = ContextBannerFormatter.Format(session.ProjectContext);
         if (contextLine is not null)
         {
@@ -1081,6 +1173,7 @@ internal static class ChatRepl
         bool renderMarkdown,
         ChatSessionBootstrapRequest bootstrapRequest,
         string? reasoningEffort,
+        ToolFilter? toolFilter,
         CancellationToken cancellationToken)
     {
         ChatSession session = await CreateSessionAsync(
@@ -1091,6 +1184,7 @@ internal static class ChatRepl
             bootstrapRequest,
             cancellationToken).ConfigureAwait(false);
         session.ReasoningEffort = reasoningEffort;
+        session.ToolFilter = toolFilter;
         await RunTurnAsync(
             services,
             session,
@@ -1226,7 +1320,8 @@ internal static class ChatRepl
                                    runConversation,
                                    session.WorkspaceRoot,
                                    session.ProjectContext,
-                                   session.ReasoningEffort),
+                                   session.ReasoningEffort,
+                                   session.ToolFilter),
                                cancellationToken).ConfigureAwait(false))
             {
                 switch (agentEvent.Kind)

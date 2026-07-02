@@ -1,6 +1,7 @@
 using ConversationState = WinHarness.Conversation.Conversation;
 using WinHarness.Context;
 using WinHarness.Conversation;
+using WinHarness.Tools;
 
 namespace WinHarness.Runtime;
 
@@ -26,7 +27,8 @@ public sealed record AgentRunRequest(
     ConversationState Conversation,
     string WorkspaceRoot = "",
     ProjectContext? ProjectContext = null,
-    string? ReasoningEffort = null);
+    string? ReasoningEffort = null,
+    ToolFilter? ToolFilter = null);
 
 /// <summary>
 /// A runtime event emitted during an agent run. The terminal

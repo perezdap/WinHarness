@@ -2,6 +2,7 @@ using WinHarness.Context;
 using WinHarness.Conversation;
 using WinHarness.Runtime;
 using WinHarness.Sessions;
+using WinHarness.Tools;
 using ConversationState = WinHarness.Conversation.Conversation;
 
 namespace WinHarness.Cli.Chat;
@@ -57,6 +58,8 @@ internal sealed class ChatSession
     public bool RenderMarkdown { get; set; }
 
     public string? ReasoningEffort { get; set; }
+
+    public ToolFilter? ToolFilter { get; set; }
 
     public IReadOnlyList<SkillDefinition> Skills { get; }
 

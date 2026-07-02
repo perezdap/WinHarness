@@ -41,3 +41,7 @@ _Avoid_: Engine, deployment.
 **Tool**:
 A provider-independent capability the model can invoke (built-in file/command tools or MCP stdio tools), exposed through one tool interface.
 _Avoid_: Function (reserved for the provider-transport AIFunction), plugin, command.
+
+**Tool filter**:
+An optional per-run gating policy over Tools by raw name: allowlist, denylist, or disable-all. Applied when building the model-facing tool list for a Turn; does not affect `tools call` or discovery.
+_Avoid_: Permissions, sandbox (different concerns).

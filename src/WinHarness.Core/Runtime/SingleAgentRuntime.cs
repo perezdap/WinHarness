@@ -122,7 +122,7 @@ Command execution rules:
             cancellationToken).ConfigureAwait(false);
 
         RuntimeToolActivitySink toolActivitySink = new();
-        ChatOptions? options = await CreateChatOptionsAsync(toolActivitySink, request.ReasoningEffort, cancellationToken).ConfigureAwait(false);
+        ChatOptions? options = await CreateChatOptionsAsync(toolActivitySink, request.ReasoningEffort, request.ToolFilter, cancellationToken).ConfigureAwait(false);
         StringBuilder assistantText = new();
         OutputLoopDetector loopDetector = new(OutputLoopWindowLines, OutputLoopMaxDistinctLines);
 
@@ -471,6 +471,7 @@ Command execution rules:
     private async ValueTask<ChatOptions?> CreateChatOptionsAsync(
         IToolActivitySink activitySink,
         string? reasoningEffort,
+        ToolFilter? toolFilter,
         CancellationToken cancellationToken)
     {
         List<AITool> tools = [];
@@ -481,6 +482,11 @@ Command execution rules:
             IReadOnlyList<ITool> providerTools = await provider.ListToolsAsync(cancellationToken).ConfigureAwait(false);
             foreach (ITool tool in providerTools)
             {
+                if (toolFilter is not null && !toolFilter.IsEnabled(tool.Name))
+                {
+                    continue;
+                }
+
                 ToolAIFunctionAdapter adapter = new(tool, _diagnosticSink, activitySink);
                 if (!names.Add(adapter.Name))
                 {

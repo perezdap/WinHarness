@@ -205,6 +205,37 @@ public sealed class SingleAgentRuntimeTests
     }
 
     [TestMethod]
+    public async Task ToolFilterExcludesToolsFromChatOptions()
+    {
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory(["plain answer"]),
+            [new FakeToolProvider()],
+            new RecordingDiagnosticSink(),
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        Conversation.Conversation conversation = new();
+        conversation.Add(ConversationMessage.FromText(ConversationRole.User, "prompt"));
+        AgentRunRequest request = new(
+            "test-provider",
+            "test-model",
+            conversation,
+            ToolFilter: new ToolFilter(Exclude: ["fake_tool"]));
+
+        List<AgentEvent> events = [];
+        await foreach (AgentEvent agentEvent in runtime.RunAsync(request, CancellationToken.None))
+        {
+            events.Add(agentEvent);
+        }
+
+        // With the only tool excluded, the fake provider sees no functions and
+        // streams plain text; no tool activity may occur.
+        Assert.IsFalse(events.Any(static agentEvent => agentEvent.Kind == AgentEventKind.ToolActivity));
+        Assert.IsTrue(events.Any(static agentEvent =>
+            agentEvent.Kind == AgentEventKind.AssistantDelta &&
+            agentEvent.Message == "plain answer"));
+    }
+
+    [TestMethod]
     public async Task PassesToolsToChatClient()
     {
         RecordingDiagnosticSink diagnostics = new();

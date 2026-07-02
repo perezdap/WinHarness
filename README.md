@@ -60,6 +60,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness config wizard` for guided, interactive provider/model setup
 - `winharness chat --prompt "..." [--render-markdown true] [--continue-session]`
 - `winharness chat` for the terminal REPL (continues the most recent workspace session by default; see [Sessions](#sessions))
+- `winharness chat --tools read_file,grep,glob` to allowlist tools for the run; `--exclude-tools run_command` to deny specific tools; `--no-tools` to disable all tools (applies to built-in and MCP tools; unknown names warn instead of failing)
 - `winharness providers list`
 - `winharness providers add --id openai-main --base-url https://api.openai.com/v1 [--api-key sk-... --set-default]`
 - `winharness providers remove --id openai-main`
