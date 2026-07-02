@@ -192,6 +192,74 @@ public sealed class BuiltinToolProvider : IToolProvider
                 throw;
             }
         }
+
+        private static readonly HashSet<string> IgnoredDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".git", "bin", "obj", "node_modules", ".vs", ".idea", ".vscode"
+        };
+
+        /// <summary>
+        /// Enumerates files under <paramref name="root"/> using <paramref name="pattern"/>,
+        /// skipping common non-source directories and handling access/permission errors gracefully.
+        /// </summary>
+        protected static IEnumerable<string> EnumerateWorkspaceFiles(string root, string pattern)
+        {
+            return EnumerateFilesRecursive(root, pattern);
+        }
+
+        private static IEnumerable<string> EnumerateFilesRecursive(string directory, string pattern)
+        {
+            foreach (string file in EnumerateFilesInDirectory(directory, pattern))
+            {
+                yield return file;
+            }
+
+            foreach (string subdir in EnumerateDirectoriesInDirectory(directory))
+            {
+                string dirName = Path.GetFileName(subdir);
+                if (IgnoredDirectoryNames.Contains(dirName))
+                {
+                    continue;
+                }
+
+                foreach (string file in EnumerateFilesRecursive(subdir, pattern))
+                {
+                    yield return file;
+                }
+            }
+        }
+
+        private static IEnumerable<string> EnumerateFilesInDirectory(string directory, string pattern)
+        {
+            IEnumerable<string> enumerable;
+            try
+            {
+                enumerable = Directory.EnumerateFiles(directory, pattern);
+            }
+            catch (UnauthorizedAccessException) { yield break; }
+            catch (DirectoryNotFoundException) { yield break; }
+
+            foreach (string file in enumerable)
+            {
+                yield return file;
+            }
+        }
+
+        private static IEnumerable<string> EnumerateDirectoriesInDirectory(string directory)
+        {
+            IEnumerable<string> enumerable;
+            try
+            {
+                enumerable = Directory.EnumerateDirectories(directory);
+            }
+            catch (UnauthorizedAccessException) { yield break; }
+            catch (DirectoryNotFoundException) { yield break; }
+
+            foreach (string dir in enumerable)
+            {
+                yield return dir;
+            }
+        }
     }
 
     private sealed class ReadFileTool : BuiltinTool
@@ -613,7 +681,7 @@ public sealed class BuiltinToolProvider : IToolProvider
     private sealed class GlobTool : BuiltinTool
     {
         public GlobTool(string workspaceRoot, ILongPathService longPathService)
-            : base(workspaceRoot, longPathService, "glob", "List files matching a glob pattern.", """{"type":"object","properties":{"pattern":{"type":"string"},"maxResults":{"type":"integer"}},"required":["pattern"]}""")
+            : base(workspaceRoot, longPathService, "glob", "List files matching a simple glob pattern (* and ? wildcards; skips .git, bin, obj, node_modules).", """{"type":"object","properties":{"pattern":{"type":"string"},"maxResults":{"type":"integer"}},"required":["pattern"]}""")
         {
         }
 
@@ -623,7 +691,7 @@ public sealed class BuiltinToolProvider : IToolProvider
             int maxResults = OptionalInt32(invocation.Arguments, "maxResults", 200);
 
             List<string> results = [];
-            foreach (string file in Directory.EnumerateFiles(WorkspaceRoot, "*", SearchOption.AllDirectories))
+            foreach (string file in EnumerateWorkspaceFiles(WorkspaceRoot, "*"))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string relative = Path.GetRelativePath(WorkspaceRoot, file).Replace('\\', '/');
@@ -644,7 +712,7 @@ public sealed class BuiltinToolProvider : IToolProvider
     private sealed class GrepTool : BuiltinTool
     {
         public GrepTool(string workspaceRoot, ILongPathService longPathService)
-            : base(workspaceRoot, longPathService, "grep", "Search text files.", """{"type":"object","properties":{"pattern":{"type":"string"},"filePattern":{"type":"string"},"maxResults":{"type":"integer"},"maxFileBytes":{"type":"integer"}},"required":["pattern"]}""")
+            : base(workspaceRoot, longPathService, "grep", "Search text files (skips .git, bin, obj, node_modules).", """{"type":"object","properties":{"pattern":{"type":"string"},"filePattern":{"type":"string"},"maxResults":{"type":"integer"},"maxFileBytes":{"type":"integer"}},"required":["pattern"]}""")
         {
         }
 
@@ -658,7 +726,7 @@ public sealed class BuiltinToolProvider : IToolProvider
             int maxFileBytes = OptionalInt32(invocation.Arguments, "maxFileBytes", 1024 * 1024);
 
             List<string> results = [];
-            foreach (string file in Directory.EnumerateFiles(WorkspaceRoot, "*", SearchOption.AllDirectories))
+            foreach (string file in EnumerateWorkspaceFiles(WorkspaceRoot, "*"))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string relative = Path.GetRelativePath(WorkspaceRoot, file).Replace('\\', '/');
@@ -674,12 +742,16 @@ public sealed class BuiltinToolProvider : IToolProvider
                     continue;
                 }
 
-                if (await IsBinaryFileAsync(normalizedFile, cancellationToken).ConfigureAwait(false))
+                byte[] fileBytes = await File.ReadAllBytesAsync(normalizedFile, cancellationToken).ConfigureAwait(false);
+                if (IsBinary(fileBytes))
                 {
                     continue;
                 }
 
-                string[] lines = await File.ReadAllLinesAsync(normalizedFile, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
+                string[] lines = Encoding.UTF8.GetString(fileBytes)
+                    .Replace("\r\n", "\n")
+                    .Replace('\r', '\n')
+                    .Split('\n');
                 for (int index = 0; index < lines.Length; index++)
                 {
                     if (regex.IsMatch(lines[index]))
@@ -696,12 +768,9 @@ public sealed class BuiltinToolProvider : IToolProvider
             return new ToolResult(true, string.Join(Environment.NewLine, results));
         }
 
-        private static async ValueTask<bool> IsBinaryFileAsync(string file, CancellationToken cancellationToken)
+        private static bool IsBinary(byte[] bytes)
         {
-            byte[] buffer = new byte[1024];
-            await using FileStream stream = File.OpenRead(file);
-            int bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-            return buffer.AsSpan(0, bytesRead).Contains((byte)0);
+            return bytes.AsSpan(0, Math.Min(bytes.Length, 1024)).Contains((byte)0);
         }
     }
 
