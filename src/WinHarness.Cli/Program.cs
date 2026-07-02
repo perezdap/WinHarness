@@ -337,13 +337,53 @@ app.Add("providers list", () =>
 app.Add("providers use", async (string providerId, CancellationToken cancellationToken) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
-    if (!options.Providers.Any(provider => string.Equals(provider.Id, providerId, StringComparison.OrdinalIgnoreCase)))
+    ProviderOptions? targetProvider = options.Providers.FirstOrDefault(provider =>
+        string.Equals(provider.Id, providerId, StringComparison.OrdinalIgnoreCase));
+    if (targetProvider is null)
     {
         throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
     }
 
-    await ConfigFileUpdater.SetRootStringPropertyAsync("defaultProvider", providerId, cancellationToken).ConfigureAwait(false);
-    Console.WriteLine($"Default provider set to {providerId}.");
+    // Ensure the current default model is valid under the new provider.
+    // If it isn't, pick the first available model from the target provider
+    // or clear the default model so the CLI doesn't fail validation on next start.
+    string? resolvedModel = options.DefaultModel;
+    if (options.DefaultModel.Length > 0)
+    {
+        bool modelExists = targetProvider.Models.Any(model =>
+            string.Equals(model.Id, options.DefaultModel, StringComparison.OrdinalIgnoreCase));
+        if (!modelExists)
+        {
+            resolvedModel = targetProvider.Models.Count > 0
+                ? targetProvider.Models[0].Id
+                : string.Empty;
+        }
+    }
+
+    if (resolvedModel != options.DefaultModel)
+    {
+        await ConfigFileUpdater.SetRootStringPropertiesAsync(
+            new Dictionary<string, string>
+            {
+                ["defaultProvider"] = providerId,
+                ["defaultModel"] = resolvedModel
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        if (resolvedModel.Length > 0)
+        {
+            Console.WriteLine($"Default provider set to {providerId}, model set to {resolvedModel}.");
+        }
+        else
+        {
+            Console.WriteLine($"Default provider set to {providerId}. No models configured for this provider; set one with 'models use'.");
+        }
+    }
+    else
+    {
+        await ConfigFileUpdater.SetRootStringPropertyAsync("defaultProvider", providerId, cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"Default provider set to {providerId}.");
+    }
 });
 
 app.Add("models list", (string? providerId = null) =>
@@ -392,9 +432,36 @@ app.Add("models list", (string? providerId = null) =>
     }
 });
 
-app.Add("models use", async (string modelId, CancellationToken cancellationToken) =>
+app.Add("models use", async (string modelId, string? providerId = null, CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+
+    // When --provider-id is given, switch both provider and model atomically.
+    if (providerId is not null)
+    {
+        ProviderOptions? targetProvider = options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
+        if (targetProvider is null)
+        {
+            throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+        }
+
+        if (!targetProvider.Models.Any(model => string.Equals(model.Id, modelId, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{providerId}'.");
+        }
+
+        await ConfigFileUpdater.SetRootStringPropertiesAsync(
+            new Dictionary<string, string>
+            {
+                ["defaultProvider"] = providerId,
+                ["defaultModel"] = modelId
+            },
+            cancellationToken).ConfigureAwait(false);
+        Console.WriteLine($"Default provider set to {providerId}, model set to {modelId}.");
+        return;
+    }
+
     ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
         string.Equals(candidate.Id, options.DefaultProvider, StringComparison.OrdinalIgnoreCase));
     if (provider is null)
@@ -760,6 +827,19 @@ internal static class ConfigFileUpdater
         string value,
         CancellationToken cancellationToken)
     {
+        await SetRootStringPropertiesAsync(
+            new Dictionary<string, string> { [propertyName] = value },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Atomically updates multiple root-level string properties in config.json,
+    /// preserving all other properties.
+    /// </summary>
+    public static async ValueTask SetRootStringPropertiesAsync(
+        IReadOnlyDictionary<string, string> updates,
+        CancellationToken cancellationToken)
+    {
         string directory = WinHarnessConfiguration.GetConfigurationDirectory();
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, "config.json");
@@ -774,16 +854,16 @@ internal static class ConfigFileUpdater
             using (Utf8JsonWriter writer = new(buffer, new JsonWriterOptions { Indented = true }))
             {
                 writer.WriteStartObject();
-                bool wroteProperty = false;
+                var written = new HashSet<string>(StringComparer.Ordinal);
 
                 if (document is not null && document.RootElement.ValueKind == JsonValueKind.Object)
                 {
                     foreach (JsonProperty property in document.RootElement.EnumerateObject())
                     {
-                        if (property.NameEquals(propertyName))
+                        if (updates.TryGetValue(property.Name, out string? replacement))
                         {
-                            writer.WriteString(propertyName, value);
-                            wroteProperty = true;
+                            writer.WriteString(property.Name, replacement);
+                            written.Add(property.Name);
                         }
                         else
                         {
@@ -793,9 +873,12 @@ internal static class ConfigFileUpdater
                     }
                 }
 
-                if (!wroteProperty)
+                foreach ((string key, string value) in updates)
                 {
-                    writer.WriteString(propertyName, value);
+                    if (!written.Contains(key))
+                    {
+                        writer.WriteString(key, value);
+                    }
                 }
 
                 writer.WriteEndObject();
