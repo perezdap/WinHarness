@@ -179,18 +179,10 @@ Command execution rules:
             if (failureEvent is not null)
             {
                 yield return failureEvent;
-
-                if (assistantText.Length > 0)
+                AgentEvent? partial = BuildPartialTurnEvent(request, assistantText);
+                if (partial is not null)
                 {
-                    ConversationMessage failedUserMessage = request.Conversation.Messages[^1];
-                    yield return new AgentEvent(
-                        AgentEventKind.Completed,
-                        "partial",
-                        new TurnArtifacts(
-                        [
-                            failedUserMessage,
-                            ConversationMessage.FromText(ConversationRole.Assistant, assistantText.ToString())
-                        ]));
+                    yield return partial;
                 }
 
                 yield break;
@@ -222,16 +214,12 @@ Command execution rules:
                         CancellationToken.None,
                         new InvalidOperationException(message)).ConfigureAwait(false);
                     yield return new AgentEvent(AgentEventKind.Failed, message);
+                    AgentEvent? partial = BuildPartialTurnEvent(request, assistantText);
+                    if (partial is not null)
+                    {
+                        yield return partial;
+                    }
 
-                    ConversationMessage failedUserMessage = request.Conversation.Messages[^1];
-                    yield return new AgentEvent(
-                        AgentEventKind.Completed,
-                        "partial",
-                        new TurnArtifacts(
-                        [
-                            failedUserMessage,
-                            ConversationMessage.FromText(ConversationRole.Assistant, assistantText.ToString())
-                        ]));
                     yield break;
                 }
 
@@ -246,16 +234,12 @@ Command execution rules:
                         CancellationToken.None,
                         new InvalidOperationException(message)).ConfigureAwait(false);
                     yield return new AgentEvent(AgentEventKind.Failed, message);
+                    AgentEvent? partial = BuildPartialTurnEvent(request, assistantText);
+                    if (partial is not null)
+                    {
+                        yield return partial;
+                    }
 
-                    ConversationMessage failedUserMessage = request.Conversation.Messages[^1];
-                    yield return new AgentEvent(
-                        AgentEventKind.Completed,
-                        "partial",
-                        new TurnArtifacts(
-                        [
-                            failedUserMessage,
-                            ConversationMessage.FromText(ConversationRole.Assistant, assistantText.ToString())
-                        ]));
                     yield break;
                 }
 
@@ -458,6 +442,30 @@ Command execution rules:
             ConversationRole.Tool => ChatRole.Tool,
             _ => throw new InvalidOperationException($"Unsupported conversation role '{role}'.")
         };
+    }
+
+    /// <summary>
+    /// Builds the optional "partial" turn-completion event emitted alongside a
+    /// failure when some assistant text was streamed before the runaway guard
+    /// tripped, so the partial work is not lost. Returns null when nothing was
+    /// streamed.
+    /// </summary>
+    private static AgentEvent? BuildPartialTurnEvent(AgentRunRequest request, StringBuilder assistantText)
+    {
+        if (assistantText.Length == 0)
+        {
+            return null;
+        }
+
+        ConversationMessage failedUserMessage = request.Conversation.Messages[^1];
+        return new AgentEvent(
+            AgentEventKind.Completed,
+            "partial",
+            new TurnArtifacts(
+            [
+                failedUserMessage,
+                ConversationMessage.FromText(ConversationRole.Assistant, assistantText.ToString())
+            ]));
     }
 
     private async ValueTask<ChatOptions?> CreateChatOptionsAsync(
