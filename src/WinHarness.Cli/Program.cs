@@ -1121,9 +1121,12 @@ internal static class ChatRepl
             }
 
             double ms = duration.Value.TotalMilliseconds;
-            return ms >= 1000
-                ? ms.ToString("F0", CultureInfo.InvariantCulture) + " ms"
-                : ms.ToString("F0", CultureInfo.InvariantCulture) + " ms";
+            if (ms >= 1000)
+            {
+                return duration.Value.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) + " s";
+            }
+
+            return ms.ToString("F0", CultureInfo.InvariantCulture) + " ms";
         }
 
         if (interactive)
