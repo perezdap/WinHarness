@@ -24,25 +24,35 @@ public sealed class ContextFileLoader : IContextFileLoader
     /// <inheritdoc />
     public ProjectContext Load(string workspaceRoot)
     {
+        return Load(workspaceRoot, includeProjectLocal: true);
+    }
+
+    /// <inheritdoc />
+    public ProjectContext Load(string workspaceRoot, bool includeProjectLocal)
+    {
         string cwd = Path.GetFullPath(workspaceRoot);
         return new ProjectContext(
-            LoadSystemPromptReplacement(cwd),
-            LoadSystemPromptAppend(cwd),
+            LoadSystemPromptReplacement(cwd, includeProjectLocal),
+            LoadSystemPromptAppend(cwd, includeProjectLocal),
             LoadAgentsInstructions(cwd));
     }
 
-    private string? LoadSystemPromptReplacement(string cwd)
+    private string? LoadSystemPromptReplacement(string cwd, bool includeProjectLocal)
     {
-        return ReadFirstExisting(
-            Path.Combine(cwd, ".winharness", "SYSTEM.md"),
-            Path.Combine(_globalConfigDirectory, "SYSTEM.md"));
+        return includeProjectLocal
+            ? ReadFirstExisting(
+                Path.Combine(cwd, ".winharness", "SYSTEM.md"),
+                Path.Combine(_globalConfigDirectory, "SYSTEM.md"))
+            : ReadFirstExisting(Path.Combine(_globalConfigDirectory, "SYSTEM.md"));
     }
 
-    private string? LoadSystemPromptAppend(string cwd)
+    private string? LoadSystemPromptAppend(string cwd, bool includeProjectLocal)
     {
-        return ReadFirstExisting(
-            Path.Combine(cwd, ".winharness", "APPEND_SYSTEM.md"),
-            Path.Combine(_globalConfigDirectory, "APPEND_SYSTEM.md"));
+        return includeProjectLocal
+            ? ReadFirstExisting(
+                Path.Combine(cwd, ".winharness", "APPEND_SYSTEM.md"),
+                Path.Combine(_globalConfigDirectory, "APPEND_SYSTEM.md"))
+            : ReadFirstExisting(Path.Combine(_globalConfigDirectory, "APPEND_SYSTEM.md"));
     }
 
     private string LoadAgentsInstructions(string cwd)

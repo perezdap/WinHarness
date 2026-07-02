@@ -212,6 +212,8 @@ app.Add("chat", async (
     bool noTools = false,
     string[]? files = null,
     string? output = null,
+    bool approve = false,
+    bool noApprove = false,
     CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
@@ -234,7 +236,8 @@ app.Add("chat", async (
         ContinueSession: continueSession,
         Resume: resume,
         Session: session,
-        Name: name);
+        Name: name,
+        ApproveOverride: approve ? true : noApprove ? false : null);
 
     ToolFilter? toolFilter = ChatRepl.CreateToolFilter(tools, excludeTools, noTools);
     if (toolFilter is not null && !noTools)
@@ -1653,12 +1656,81 @@ internal static class ChatRepl
             bootstrapRequest,
             cancellationToken).ConfigureAwait(false);
 
+        bool trusted = ResolveProjectTrust(
+            services,
+            interactive: !bootstrapRequest.IsOneShot && !Console.IsInputRedirected,
+            bootstrapRequest.ApproveOverride);
+
         return ChatSessionBootstrap.CreateChatSession(
             sessionManager,
             contextFileLoader,
             providerId,
             modelId,
-            renderMarkdown);
+            renderMarkdown,
+            trusted);
+    }
+
+    /// <summary>
+    /// Resolves whether project-local resources (.winharness SYSTEM.md,
+    /// project skills) load for this run. Order: per-run --approve/--no-approve
+    /// override, saved trust.json decision (workspace or ancestor), interactive
+    /// prompt (persisting always/never), then defaultProjectTrust setting
+    /// (ask/never =&gt; untrusted, always =&gt; trusted).
+    /// </summary>
+    private static bool ResolveProjectTrust(IServiceProvider services, bool interactive, bool? approveOverride)
+    {
+        string workspaceRoot = Environment.CurrentDirectory;
+        if (approveOverride is { } forced)
+        {
+            return forced;
+        }
+
+        if (!TrustStore.HasProjectLocalResources(workspaceRoot))
+        {
+            return true;
+        }
+
+        TrustStore trustStore = new();
+        if (trustStore.GetDecision(workspaceRoot) is { } saved)
+        {
+            if (!saved)
+            {
+                AnsiConsole.MarkupLine("[dim]project-local resources ignored (untrusted; use /trust or --approve)[/]");
+            }
+
+            return saved;
+        }
+
+        if (interactive)
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]This folder contains project-local WinHarness resources[/] [dim]({Markup.Escape(workspaceRoot)})[/]");
+            AnsiConsole.MarkupLine("[dim]Project SYSTEM.md and skills can steer the model. Trust this folder?[/]");
+            string choice = AnsiConsole.Prompt(
+                new TextPrompt<string>("[bold]always / once / never[/]")
+                    .AddChoice("always").AddChoice("once").AddChoice("never")
+                    .DefaultValue("once"));
+            switch (choice.ToLowerInvariant())
+            {
+                case "always":
+                    trustStore.SaveDecision(workspaceRoot, trusted: true);
+                    return true;
+                case "never":
+                    trustStore.SaveDecision(workspaceRoot, trusted: false);
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
+        bool trusted = string.Equals(options.DefaultProjectTrust, "always", StringComparison.OrdinalIgnoreCase);
+        if (!trusted)
+        {
+            Console.Error.WriteLine("project-local resources ignored (no trust decision; pass --approve to load them)");
+        }
+
+        return trusted;
     }
 
     private static void WriteBanner(ChatSession session)

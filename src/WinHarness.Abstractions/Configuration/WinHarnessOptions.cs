@@ -31,6 +31,13 @@ public sealed class WinHarnessOptions
     /// Gets or sets compaction behavior.
     /// </summary>
     public CompactionOptions Compaction { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the fallback trust for project-local resources in
+    /// non-interactive runs without a saved decision: "ask" (default, treated
+    /// as untrusted), "always", or "never".
+    /// </summary>
+    public string DefaultProjectTrust { get; set; } = "ask";
 }
 
 /// <summary>

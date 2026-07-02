@@ -31,16 +31,18 @@ internal sealed class ChatSession
         string workspaceRoot,
         string providerId,
         string modelId,
-        bool renderMarkdown)
+        bool renderMarkdown,
+        bool trustProjectLocal = true)
     {
         SessionManager = sessionManager;
         ContextFileLoader = contextFileLoader ?? new EmptyContextFileLoader();
         WorkspaceRoot = workspaceRoot;
-        ProjectContext = ContextFileLoader.Load(workspaceRoot);
+        TrustProjectLocal = trustProjectLocal;
+        ProjectContext = ContextFileLoader.Load(workspaceRoot, trustProjectLocal);
         ProviderId = providerId;
         ModelId = modelId;
         RenderMarkdown = renderMarkdown;
-        Skills = SkillRegistry.Discover(workspaceRoot);
+        Skills = SkillRegistry.Discover(workspaceRoot, trustProjectLocal);
     }
 
     public ISessionManager SessionManager { get; private set; }
@@ -48,6 +50,8 @@ internal sealed class ChatSession
     public IContextFileLoader ContextFileLoader { get; }
 
     public string WorkspaceRoot { get; }
+
+    public bool TrustProjectLocal { get; }
 
     public ProjectContext ProjectContext { get; private set; }
 
@@ -113,7 +117,7 @@ internal sealed class ChatSession
 
     public void ReloadProjectContext()
     {
-        ProjectContext = ContextFileLoader.Load(WorkspaceRoot);
+        ProjectContext = ContextFileLoader.Load(WorkspaceRoot, TrustProjectLocal);
     }
 }
 

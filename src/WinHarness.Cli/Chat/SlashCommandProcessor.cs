@@ -43,8 +43,38 @@ internal static class SlashCommandProcessor
             "/effort" => SetEffort(session, argument),
             "/compact" => await ExecuteCompactAsync(session, argument, context).ConfigureAwait(false),
             "/usage" => ExecuteUsage(options, session),
+            "/trust" => ExecuteTrust(session, argument),
             _ => SlashCommandResult.Handled([$"Unknown command '{command}'. Try /help."])
         };
+    }
+
+    private static SlashCommandResult ExecuteTrust(ChatSession session, string argument)
+    {
+        Infrastructure.Configuration.TrustStore trustStore = new();
+        string normalized = argument.Trim().ToLowerInvariant();
+        switch (normalized)
+        {
+            case "always":
+            case "never":
+                trustStore.SaveDecision(session.WorkspaceRoot, trusted: normalized == "always");
+                return SlashCommandResult.Handled(
+                    [$"Trust decision '{normalized}' saved for {session.WorkspaceRoot}. Restart chat to apply."]);
+            case "":
+                bool? saved = trustStore.GetDecision(session.WorkspaceRoot);
+                string current = saved switch
+                {
+                    true => "always",
+                    false => "never",
+                    null => "undecided"
+                };
+                return SlashCommandResult.Handled(
+                    [
+                        $"Trust for {session.WorkspaceRoot}: {current} (this session: {(session.TrustProjectLocal ? "trusted" : "untrusted")}).",
+                        "Usage: /trust always | /trust never"
+                    ]);
+            default:
+                return SlashCommandResult.Handled(["Usage: /trust [always|never]"]);
+        }
     }
 
     private static SlashCommandResult ExecuteUsage(WinHarnessOptions options, ChatSession session)
@@ -116,6 +146,7 @@ internal static class SlashCommandProcessor
             "/effort [level]        Show or set reasoning effort (none/low/medium/high/extra-high)",
             "/compact [text]       Summarize older context and keep recent messages",
             "/usage                Show model, context %, and token usage totals",
+            "/trust [always|never]  Save a project trust decision for this folder",
             "/clear                Clear the in-memory conversation view",
             "/exit, /quit          Leave the session"
         ];

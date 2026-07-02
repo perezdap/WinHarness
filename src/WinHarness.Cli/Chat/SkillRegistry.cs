@@ -6,8 +6,13 @@ internal static class SkillRegistry
 {
     public static IReadOnlyList<SkillDefinition> Discover(string workspaceRoot)
     {
+        return Discover(workspaceRoot, includeProjectLocal: true);
+    }
+
+    public static IReadOnlyList<SkillDefinition> Discover(string workspaceRoot, bool includeProjectLocal)
+    {
         Dictionary<string, SkillDefinition> skills = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string directory in GetSkillDirectories(workspaceRoot))
+        foreach (string directory in GetSkillDirectories(workspaceRoot, includeProjectLocal))
         {
             LoadDirectory(directory, skills);
         }
@@ -17,10 +22,14 @@ internal static class SkillRegistry
             .ToArray();
     }
 
-    private static IEnumerable<string> GetSkillDirectories(string workspaceRoot)
+    private static IEnumerable<string> GetSkillDirectories(string workspaceRoot, bool includeProjectLocal)
     {
-        yield return Path.Combine(workspaceRoot, ".winharness", "skills");
-        yield return Path.Combine(workspaceRoot, ".agents", "skills");
+        if (includeProjectLocal)
+        {
+            yield return Path.Combine(workspaceRoot, ".winharness", "skills");
+            yield return Path.Combine(workspaceRoot, ".agents", "skills");
+        }
+
         yield return Path.Combine(WinHarnessConfiguration.GetConfigurationDirectory(), "skills");
 
         string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);

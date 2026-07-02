@@ -61,7 +61,8 @@ internal static class ChatSessionBootstrap
         IContextFileLoader contextFileLoader,
         string providerId,
         string modelId,
-        bool renderMarkdown)
+        bool renderMarkdown,
+        bool trustProjectLocal = true)
     {
         string workspaceRoot = Environment.CurrentDirectory;
         (string? restoredProvider, string? restoredModel) = TryRestoreModelChange(sessionManager);
@@ -72,7 +73,8 @@ internal static class ChatSessionBootstrap
             workspaceRoot,
             restoredProvider ?? providerId,
             restoredModel ?? modelId,
-            renderMarkdown);
+            renderMarkdown,
+            trustProjectLocal);
         session.SyncConversationFromSession();
         return session;
     }
@@ -227,4 +229,5 @@ internal sealed record ChatSessionBootstrapRequest(
     bool ContinueSession,
     bool Resume,
     string? Session,
-    string? Name);
+    string? Name,
+    bool? ApproveOverride = null);

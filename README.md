@@ -123,6 +123,7 @@ One-shot `winharness chat --prompt "..."` is **ephemeral by default**. Pass `--c
 | `/fork` | Copy the active branch into a new session file in the same workspace folder |
 | `/compact [instructions]` | Summarize older context; recent messages stay in the active branch |
 | `/usage` | Show model, estimated context %, last-turn and session token totals |
+| `/trust [always\|never]` | Show or save the project trust decision for this folder |
 
 **Automatic compaction** is enabled by default for persisted sessions. Before each turn, WinHarness estimates the active-branch tokens against the model's configured `contextWindow` (fallback 8192 when unset) and compacts proactively when within `reserveTokens` (default 4096) of the limit. When a provider rejects a request for context overflow, WinHarness compacts and retries the turn once. Configure via the `compaction` block in `config.json`:
 
@@ -169,6 +170,10 @@ Project instructions are loaded at startup and injected into the system prompt c
 | `.winharness/APPEND_SYSTEM.md` | Appended after the base system prompt (project first, then global) |
 
 The REPL startup banner includes a `context:` line when any of these files are loaded.
+
+### Project trust
+
+Workspaces containing project-local resources (`.winharness\` or `.agents\skills`) require a trust decision before those resources are loaded, since project `SYSTEM.md` and skills can steer the model. Interactive chat prompts once (`always` / `once` / `never`; `always`/`never` persist to `%APPDATA%\WinHarness\trust.json`, and a decision covers all child folders). Non-interactive runs (`--prompt`, `--output json`) never prompt: they use the `defaultProjectTrust` setting (`ask` — default, treated as untrusted — `always`, or `never`), overridable per run with `--approve` / `--no-approve`. Untrusted workspaces still load plain `AGENTS.md`/`CLAUDE.md` context and all global resources. Use `/trust always|never` in the REPL to save a decision.
 
 ### Skills
 

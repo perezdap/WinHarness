@@ -209,14 +209,15 @@ reuses these event shapes.
 - REPL: `/t <name> [args]` expands into the editor buffer; bare placeholders prompt interactively. `{{input}}` receives trailing args.
 - One-shot: `--template review --template-args "focus=security"`.
 
-### PR-C6: Project trust
+### PR-C6: Project trust (DONE)
 
-Security prerequisite that grows in importance as project-local resources multiply.
-
-- On startup in a workspace containing `.winharness\` resources or project-local skills, and no saved decision: prompt `Trust this folder? [always/once/never]`. Persist to `%APPDATA%\WinHarness\trust.json` keyed by normalized path (workspaceKey).
-- Untrusted → skip project-local `SYSTEM.md`/`APPEND_SYSTEM.md`, skills, and prompts; still load global resources and plain `AGENTS.md`/`CLAUDE.md` context (informational, matches pi).
-- Non-interactive (`--prompt`, `--output json`, `rpc`): never prompt; use `defaultProjectTrust` setting (`ask`→treat as never, `always`, `never`), overridable per run with `--approve` / `--no-approve`.
-- `/trust` slash command to save a decision from inside the REPL.
+Implemented: `TrustStore` (trust.json keyed by normalized path, ancestor
+decisions cover children); `.winharness\` or `.agents\skills` presence
+triggers the gate; interactive prompt (always/once/never, persisting
+always/never); non-interactive runs use `defaultProjectTrust`
+(ask→untrusted default) with `--approve`/`--no-approve` per-run override;
+untrusted sessions skip project SYSTEM.md/APPEND_SYSTEM.md and project
+skills while keeping AGENTS.md and global resources; `/trust` slash command.
 
 ---
 
