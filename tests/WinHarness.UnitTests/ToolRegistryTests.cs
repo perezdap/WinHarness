@@ -32,6 +32,30 @@ public sealed class ToolRegistryTests
     }
 
     [TestMethod]
+    public async Task RegistryRejectsToolsThatSanitizeToSameModelFacingName()
+    {
+        // 'a.b' and 'a_b' differ raw but both collapse to the sanitized name
+        // 'a_b'; the registry must reject them up front, matching the runtime.
+        ToolRegistry registry = new([
+            new FakeProvider([new FakeTool("a.b")]),
+            new FakeProvider([new FakeTool("a_b")])
+        ]);
+
+        InvalidOperationException? exception = null;
+        try
+        {
+            _ = await registry.ListToolsAsync(CancellationToken.None);
+        }
+        catch (InvalidOperationException caught)
+        {
+            exception = caught;
+        }
+
+        Assert.IsNotNull(exception);
+        StringAssert.Contains(exception!.Message, "Duplicate tool name");
+    }
+
+    [TestMethod]
     public async Task AiFunctionAdapterInvokesTool()
     {
         ToolAIFunctionAdapter adapter = new(new FakeTool("echo"));

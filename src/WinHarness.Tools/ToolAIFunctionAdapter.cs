@@ -46,7 +46,7 @@ public sealed class ToolAIFunctionAdapter : AIFunction
         _tool = tool;
         _diagnosticSink = diagnosticSink;
         _activitySink = activitySink;
-        _sanitizedName = SanitizeName(tool.Name);
+        _sanitizedName = ToolNameSanitizer.Sanitize(tool.Name);
         _sanitizedSchema = ToolSchemaSanitizer.Sanitize(tool.InputSchema);
     }
 
@@ -117,26 +117,6 @@ public sealed class ToolAIFunctionAdapter : AIFunction
                 CancellationToken.None).ConfigureAwait(false);
             throw;
         }
-    }
-
-    private static string SanitizeName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return "tool";
-        }
-
-        Span<char> buffer = name.Length <= 128 ? stackalloc char[name.Length] : new char[name.Length];
-        int written = 0;
-        foreach (char ch in name)
-        {
-            buffer[written++] = char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-' ? ch : '_';
-        }
-
-        string sanitized = new(buffer[..written]);
-        return char.IsAsciiLetterOrDigit(sanitized[0]) || sanitized[0] is '_'
-            ? sanitized
-            : "tool_" + sanitized;
     }
 
     private static JsonElement ConvertArguments(AIFunctionArguments arguments)
