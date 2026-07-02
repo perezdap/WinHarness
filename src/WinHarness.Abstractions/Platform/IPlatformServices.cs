@@ -42,7 +42,8 @@ public sealed record CommandRequest(
     string WorkingDirectory,
     CommandExecutionMode Mode,
     TimeSpan Timeout,
-    string? StandardInput = null);
+    string? StandardInput = null,
+    int? MaxOutputBytes = null);
 
 /// <summary>
 /// Command execution mode.
@@ -63,7 +64,7 @@ public enum CommandExecutionMode
 /// <summary>
 /// Command execution result.
 /// </summary>
-public sealed record CommandResult(int ExitCode, string StandardOutput, string StandardError, CommandExecutionMode Mode);
+public sealed record CommandResult(int ExitCode, string StandardOutput, string StandardError, CommandExecutionMode Mode, bool OutputTruncated = false);
 
 /// <summary>
 /// Builds graceful <see cref="CommandResult"/> values when a process cannot be started,
