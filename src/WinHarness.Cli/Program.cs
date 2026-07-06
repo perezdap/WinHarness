@@ -146,11 +146,52 @@ app.Add("providers remove", async (string id, CancellationToken cancellationToke
     Console.WriteLine($"Provider '{id}' removed.");
 });
 
-app.Add("models discover", async (string baseUrl, string? apiKey = null, CancellationToken cancellationToken = default) =>
+app.Add("models discover", async (
+    string? baseUrl = null,
+    string? apiKey = null,
+    string? providerId = null,
+    CancellationToken cancellationToken = default) =>
 {
+    if (string.IsNullOrWhiteSpace(providerId) == string.IsNullOrWhiteSpace(baseUrl))
+    {
+        throw new InvalidOperationException(
+            "Pass exactly one of --provider-id (resolves base URL + auth + vendor headers from config) or --base-url (manual, with optional --api-key).");
+    }
+
     IModelCatalog catalog = host.Services.GetRequiredService<IModelCatalog>();
     IModelCapabilityResolver resolver = host.Services.GetRequiredService<IModelCapabilityResolver>();
-    IReadOnlyList<CatalogModel> models = await catalog.ListModelsAsync(baseUrl, apiKey, cancellationToken).ConfigureAwait(false);
+
+    string resolvedBaseUrl;
+    string? resolvedApiKey;
+    IReadOnlyDictionary<string, string>? extraHeaders = null;
+
+    if (!string.IsNullOrWhiteSpace(providerId))
+    {
+        WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+        ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+
+        resolvedBaseUrl = provider.BaseUrl
+            ?? throw new InvalidOperationException($"Provider '{providerId}' has no base URL; run 'winharness login --provider {providerId}' or 'winharness config wizard'.");
+
+        IProviderFactory factory = host.Services.GetRequiredService<IProviderFactory>();
+        resolvedApiKey = await factory.CreateTokenSource(providerId)
+            .GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+
+        if (string.Equals(provider.Auth?.OAuthProvider, "copilot", StringComparison.OrdinalIgnoreCase))
+        {
+            extraHeaders = GitHubCopilotOAuthFlow.CopilotHeaders;
+        }
+    }
+    else
+    {
+        resolvedBaseUrl = baseUrl!;
+        resolvedApiKey = apiKey;
+    }
+
+    IReadOnlyList<CatalogModel> models = await catalog.ListModelsAsync(
+        resolvedBaseUrl, resolvedApiKey, cancellationToken, extraHeaders).ConfigureAwait(false);
     if (models.Count == 0)
     {
         Console.WriteLine("No models returned.");
@@ -659,7 +700,7 @@ app.Add("rpc", async (CancellationToken cancellationToken) =>
     await rpcHost.RunAsync(cancellationToken).ConfigureAwait(false);
 });
 
-app.Add("login", async (string provider, string? enterpriseDomain = null, CancellationToken cancellationToken = default) =>
+app.Add("login", async (string provider, string? enterpriseDomain = null, bool noDiscover = false, CancellationToken cancellationToken = default) =>
 {
     if (!string.Equals(provider, "copilot", StringComparison.OrdinalIgnoreCase))
     {
@@ -696,7 +737,57 @@ app.Add("login", async (string provider, string? enterpriseDomain = null, Cancel
 
     existing.BaseUrl = tokens.BaseUrl ?? GitHubCopilotOAuthFlow.DefaultBaseUrl;
     existing.Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "copilot" };
-    if (existing.Models.Count == 0)
+
+    // Seed the model list from the live <baseUrl>/models endpoint (ADR-0005:
+    // available model ids come from there). The freshly-exchanged bearer and
+    // the required Copilot editor headers are attached to the request. On any
+    // failure (network, 403, empty), fall back to a single gpt-4o entry so chat
+    // still works and the user can re-run `models discover` later.
+    bool discovered = false;
+    if (!noDiscover)
+    {
+        try
+        {
+            IModelCatalog catalog = host.Services.GetRequiredService<IModelCatalog>();
+            IReadOnlyList<CatalogModel> liveModels = await AnsiConsole.Status()
+                .StartAsync("Discovering models…", async _ =>
+                    await catalog.ListModelsAsync(
+                        existing.BaseUrl,
+                        tokens.AccessToken,
+                        cancellationToken,
+                        GitHubCopilotOAuthFlow.CopilotHeaders).ConfigureAwait(false))
+                .ConfigureAwait(false);
+
+            if (liveModels.Count > 0)
+            {
+                existing.Models.Clear();
+                foreach (CatalogModel model in liveModels)
+                {
+                    existing.Models.Add(new ModelOptions
+                    {
+                        Id = model.Id,
+                        ProviderModelId = model.Id,
+                        Capabilities = new ProviderCapabilities(
+                            Streaming: true,
+                            ToolCalling: model.ToolCalling ?? true,
+                            Vision: model.Vision ?? false,
+                            PromptCaching: model.PromptCaching ?? false,
+                            StructuredOutput: model.StructuredOutput ?? false,
+                            Reasoning: model.Reasoning ?? false),
+                        ContextWindow = model.ContextWindow
+                    });
+                }
+                discovered = true;
+                AnsiConsole.MarkupLine($"[green]✓[/] Discovered [bold]{liveModels.Count}[/] models from {Markup.Escape(existing.BaseUrl)}.");
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Model discovery failed:[/] {Markup.Escape(ex.Message)}");
+        }
+    }
+
+    if (!discovered && existing.Models.Count == 0)
     {
         existing.Models.Add(new ModelOptions
         {
@@ -707,11 +798,18 @@ app.Add("login", async (string provider, string? enterpriseDomain = null, Cancel
                 PromptCaching: false, StructuredOutput: true, Reasoning: false),
             ContextWindow = 128_000
         });
+        if (!noDiscover)
+        {
+            AnsiConsole.MarkupLine("[dim]Seeded a fallback gpt-4o model. Re-run discovery later with: winharness models discover --provider-id copilot[/]");
+        }
     }
 
     await configStore.SaveAsync(current, cancellationToken).ConfigureAwait(false);
     AnsiConsole.MarkupLine($"[green]Logged in.[/] Provider '{providerId}' configured at {Markup.Escape(existing.BaseUrl)}.");
-    AnsiConsole.MarkupLine("[dim]Discover more models with: winharness models discover --provider-id copilot[/]");
+    if (!discovered)
+    {
+        AnsiConsole.MarkupLine("[dim]Discover models with: winharness models discover --provider-id copilot[/]");
+    }
 });
 
 app.Add("login status", async (CancellationToken cancellationToken) =>
@@ -1248,15 +1346,26 @@ internal static class ChatRepl
     /// prepended as a fenced block, --files attachments and inline @tokens
     /// expand through the same code path as the interactive editor.
     /// </summary>
+    /// <param name="stdin">
+    /// Optional stdin reader for tests. When null and stdin is redirected,
+    /// the real <see cref="Console.In"/> is read with a bounded probe (see
+    /// <see cref="ReadRedirectedStdinOrNoneAsync"/>).
+    /// </param>
+    /// <param name="isInputRedirected">
+    /// Optional override for <see cref="Console.IsInputRedirected"/> (tests).
+    /// </param>
     public static async ValueTask<string> AssembleOneShotPromptAsync(
         string prompt,
         string[]? files,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TextReader? stdin = null,
+        bool? isInputRedirected = null)
     {
-        if (Console.IsInputRedirected)
+        bool redirected = isInputRedirected ?? Console.IsInputRedirected;
+        if (redirected)
         {
-            string piped = (await Console.In.ReadToEndAsync(cancellationToken).ConfigureAwait(false)).Trim();
-            if (piped.Length > 0)
+            string? piped = await ReadRedirectedStdinOrNoneAsync(stdin, cancellationToken).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(piped))
             {
                 prompt = "```stdin" + Environment.NewLine + piped + Environment.NewLine + "```" +
                     Environment.NewLine + Environment.NewLine + prompt;
@@ -1286,6 +1395,43 @@ internal static class ChatRepl
         }
 
         return expanded;
+    }
+
+    /// <summary>
+    /// Reads redirected stdin to end, or returns null when no data arrives
+    /// within a short probe window. Real pipes (<c>Get-Content file | winharness</c>)
+    /// deliver bytes immediately, so the probe succeeds; a redirected-but-empty
+    /// stdin (e.g. inherited by a test runner, never sending EOF) would otherwise
+    /// block forever. The read is forced onto a threadpool thread because
+    /// <see cref="Console.In"/> is a <c>SyncTextReader</c> whose
+    /// <c>ReadToEndAsync</c> runs <c>ReadToEnd</c> synchronously on the calling
+    /// thread — awaiting it directly never yields, so a plain
+    /// <see cref="Task.WhenAny"/> race would never reach the timeout. The read
+    /// task is abandoned on timeout rather than cancelled (cancelling a console
+    /// stream read can corrupt <see cref="Console.In"/> for later use; one-shot
+    /// mode never reads stdin again). An injected <paramref name="stdin"/>
+    /// (tests) is trusted to complete.
+    /// </summary>
+    private static async ValueTask<string?> ReadRedirectedStdinOrNoneAsync(
+        TextReader? stdin,
+        CancellationToken cancellationToken)
+    {
+        if (stdin is not null)
+        {
+            return (await stdin.ReadToEndAsync(cancellationToken).ConfigureAwait(false)).Trim();
+        }
+
+        Task<string> readTask = Task.Run(
+            () => Console.In.ReadToEndAsync(CancellationToken.None),
+            CancellationToken.None);
+
+        Task winner = await Task.WhenAny(
+            readTask,
+            Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken)).ConfigureAwait(false);
+
+        return winner == readTask
+            ? (await readTask.ConfigureAwait(false)).Trim()
+            : null;
     }
 
     private static readonly string[] KnownEfforts = ["off", "minimal", "low", "medium", "high"];

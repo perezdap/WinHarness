@@ -1,3 +1,4 @@
+using System.IO;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace WinHarness.IntegrationTests;
@@ -68,5 +69,51 @@ public sealed class OneShotPromptTests
             "plain prompt", files: null, CancellationToken.None);
 
         Assert.AreEqual("plain prompt", prompt);
+    }
+
+    [TestMethod]
+    public async Task InjectedStdinIsPrependedAsFencedBlock()
+    {
+        string prompt = await ChatRepl.AssembleOneShotPromptAsync(
+            "summarize this",
+            files: null,
+            CancellationToken.None,
+            stdin: new StringReader("piped body\nsecond line"),
+            isInputRedirected: true);
+
+        StringAssert.Contains(prompt, "```stdin");
+        StringAssert.Contains(prompt, "piped body");
+        StringAssert.Contains(prompt, "second line");
+        // Original prompt preserved after the stdin block.
+        Assert.IsTrue(prompt.EndsWith("summarize this", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task EmptyInjectedStdinProducesNoStdinBlock()
+    {
+        string prompt = await ChatRepl.AssembleOneShotPromptAsync(
+            "just a prompt",
+            files: null,
+            CancellationToken.None,
+            stdin: new StringReader("   \n  "),
+            isInputRedirected: true);
+
+        Assert.AreEqual("just a prompt", prompt);
+    }
+
+    [TestMethod]
+    public async Task NonRedirectedStdinIsNotRead()
+    {
+        // isInputRedirected: false must skip the stdin path entirely, even when
+        // a reader is provided. Guards against accidentally consuming a reader
+        // the caller did not intend to pipe.
+        string prompt = await ChatRepl.AssembleOneShotPromptAsync(
+            "only prompt",
+            files: null,
+            CancellationToken.None,
+            stdin: new StringReader("should be ignored"),
+            isInputRedirected: false);
+
+        Assert.AreEqual("only prompt", prompt);
     }
 }
