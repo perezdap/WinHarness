@@ -586,6 +586,9 @@ public sealed class SingleAgentRuntimeTests
                     _captureEachCall?.Invoke(messages);
                 });
         }
+
+        public IAuthTokenSource CreateTokenSource(string providerId) =>
+            throw new NotImplementedException("FakeProviderFactory does not support token-source resolution.");
     }
 
     private sealed class FakeProvider : IChatProvider

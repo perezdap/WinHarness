@@ -12,12 +12,15 @@ public interface IModelCatalog
     /// Lists the model ids advertised by an endpoint. <paramref name="baseUrl"/>
     /// is the OpenAI-compatible base (for example <c>https://api.openai.com/v1</c>);
     /// the catalog appends <c>/models</c>. <paramref name="apiKey"/> may be null
-    /// for keyless local endpoints. Results are sorted and de-duplicated.
+    /// for keyless local endpoints. <paramref name="extraHeaders"/> attaches
+    /// vendor-required request headers (e.g. Copilot's editor headers) alongside
+    /// the bearer; null means none. Results are sorted and de-duplicated.
     /// </summary>
     ValueTask<IReadOnlyList<CatalogModel>> ListModelsAsync(
         string baseUrl,
         string? apiKey,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? extraHeaders = null);
 }
 
 /// <summary>

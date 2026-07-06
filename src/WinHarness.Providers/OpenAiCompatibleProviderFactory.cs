@@ -51,6 +51,16 @@ public sealed class OpenAiCompatibleProviderFactory : IProviderFactory
         return new OpenAiCompatibleChatProvider(provider, model, CreateTokenSource(provider));
     }
 
+    /// <inheritdoc />
+    public IAuthTokenSource CreateTokenSource(string providerId)
+    {
+        ProviderOptions provider = _options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+
+        return CreateTokenSource(provider);
+    }
+
     /// <summary>
     /// Resolves the auth token source for a configured provider: OAuth when the
     /// auth block requests it (and a matching flow refresher is registered),

@@ -35,7 +35,8 @@ public sealed class OpenAiCompatibleModelCatalog : IModelCatalog
     public async ValueTask<IReadOnlyList<CatalogModel>> ListModelsAsync(
         string baseUrl,
         string? apiKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? extraHeaders = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
 
@@ -44,6 +45,14 @@ public sealed class OpenAiCompatibleModelCatalog : IModelCatalog
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        }
+
+        if (extraHeaders is { Count: > 0 })
+        {
+            foreach ((string name, string value) in extraHeaders)
+            {
+                request.Headers.TryAddWithoutValidation(name, value);
+            }
         }
 
         using HttpResponseMessage response = await _httpClient

@@ -152,6 +152,69 @@ public sealed class OpenAiCompatibleModelCatalogTests
         }
     }
 
+    [TestMethod]
+    public async Task ForwardsExtraHeadersAlongsideBearer()
+    {
+        StubHandler handler = new(HttpStatusCode.OK, """{"data":[{"id":"gpt-4o"}]}""");
+        OpenAiCompatibleModelCatalog catalog = new(new HttpClient(handler));
+
+        Dictionary<string, string> copilotHeaders = new()
+        {
+            ["Editor-Version"] = "vscode/1.107.0",
+            ["Copilot-Integration-Id"] = "vscode-chat",
+        };
+
+        await catalog.ListModelsAsync(
+            "https://api.individual.githubcopilot.com",
+            "tid-bearer",
+            CancellationToken.None,
+            copilotHeaders).ConfigureAwait(false);
+
+        Assert.AreEqual("Bearer tid-bearer", handler.LastAuthorization);
+        Assert.IsNotNull(handler.LastExtraHeaders);
+        CollectionAssert.Contains(
+            handler.LastExtraHeaders!.Keys.ToList(),
+            "Editor-Version",
+            "Editor-Version header should be forwarded");
+        Assert.AreEqual(
+            "vscode-chat",
+            handler.LastExtraHeaders!["Copilot-Integration-Id"],
+            "Copilot-Integration-Id value should be forwarded verbatim");
+    }
+
+    [TestMethod]
+    public async Task OmitsExtraHeadersWhenNull()
+    {
+        StubHandler handler = new(HttpStatusCode.OK, """{"data":[{"id":"local"}]}""");
+        OpenAiCompatibleModelCatalog catalog = new(new HttpClient(handler));
+
+        await catalog.ListModelsAsync(
+            "http://localhost:11434/v1",
+            apiKey: null,
+            CancellationToken.None,
+            extraHeaders: null).ConfigureAwait(false);
+
+        // Only request-derived headers (e.g. Host) are present; no vendor extras.
+        Assert.IsNotNull(handler.LastExtraHeaders);
+        Assert.IsFalse(
+            handler.LastExtraHeaders!.ContainsKey("Editor-Version"),
+            "No vendor headers should be attached when extraHeaders is null");
+    }
+
+    [TestMethod]
+    public void CopilotHeadersExposeEditorHeadersForDiscoveryCallers()
+    {
+        // ADR-0005: every Copilot proxy request (chat and /models) must carry
+        // these four editor headers. Discovery/login callers attach this dict
+        // as extraHeaders, so it must be public and contain all four.
+        IReadOnlyDictionary<string, string> headers = GitHubCopilotOAuthFlow.CopilotHeaders;
+
+        CollectionAssert.AreEquivalent(
+            new[] { "User-Agent", "Editor-Version", "Editor-Plugin-Version", "Copilot-Integration-Id" },
+            headers.Keys.ToList());
+        Assert.AreEqual("vscode-chat", headers["Copilot-Integration-Id"]);
+    }
+
     private static async Task<string> LoadFixtureAsync(string name)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "Data", name);
@@ -169,21 +232,35 @@ public sealed class OpenAiCompatibleModelCatalogTests
             _body = body;
         }
 
-        public Uri? LastRequestUri { get; private set; }
+    public Uri? LastRequestUri { get; private set; }
 
-        public string? LastAuthorization { get; private set; }
+    public string? LastAuthorization { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
+    public IReadOnlyDictionary<string, string>? LastExtraHeaders { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        LastRequestUri = request.RequestUri;
+        LastAuthorization = request.Headers.Authorization?.ToString();
+
+        Dictionary<string, string> extra = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string name, IEnumerable<string> values) in request.Headers)
         {
-            LastRequestUri = request.RequestUri;
-            LastAuthorization = request.Headers.Authorization?.ToString();
-
-            return Task.FromResult(new HttpResponseMessage(_status)
+            // Authorization is captured separately; everything else is "extra".
+            if (!string.Equals(name, "Authorization", StringComparison.OrdinalIgnoreCase))
             {
-                Content = new StringContent(_body, Encoding.UTF8, "application/json")
-            });
+                extra[name] = string.Join(",", values);
+            }
         }
+
+        LastExtraHeaders = extra;
+
+        return Task.FromResult(new HttpResponseMessage(_status)
+        {
+            Content = new StringContent(_body, Encoding.UTF8, "application/json")
+        });
+    }
     }
 }

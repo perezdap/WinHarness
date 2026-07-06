@@ -16,7 +16,12 @@ public sealed class GitHubCopilotOAuthFlow : IOAuthTokenRefresher
     private static readonly string ClientId =
         System.Text.Encoding.UTF8.GetString(Convert.FromBase64String("SXYxLmI1MDdhMDhjODdlY2ZlOTg="));
 
-    private static readonly Dictionary<string, string> CopilotHeaders = new(StringComparer.Ordinal)
+    /// <summary>
+    /// Required editor headers for every Copilot proxy request (chat and
+    /// <c>/models</c> discovery), per ADR-0005. Vendor drift stays in this
+    /// file; callers attach these as extra request headers.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string> CopilotHeaders = new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["User-Agent"] = "GitHubCopilotChat/0.35.0",
         ["Editor-Version"] = "vscode/1.107.0",
