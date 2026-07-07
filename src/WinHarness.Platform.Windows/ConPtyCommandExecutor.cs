@@ -57,10 +57,35 @@ public static partial class ConPtyCommandExecutor
         IntPtr attributeList = IntPtr.Zero;
         ProcessInformation processInformation = default;
 
+        // Use the actual console dimensions when available so interactive
+        // output matches what the user sees in their terminal. Fall back to
+        // a sensible default (120×30) when the console is unavailable or
+        // returns non-positive values (redirected/headless runs).
+        short width = 120;
+        short height = 30;
+        try
+        {
+            int consoleWidth = Console.BufferWidth;
+            int consoleHeight = Console.WindowHeight;
+            if (consoleWidth > 0)
+            {
+                width = (short)Math.Min(consoleWidth, short.MaxValue);
+            }
+
+            if (consoleHeight > 0)
+            {
+                height = (short)Math.Min(consoleHeight, short.MaxValue);
+            }
+        }
+        catch
+        {
+            // Console not available (redirected, headless, non-Windows UI).
+        }
+
         try
         {
             int hr = CreatePseudoConsole(
-                new Coord(120, 30),
+                new Coord(width, height),
                 inputReadSide.DangerousGetHandle(),
                 outputWriteSide.DangerousGetHandle(),
                 0,
