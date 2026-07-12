@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
-using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -133,14 +132,31 @@ Command execution rules:
             .GetAsyncEnumerator(cancellationToken);
         UsageDetails? usage = null;
         int updateCount = 0;
+        Task<bool> moveNext = MoveNextAsync(updates);
 
         while (true)
         {
+            Task activityAvailable = toolActivitySink.ActivityAvailable;
+            if (!moveNext.IsCompleted && !activityAvailable.IsCompleted)
+            {
+                await Task.WhenAny(moveNext, activityAvailable).ConfigureAwait(false);
+            }
+
+            if (activityAvailable.IsCompleted)
+            {
+                foreach (AgentEvent toolEvent in toolActivitySink.Drain())
+                {
+                    yield return toolEvent;
+                }
+
+                continue;
+            }
+
             ChatResponseUpdate? update = null;
             AgentEvent? failureEvent = null;
             try
             {
-                if (!await updates.MoveNextAsync().ConfigureAwait(false))
+                if (!await moveNext.ConfigureAwait(false))
                 {
                     break;
                 }
@@ -245,6 +261,8 @@ Command execution rules:
 
                 yield return new AgentEvent(AgentEventKind.AssistantDelta, text);
             }
+
+            moveNext = MoveNextAsync(updates);
         }
 
         foreach (AgentEvent toolEvent in toolActivitySink.Drain())
@@ -275,6 +293,11 @@ Command execution rules:
                 provider.ProviderId,
                 provider.ModelId,
                 messageUsage));
+    }
+
+    private static async Task<bool> MoveNextAsync(IAsyncEnumerator<ChatResponseUpdate> updates)
+    {
+        return await updates.MoveNextAsync().ConfigureAwait(false);
     }
 
     private ProjectContext ResolveProjectContext(AgentRunRequest request)
@@ -696,11 +719,24 @@ Command execution rules:
 
     private sealed class RuntimeToolActivitySink : IToolActivitySink
     {
-        private readonly ConcurrentQueue<AgentEvent> _events = new();
+        private readonly object _gate = new();
+        private readonly Queue<AgentEvent> _events = new();
+        private TaskCompletionSource<bool> _activityAvailable = CreateActivitySignal();
+
+        public Task ActivityAvailable
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _activityAvailable.Task;
+                }
+            }
+        }
 
         public void ToolStarted(string toolName, string? displayLabel)
         {
-            _events.Enqueue(new AgentEvent(
+            Enqueue(new AgentEvent(
                 AgentEventKind.ToolActivity,
                 $"tool started: {toolName}",
                 ToolActivity: new ToolActivityInfo(toolName, ToolActivityPhase.Started, DisplayLabel: displayLabel)));
@@ -709,7 +745,7 @@ Command execution rules:
         public void ToolCompleted(string toolName, string? displayLabel, ToolResult result, TimeSpan duration)
         {
             string status = result.Succeeded ? "completed" : "failed";
-            _events.Enqueue(new AgentEvent(
+            Enqueue(new AgentEvent(
                 AgentEventKind.ToolActivity,
                 $"tool {status}: {toolName} ({duration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)} ms)",
                 ToolActivity: new ToolActivityInfo(
@@ -722,7 +758,7 @@ Command execution rules:
 
         public void ToolFailed(string toolName, string? displayLabel, Exception exception, TimeSpan duration)
         {
-            _events.Enqueue(new AgentEvent(
+            Enqueue(new AgentEvent(
                 AgentEventKind.ToolActivity,
                 $"tool exception: {toolName} ({duration.TotalMilliseconds.ToString("F0", CultureInfo.InvariantCulture)} ms) {exception.GetType().Name}",
                 ToolActivity: new ToolActivityInfo(
@@ -736,13 +772,27 @@ Command execution rules:
 
         public IReadOnlyList<AgentEvent> Drain()
         {
-            List<AgentEvent> drained = [];
-            while (_events.TryDequeue(out AgentEvent? agentEvent))
+            lock (_gate)
             {
-                drained.Add(agentEvent);
+                List<AgentEvent> drained = [.. _events];
+                _events.Clear();
+                _activityAvailable = CreateActivitySignal();
+                return drained;
             }
+        }
 
-            return drained;
+        private void Enqueue(AgentEvent agentEvent)
+        {
+            lock (_gate)
+            {
+                _events.Enqueue(agentEvent);
+                _activityAvailable.TrySetResult(true);
+            }
+        }
+
+        private static TaskCompletionSource<bool> CreateActivitySignal()
+        {
+            return new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
     }
 

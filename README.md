@@ -62,6 +62,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness chat --prompt "..." --output json` — emit LF-delimited JSONL events (turn/tool/usage/error) on stdout for scripting; see `docs/design/json-events.md`
 - `winharness rpc` — long-lived process integration over stdin/stdout JSON (prompt, steer, abort, session ops); see `docs/design/rpc.md` and `samples/rpc-client.ps1`
 - `winharness chat` for the terminal REPL (continues the most recent workspace session by default; see [Sessions](#sessions))
+- `winharness chat --verbose` to show one persistent line per tool event instead of compact batch summaries
 - `winharness chat --tools read_file,grep,glob` to allowlist tools for the run; `--exclude-tools run_command` to deny specific tools; `--no-tools` to disable all tools (applies to built-in and MCP tools; unknown names warn instead of failing)
 - `winharness providers list`
 - `winharness providers add --id openai-main --base-url https://api.openai.com/v1 [--api-key sk-... --set-default]`

@@ -14,15 +14,17 @@ namespace WinHarness.Cli.Rendering;
 internal sealed class ToolBatchRenderer
 {
     private readonly bool _verbose;
+    private readonly IAnsiConsole _console;
     private int _active;
     private int _calls;
     private int _ok;
     private int _failed;
     private TimeSpan _duration;
 
-    public ToolBatchRenderer(bool verbose)
+    public ToolBatchRenderer(bool verbose, IAnsiConsole? console = null)
     {
         _verbose = verbose;
+        _console = console ?? AnsiConsole.Console;
     }
 
     /// <summary>
@@ -114,9 +116,9 @@ internal sealed class ToolBatchRenderer
             return;
         }
 
-        int calls = _calls == 0 ? _active : _calls;
+        int calls = _calls + _active;
         int ok = _ok;
-        int failed = _failed;
+        int failed = _failed + _active;
         TimeSpan duration = _duration;
         _active = 0;
         _calls = 0;
@@ -129,7 +131,7 @@ internal sealed class ToolBatchRenderer
             ? "[bold]tool run[/]"
             : $"[bold]{calls} tool runs[/]";
 
-        AnsiConsole.MarkupLine(
+        _console.MarkupLine(
             $"{IconFor(ok, failed)} {header} [dim]· {ok} ok · {failed} failed · {durationText}[/]");
     }
 
@@ -144,14 +146,14 @@ internal sealed class ToolBatchRenderer
         switch (info.Phase)
         {
             case ToolActivityPhase.Started:
-                AnsiConsole.MarkupLine($"[dim]⠋[/] [bold]{label}[/]");
+                _console.MarkupLine($"[dim]⠋[/] [bold]{label}[/]");
                 break;
 
             case ToolActivityPhase.Completed:
             {
                 string icon = info.Succeeded == false ? "[red]✗[/]" : "[green]✓[/]";
                 string duration = FormatDuration(info.Duration);
-                AnsiConsole.MarkupLine($"{icon} [bold]{label}[/] [dim]({duration})[/]");
+                _console.MarkupLine($"{icon} [bold]{label}[/] [dim]({duration})[/]");
                 break;
             }
 
@@ -161,7 +163,7 @@ internal sealed class ToolBatchRenderer
                 string exc = info.ExceptionTypeName is null
                     ? ""
                     : $" [red]{Markup.Escape(info.ExceptionTypeName)}[/]";
-                AnsiConsole.MarkupLine($"[red]✗[/] [bold]{label}[/] [dim]({duration})[/]{exc}");
+                _console.MarkupLine($"[red]✗[/] [bold]{label}[/] [dim]({duration})[/]{exc}");
                 break;
             }
         }
