@@ -1,11 +1,13 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using WinHarness.Configuration;
 using WinHarness.Platform;
 using WinHarness.Providers;
+using WinHarness.Serialization;
 
 namespace WinHarness.IntegrationTests;
 
@@ -64,6 +66,159 @@ public sealed class AnthropicMessagesProviderTests
     }
 
     [TestMethod]
+    public async Task CoalescesConsecutiveToolResultsIntoSingleUserTurn()
+    {
+        await using FakeAnthropicServer server = await FakeAnthropicServer.StartAsync(CancellationToken.None);
+        WinHarnessOptions options = CreateOptions(server.Endpoint.ToString());
+        using IChatClient client = new OpenAiCompatibleProviderFactory(options, new FakeCredentialStore())
+            .Create("anthropic", "sonnet")
+            .CreateChatClient();
+
+        List<ChatMessage> history =
+        [
+            new(ChatRole.User, "What's the weather?"),
+            new(ChatRole.Assistant,
+            [
+                new FunctionCallContent("toolu_1", "get_weather", new Dictionary<string, object?> { ["location"] = "SF" }),
+                new FunctionCallContent("toolu_2", "get_weather", new Dictionary<string, object?> { ["location"] = "NYC" }),
+            ]),
+            new(ChatRole.Tool, [new FunctionResultContent("toolu_1", "sunny")]),
+            new(ChatRole.Tool, [new FunctionResultContent("toolu_2", "rainy")]),
+            new(ChatRole.User, "Summarize both."),
+        ];
+
+        await foreach (ChatResponseUpdate _ in client.GetStreamingResponseAsync(history, cancellationToken: CancellationToken.None))
+        {
+        }
+
+        Assert.IsNotNull(server.LastRequestBody);
+        using JsonDocument document = JsonDocument.Parse(server.LastRequestBody!);
+        JsonElement messages = document.RootElement.GetProperty("messages");
+        Assert.AreEqual(3, messages.GetArrayLength(), "user + assistant + coalesced tool/user turn");
+
+        JsonElement last = messages[2];
+        Assert.AreEqual("user", last.GetProperty("role").GetString());
+        JsonElement content = last.GetProperty("content");
+        Assert.AreEqual(3, content.GetArrayLength());
+        Assert.AreEqual("tool_result", content[0].GetProperty("type").GetString());
+        Assert.AreEqual("toolu_1", content[0].GetProperty("tool_use_id").GetString());
+        Assert.AreEqual("tool_result", content[1].GetProperty("type").GetString());
+        Assert.AreEqual("toolu_2", content[1].GetProperty("tool_use_id").GetString());
+        Assert.AreEqual("text", content[2].GetProperty("type").GetString());
+        Assert.AreEqual("Summarize both.", content[2].GetProperty("text").GetString());
+
+        // Strict role alternation: user, assistant, user
+        Assert.AreEqual("user", messages[0].GetProperty("role").GetString());
+        Assert.AreEqual("assistant", messages[1].GetProperty("role").GetString());
+    }
+
+    [TestMethod]
+    public async Task RaisesMaxTokensWhenThinkingBudgetWouldExceedIt()
+    {
+        await using FakeAnthropicServer server = await FakeAnthropicServer.StartAsync(CancellationToken.None);
+        WinHarnessOptions options = CreateOptions(server.Endpoint.ToString());
+        using IChatClient client = new OpenAiCompatibleProviderFactory(options, new FakeCredentialStore())
+            .Create("anthropic", "sonnet")
+            .CreateChatClient();
+
+        ChatOptions chatOptions = new()
+        {
+            Reasoning = new ReasoningOptions { Effort = ReasoningEffort.ExtraHigh }
+        };
+
+        await foreach (ChatResponseUpdate _ in client.GetStreamingResponseAsync(
+                           "Think hard.",
+                           chatOptions,
+                           CancellationToken.None))
+        {
+        }
+
+        Assert.IsNotNull(server.LastRequestBody);
+        using JsonDocument document = JsonDocument.Parse(server.LastRequestBody!);
+        int maxTokens = document.RootElement.GetProperty("max_tokens").GetInt32();
+        int budget = document.RootElement.GetProperty("thinking").GetProperty("budget_tokens").GetInt32();
+        Assert.AreEqual(32_000, budget);
+        Assert.IsTrue(budget < maxTokens, $"budget {budget} must be < max_tokens {maxTokens}");
+    }
+
+    [TestMethod]
+    public async Task RoundTripsThinkingSignatureOnFollowUpRequest()
+    {
+        await using FakeAnthropicServer server = await FakeAnthropicServer.StartThinkingAsync(CancellationToken.None);
+        WinHarnessOptions options = CreateOptions(server.Endpoint.ToString());
+        using IChatClient client = new OpenAiCompatibleProviderFactory(options, new FakeCredentialStore())
+            .Create("anthropic", "sonnet")
+            .CreateChatClient();
+
+        List<ChatMessage> turn = [new(ChatRole.User, "Reason then answer.")];
+        List<AIContent> assistantContents = [];
+        await foreach (ChatResponseUpdate update in client.GetStreamingResponseAsync(turn, cancellationToken: CancellationToken.None))
+        {
+            assistantContents.AddRange(update.Contents);
+        }
+
+        TextReasoningContent? reasoning = assistantContents.OfType<TextReasoningContent>().SingleOrDefault();
+        Assert.IsNotNull(reasoning);
+        Assert.AreEqual("stepwise", reasoning!.Text);
+        Assert.IsNotNull(reasoning.AdditionalProperties);
+        Assert.AreEqual(
+            "sig_abc",
+            reasoning.AdditionalProperties!["anthropic_thinking_signature"]?.ToString());
+
+        // Second request: replay assistant thinking + ask follow-up.
+        await using FakeAnthropicServer followUp = await FakeAnthropicServer.StartAsync(CancellationToken.None);
+        options = CreateOptions(followUp.Endpoint.ToString());
+        using IChatClient followUpClient = new OpenAiCompatibleProviderFactory(options, new FakeCredentialStore())
+            .Create("anthropic", "sonnet")
+            .CreateChatClient();
+
+        List<ChatMessage> history =
+        [
+            new(ChatRole.User, "Reason then answer."),
+            new(ChatRole.Assistant, assistantContents.Where(c => c is not UsageContent).ToList()),
+            new(ChatRole.User, "Continue."),
+        ];
+
+        await foreach (ChatResponseUpdate _ in followUpClient.GetStreamingResponseAsync(
+                           history,
+                           cancellationToken: CancellationToken.None))
+        {
+        }
+
+        Assert.IsNotNull(followUp.LastRequestBody);
+        StringAssert.Contains(followUp.LastRequestBody!, "\"type\":\"thinking\"");
+        StringAssert.Contains(followUp.LastRequestBody!, "\"signature\":\"sig_abc\"");
+        StringAssert.Contains(followUp.LastRequestBody!, "\"thinking\":\"stepwise\"");
+    }
+
+    [TestMethod]
+    public async Task OAuthProviderSendsBearerAndBetaHeaders()
+    {
+        await using FakeAnthropicServer server = await FakeAnthropicServer.StartAsync(CancellationToken.None);
+        WinHarnessOptions options = CreateOAuthOptions(server.Endpoint.ToString());
+        OAuthTokenSet tokens = new(
+            AccessToken: "oauth-access",
+            RefreshToken: "oauth-refresh",
+            ExpiresAt: DateTimeOffset.UtcNow.AddHours(1));
+        OpenAiCompatibleProviderFactory factory = new(
+            options,
+            new FakeCredentialStore(JsonSerializer.Serialize(tokens, WinHarnessJsonSerializerContext.Default.OAuthTokenSet)),
+            [new AnthropicOAuthFlow(new HttpClient())]);
+        using IChatClient client = factory.Create("anthropic", "sonnet").CreateChatClient();
+
+        await foreach (ChatResponseUpdate _ in client.GetStreamingResponseAsync(
+                           "hi",
+                           cancellationToken: CancellationToken.None))
+        {
+        }
+
+        Assert.IsTrue(server.LastHeaders.TryGetValue("Authorization", out string? auth));
+        StringAssert.StartsWith(auth!, "Bearer ");
+        Assert.IsTrue(server.LastHeaders.ContainsKey("anthropic-beta"));
+        Assert.IsFalse(server.LastHeaders.ContainsKey("x-api-key"));
+    }
+
+    [TestMethod]
     public void ValidatorAcceptsAnthropicMessagesKind()
     {
         WinHarnessOptions options = CreateOptions("https://api.anthropic.com");
@@ -107,19 +262,28 @@ public sealed class AnthropicMessagesProviderTests
         return options;
     }
 
-    private sealed class FakeCredentialStore : ICredentialStore
+    private static WinHarnessOptions CreateOAuthOptions(string baseUrl)
+    {
+        WinHarnessOptions options = CreateOptions(baseUrl);
+        ProviderOptions provider = options.Providers[0];
+        provider.CredentialName = null;
+        provider.Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "anthropic" };
+        return options;
+    }
+
+    private sealed class FakeCredentialStore(string? secret = "test-key") : ICredentialStore
     {
         public ValueTask<string?> GetSecretAsync(string targetName, CancellationToken cancellationToken)
-            => ValueTask.FromResult<string?>("test-key");
+            => ValueTask.FromResult(secret);
 
-        public ValueTask SetSecretAsync(string targetName, string secret, CancellationToken cancellationToken)
+        public ValueTask SetSecretAsync(string targetName, string secretValue, CancellationToken cancellationToken)
             => ValueTask.CompletedTask;
 
         public ValueTask DeleteSecretAsync(string targetName, CancellationToken cancellationToken)
             => ValueTask.CompletedTask;
 
         public ValueTask<IReadOnlyList<string>> ListTargetNamesAsync(CancellationToken cancellationToken)
-            => ValueTask.FromResult<IReadOnlyList<string>>(["WinHarness:anthropic"]);
+            => ValueTask.FromResult<IReadOnlyList<string>>(["WinHarness:anthropic", "WinHarness:oauth:anthropic"]);
     }
 
     private sealed class FakeAnthropicServer : IAsyncDisposable
@@ -196,6 +360,46 @@ public sealed class AnthropicMessagesProviderTests
 
                 event: message_delta
                 data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":18}}
+
+                event: message_stop
+                data: {"type":"message_stop"}
+
+                """;
+            return StartCoreAsync(body, cancellationToken);
+        }
+
+        public static Task<FakeAnthropicServer> StartThinkingAsync(CancellationToken cancellationToken)
+        {
+            const string body = """
+                event: message_start
+                data: {"type":"message_start","message":{"id":"msg_3","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","usage":{"input_tokens":8,"output_tokens":1}}}
+
+                event: content_block_start
+                data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"step"}}
+
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"wise"}}
+
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_abc"}}
+
+                event: content_block_stop
+                data: {"type":"content_block_stop","index":0}
+
+                event: content_block_start
+                data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"done"}}
+
+                event: content_block_stop
+                data: {"type":"content_block_stop","index":1}
+
+                event: message_delta
+                data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}
 
                 event: message_stop
                 data: {"type":"message_stop"}

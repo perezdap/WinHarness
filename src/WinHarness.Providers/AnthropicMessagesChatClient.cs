@@ -13,6 +13,8 @@ namespace WinHarness.Providers;
 internal sealed class AnthropicMessagesChatClient : IChatClient
 {
     private const int DefaultMaxTokens = 16_384;
+    private const int MinThinkingBudgetTokens = 1_024;
+    internal const string ThinkingSignatureProperty = "anthropic_thinking_signature";
     private static readonly ChatClientMetadata Metadata = new("anthropic");
 
     private readonly HttpClient _http;
@@ -108,6 +110,7 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
         using StreamReader reader = new(stream, Encoding.UTF8);
 
         Dictionary<int, ToolUseAccumulator> toolBlocks = [];
+        Dictionary<int, ThinkingAccumulator> thinkingBlocks = [];
         long? inputTokens = null;
         long? outputTokens = null;
         string? messageId = null;
@@ -168,11 +171,12 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
                     break;
 
                 case "content_block_start":
-                    HandleContentBlockStart(root, toolBlocks);
+                    HandleContentBlockStart(root, toolBlocks, thinkingBlocks);
                     break;
 
                 case "content_block_delta":
-                    foreach (ChatResponseUpdate update in HandleContentBlockDelta(root, toolBlocks, messageId, modelId))
+                    foreach (ChatResponseUpdate update in HandleContentBlockDelta(
+                                 root, toolBlocks, thinkingBlocks, messageId, modelId))
                     {
                         yield return update;
                     }
@@ -180,7 +184,8 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
                     break;
 
                 case "content_block_stop":
-                    foreach (ChatResponseUpdate update in HandleContentBlockStop(root, toolBlocks, messageId, modelId))
+                    foreach (ChatResponseUpdate update in HandleContentBlockStop(
+                                 root, toolBlocks, thinkingBlocks, messageId, modelId))
                     {
                         yield return update;
                     }
@@ -253,7 +258,15 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
         {
             writer.WriteStartObject();
             writer.WriteString("model", options?.ModelId ?? _modelId);
-            writer.WriteNumber("max_tokens", options?.MaxOutputTokens ?? DefaultMaxTokens);
+
+            int maxTokens = options?.MaxOutputTokens ?? DefaultMaxTokens;
+            int? thinkingBudget = null;
+            if (options?.Reasoning is { Effort: { } effort } && effort != ReasoningEffort.None)
+            {
+                thinkingBudget = ResolveThinkingBudget(effort, ref maxTokens);
+            }
+
+            writer.WriteNumber("max_tokens", maxTokens);
             writer.WriteBoolean("stream", stream);
 
             List<string> systemParts = [];
@@ -280,11 +293,7 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
 
             writer.WritePropertyName("messages");
             writer.WriteStartArray();
-            foreach (ChatMessage message in conversation)
-            {
-                WriteMessage(writer, message);
-            }
-
+            WriteCoalescedMessages(writer, conversation);
             writer.WriteEndArray();
 
             if (options?.Tools is { Count: > 0 } tools)
@@ -313,17 +322,8 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
                 writer.WriteEndArray();
             }
 
-            if (options?.Reasoning is { Effort: { } effort } && effort != ReasoningEffort.None)
+            if (thinkingBudget is int budget)
             {
-                int budget = effort switch
-                {
-                    ReasoningEffort.Low => 4_000,
-                    ReasoningEffort.Medium => 10_000,
-                    ReasoningEffort.High => 20_000,
-                    ReasoningEffort.ExtraHigh => 32_000,
-                    _ => 10_000
-                };
-
                 writer.WritePropertyName("thinking");
                 writer.WriteStartObject();
                 writer.WriteString("type", "enabled");
@@ -337,15 +337,99 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
         return streamBuffer.ToArray();
     }
 
-    private static void WriteMessage(Utf8JsonWriter writer, ChatMessage message)
+    /// <summary>
+    /// Anthropic requires strictly alternating roles. WinHarness emits one
+    /// <see cref="ChatRole.Tool"/> message per result and may insert steering
+    /// user text immediately after tools — coalesce those into a single user turn.
+    /// Consecutive same-role user/assistant messages are merged the same way.
+    /// </summary>
+    private static void WriteCoalescedMessages(Utf8JsonWriter writer, IReadOnlyList<ChatMessage> conversation)
     {
-        if (message.Role == ChatRole.Tool)
+        int index = 0;
+        while (index < conversation.Count)
         {
-            // Anthropic expects tool results as a user message with tool_result blocks.
+            ChatMessage message = conversation[index];
+            if (message.Role == ChatRole.Tool || message.Role == ChatRole.User)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("role", "user");
+                writer.WritePropertyName("content");
+                writer.WriteStartArray();
+
+                bool wrote = false;
+                while (index < conversation.Count &&
+                       (conversation[index].Role == ChatRole.Tool || conversation[index].Role == ChatRole.User))
+                {
+                    wrote |= WriteUserOrToolContents(writer, conversation[index]);
+                    index++;
+                }
+
+                if (!wrote)
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("type", "text");
+                    writer.WriteString("text", string.Empty);
+                    writer.WriteEndObject();
+                }
+
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+                continue;
+            }
+
+            // Assistant (and any unexpected role treated as assistant content).
             writer.WriteStartObject();
-            writer.WriteString("role", "user");
+            writer.WriteString("role", "assistant");
             writer.WritePropertyName("content");
             writer.WriteStartArray();
+
+            bool wroteAssistant = false;
+            do
+            {
+                wroteAssistant |= WriteAssistantContents(writer, conversation[index]);
+                index++;
+            }
+            while (index < conversation.Count && conversation[index].Role == ChatRole.Assistant);
+
+            if (!wroteAssistant)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("type", "text");
+                writer.WriteString("text", string.Empty);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+    }
+
+    private static int ResolveThinkingBudget(ReasoningEffort effort, ref int maxTokens)
+    {
+        int budget = effort switch
+        {
+            ReasoningEffort.Low => 4_000,
+            ReasoningEffort.Medium => 10_000,
+            ReasoningEffort.High => 20_000,
+            ReasoningEffort.ExtraHigh => 32_000,
+            _ => 10_000
+        };
+
+        budget = Math.Max(MinThinkingBudgetTokens, budget);
+        // Anthropic requires budget_tokens < max_tokens (without interleaved-thinking beta).
+        if (budget >= maxTokens)
+        {
+            maxTokens = budget + MinThinkingBudgetTokens;
+        }
+
+        return budget;
+    }
+
+    private static bool WriteUserOrToolContents(Utf8JsonWriter writer, ChatMessage message)
+    {
+        bool wrote = false;
+        if (message.Role == ChatRole.Tool)
+        {
             foreach (AIContent content in message.Contents)
             {
                 if (content is not FunctionResultContent result)
@@ -363,25 +447,48 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
                 }
 
                 writer.WriteEndObject();
+                wrote = true;
             }
 
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-            return;
+            return wrote;
         }
 
-        string role = message.Role == ChatRole.Assistant ? "assistant" : "user";
-        writer.WriteStartObject();
-        writer.WriteString("role", role);
-        writer.WritePropertyName("content");
-        writer.WriteStartArray();
+        foreach (AIContent content in message.Contents)
+        {
+            if (content is TextContent text && !string.IsNullOrEmpty(text.Text))
+            {
+                writer.WriteStartObject();
+                writer.WriteString("type", "text");
+                writer.WriteString("text", text.Text);
+                writer.WriteEndObject();
+                wrote = true;
+            }
+        }
 
+        if (!wrote && !string.IsNullOrEmpty(message.Text))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("type", "text");
+            writer.WriteString("text", message.Text);
+            writer.WriteEndObject();
+            wrote = true;
+        }
+
+        return wrote;
+    }
+
+    private static bool WriteAssistantContents(Utf8JsonWriter writer, ChatMessage message)
+    {
         bool wrote = false;
+        StringBuilder? thinkingText = null;
+        string? thinkingSignature = null;
+
         foreach (AIContent content in message.Contents)
         {
             switch (content)
             {
                 case TextContent text when !string.IsNullOrEmpty(text.Text):
+                    FlushThinking(writer, ref thinkingText, ref thinkingSignature, ref wrote);
                     writer.WriteStartObject();
                     writer.WriteString("type", "text");
                     writer.WriteString("text", text.Text);
@@ -389,15 +496,24 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
                     wrote = true;
                     break;
 
-                case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text):
-                    writer.WriteStartObject();
-                    writer.WriteString("type", "thinking");
-                    writer.WriteString("thinking", reasoning.Text);
-                    writer.WriteEndObject();
-                    wrote = true;
+                case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text) ||
+                                                         TryGetThinkingSignature(reasoning, out _):
+                    thinkingText ??= new StringBuilder();
+                    if (!string.IsNullOrEmpty(reasoning.Text))
+                    {
+                        thinkingText.Append(reasoning.Text);
+                    }
+
+                    if (TryGetThinkingSignature(reasoning, out string? signature) &&
+                        !string.IsNullOrEmpty(signature))
+                    {
+                        thinkingSignature = signature;
+                    }
+
                     break;
 
                 case FunctionCallContent call:
+                    FlushThinking(writer, ref thinkingText, ref thinkingSignature, ref wrote);
                     writer.WriteStartObject();
                     writer.WriteString("type", "tool_use");
                     writer.WriteString("id", call.CallId);
@@ -410,16 +526,74 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
             }
         }
 
+        FlushThinking(writer, ref thinkingText, ref thinkingSignature, ref wrote);
+
         if (!wrote && !string.IsNullOrEmpty(message.Text))
         {
             writer.WriteStartObject();
             writer.WriteString("type", "text");
             writer.WriteString("text", message.Text);
             writer.WriteEndObject();
+            wrote = true;
         }
 
-        writer.WriteEndArray();
+        return wrote;
+    }
+
+    private static void FlushThinking(
+        Utf8JsonWriter writer,
+        ref StringBuilder? thinkingText,
+        ref string? thinkingSignature,
+        ref bool wrote)
+    {
+        if (thinkingText is null && string.IsNullOrEmpty(thinkingSignature))
+        {
+            return;
+        }
+
+        string text = thinkingText?.ToString() ?? string.Empty;
+        if (text.Length == 0 && string.IsNullOrEmpty(thinkingSignature))
+        {
+            thinkingText = null;
+            thinkingSignature = null;
+            return;
+        }
+
+        // Anthropic rejects thinking blocks without a signature on continuations.
+        // Skip unsigned thinking rather than sending a request that will 400.
+        if (string.IsNullOrEmpty(thinkingSignature))
+        {
+            thinkingText = null;
+            thinkingSignature = null;
+            return;
+        }
+
+        writer.WriteStartObject();
+        writer.WriteString("type", "thinking");
+        writer.WriteString("thinking", text);
+        writer.WriteString("signature", thinkingSignature);
         writer.WriteEndObject();
+        wrote = true;
+        thinkingText = null;
+        thinkingSignature = null;
+    }
+
+    private static bool TryGetThinkingSignature(AIContent content, out string? signature)
+    {
+        signature = null;
+        if (content.AdditionalProperties is null)
+        {
+            return false;
+        }
+
+        if (!content.AdditionalProperties.TryGetValue(ThinkingSignatureProperty, out object? value) ||
+            value is null)
+        {
+            return false;
+        }
+
+        signature = value as string ?? value.ToString();
+        return !string.IsNullOrEmpty(signature);
     }
 
     private static void WriteArgumentsObject(Utf8JsonWriter writer, IDictionary<string, object?>? arguments)
@@ -486,7 +660,10 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
         };
     }
 
-    private static void HandleContentBlockStart(JsonElement root, Dictionary<int, ToolUseAccumulator> toolBlocks)
+    private static void HandleContentBlockStart(
+        JsonElement root,
+        Dictionary<int, ToolUseAccumulator> toolBlocks,
+        Dictionary<int, ThinkingAccumulator> thinkingBlocks)
     {
         if (!root.TryGetProperty("index", out JsonElement indexElement) ||
             !root.TryGetProperty("content_block", out JsonElement block))
@@ -504,12 +681,19 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
             string id = block.TryGetProperty("id", out JsonElement idElement) ? idElement.GetString() ?? "" : "";
             string name = block.TryGetProperty("name", out JsonElement nameElement) ? nameElement.GetString() ?? "" : "";
             toolBlocks[index] = new ToolUseAccumulator(id, name);
+            return;
+        }
+
+        if (blockType == "thinking")
+        {
+            thinkingBlocks[index] = new ThinkingAccumulator();
         }
     }
 
     private static IEnumerable<ChatResponseUpdate> HandleContentBlockDelta(
         JsonElement root,
         Dictionary<int, ToolUseAccumulator> toolBlocks,
+        Dictionary<int, ThinkingAccumulator> thinkingBlocks,
         string? messageId,
         string? modelId)
     {
@@ -543,17 +727,10 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
                 break;
 
             case "thinking_delta":
-                if (delta.TryGetProperty("thinking", out JsonElement thinkingElement))
+                if (thinkingBlocks.TryGetValue(index, out ThinkingAccumulator? thinking) &&
+                    delta.TryGetProperty("thinking", out JsonElement thinkingElement))
                 {
-                    string thinking = thinkingElement.GetString() ?? string.Empty;
-                    if (thinking.Length > 0)
-                    {
-                        yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextReasoningContent(thinking)])
-                        {
-                            ModelId = modelId,
-                            MessageId = messageId,
-                        };
-                    }
+                    thinking.Text.Append(thinkingElement.GetString());
                 }
 
                 break;
@@ -568,7 +745,12 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
                 break;
 
             case "signature_delta":
-                // Signature is Anthropic integrity metadata; not surfaced to the model layer.
+                if (thinkingBlocks.TryGetValue(index, out ThinkingAccumulator? signed) &&
+                    delta.TryGetProperty("signature", out JsonElement signatureElement))
+                {
+                    signed.Signature.Append(signatureElement.GetString());
+                }
+
                 break;
         }
     }
@@ -576,6 +758,7 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
     private static IEnumerable<ChatResponseUpdate> HandleContentBlockStop(
         JsonElement root,
         Dictionary<int, ToolUseAccumulator> toolBlocks,
+        Dictionary<int, ThinkingAccumulator> thinkingBlocks,
         string? messageId,
         string? modelId)
     {
@@ -585,6 +768,29 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
         }
 
         int index = indexElement.GetInt32();
+        if (thinkingBlocks.Remove(index, out ThinkingAccumulator? thinking))
+        {
+            string text = thinking.Text.ToString();
+            string signature = thinking.Signature.ToString();
+            if (text.Length > 0 || signature.Length > 0)
+            {
+                TextReasoningContent reasoning = new(text);
+                if (signature.Length > 0)
+                {
+                    reasoning.AdditionalProperties = new AdditionalPropertiesDictionary
+                    {
+                        [ThinkingSignatureProperty] = signature
+                    };
+                }
+
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [reasoning])
+                {
+                    ModelId = modelId,
+                    MessageId = messageId,
+                };
+            }
+        }
+
         if (!toolBlocks.Remove(index, out ToolUseAccumulator? tool))
         {
             yield break;
@@ -680,5 +886,11 @@ internal sealed class AnthropicMessagesChatClient : IChatClient
         public string Id { get; } = id;
         public string Name { get; } = name;
         public StringBuilder Json { get; } = new();
+    }
+
+    private sealed class ThinkingAccumulator
+    {
+        public StringBuilder Text { get; } = new();
+        public StringBuilder Signature { get; } = new();
     }
 }

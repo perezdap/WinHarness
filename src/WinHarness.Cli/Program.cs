@@ -1004,6 +1004,53 @@ app.Add("sessions prune", async (
 await app.RunAsync(args).ConfigureAwait(false);
 
 
+static async Task<AnthropicCallbackResult> WaitForAnthropicCallbackOrPasteAsync(
+    AnthropicOAuthFlow flow,
+    AnthropicPkceSession session,
+    CancellationToken cancellationToken)
+{
+    using CancellationTokenSource raceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    Task<AnthropicCallbackResult> loopbackTask = flow.WaitForCallbackAsync(session, raceCts.Token).AsTask();
+    Task<AnthropicCallbackResult> pasteTask = Task.Run(async () =>
+    {
+        while (!raceCts.Token.IsCancellationRequested)
+        {
+            if (Console.KeyAvailable)
+            {
+                ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+                if (key.Key is ConsoleKey.Enter or ConsoleKey.P)
+                {
+                    string pasted = AnsiConsole.Ask<string>("Paste the authorization code or full redirect URL:");
+                    return AnthropicOAuthFlow.ParseAuthorizationInput(pasted, session);
+                }
+            }
+
+            try
+            {
+                await Task.Delay(100, raceCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+
+        raceCts.Token.ThrowIfCancellationRequested();
+        throw new OperationCanceledException(raceCts.Token);
+    }, raceCts.Token);
+
+    Task completed = await Task.WhenAny(loopbackTask, pasteTask).ConfigureAwait(false);
+    await raceCts.CancelAsync().ConfigureAwait(false);
+
+    if (completed == loopbackTask)
+    {
+        return await loopbackTask.ConfigureAwait(false);
+    }
+
+    return await pasteTask.ConfigureAwait(false);
+}
+
+
 static async Task LoginAnthropicAsync(IServiceProvider services, CancellationToken cancellationToken)
 {
     ICredentialStore store = services.GetRequiredService<ICredentialStore>();
@@ -1013,12 +1060,12 @@ static async Task LoginAnthropicAsync(IServiceProvider services, CancellationTok
     AnthropicPkceSession session = flow.CreatePkceSession();
 
     AnsiConsole.MarkupLine($"Open [bold blue]{Markup.Escape(session.AuthorizeUrl)}[/] to authorize Claude Pro/Max.");
-    AnsiConsole.MarkupLine("[dim]Waiting for browser callback… (Ctrl+C to cancel, or paste the redirect URL when prompted)[/]");
+    AnsiConsole.MarkupLine("[dim]Waiting for browser callback… Press Enter to paste the redirect URL instead (Ctrl+C to cancel).[/]");
 
     AnthropicCallbackResult callback;
     try
     {
-        callback = await flow.WaitForCallbackAsync(session, cancellationToken).ConfigureAwait(false);
+        callback = await WaitForAnthropicCallbackOrPasteAsync(flow, session, cancellationToken).ConfigureAwait(false);
     }
     catch (InvalidOperationException bindError) when (bindError.Message.Contains("Could not bind OAuth callback", StringComparison.Ordinal))
     {
