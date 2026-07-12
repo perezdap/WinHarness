@@ -20,9 +20,10 @@ public static class WinHarnessOptionsValidator
             RequireNonEmpty(provider.Id, "Provider id is required.");
             RequireNonEmpty(provider.Kind, $"Provider '{provider.Id}' kind is required.");
 
-            if (!string.Equals(provider.Kind, "openai-compatible", StringComparison.OrdinalIgnoreCase))
+            if (!IsSupportedProviderKind(provider.Kind))
             {
-                throw new InvalidOperationException($"Provider '{provider.Id}' uses unsupported kind '{provider.Kind}'. v0.1 supports only openai-compatible.");
+                throw new InvalidOperationException(
+                    $"Provider '{provider.Id}' uses unsupported kind '{provider.Kind}'. Supported kinds: openai-compatible, anthropic-messages.");
             }
 
             if (!providerIds.Add(provider.Id))
@@ -115,6 +116,12 @@ public static class WinHarnessOptionsValidator
                 throw new InvalidOperationException($"MCP server '{server.Id}' uses unsupported transport '{server.Transport}'. Supported values are stdio, http, and sse.");
             }
         }
+    }
+
+    private static bool IsSupportedProviderKind(string kind)
+    {
+        return string.Equals(kind, "openai-compatible", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(kind, "anthropic-messages", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsStdioTransport(string transport)

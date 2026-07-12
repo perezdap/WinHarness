@@ -14,6 +14,7 @@ public static class ProviderServiceCollectionExtensions
     {
         services.AddSingleton<IModelCapabilityRegistry, ConfigurationModelCapabilityRegistry>();
         services.AddSingleton<IOAuthTokenRefresher>(static _ => new GitHubCopilotOAuthFlow(new HttpClient()));
+        services.AddSingleton<IOAuthTokenRefresher>(static _ => new AnthropicOAuthFlow(new HttpClient()));
         services.AddSingleton<IProviderFactory>(static provider => new OpenAiCompatibleProviderFactory(
             provider.GetRequiredService<Configuration.WinHarnessOptions>(),
             provider.GetRequiredService<Platform.ICredentialStore>(),

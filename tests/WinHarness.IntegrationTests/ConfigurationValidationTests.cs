@@ -77,7 +77,22 @@ public sealed class ConfigurationValidationTests
         }
 
         Assert.IsNotNull(exception);
-        StringAssert.Contains(exception!.Message, "openai-compatible");
+        StringAssert.Contains(exception!.Message, "anthropic-messages");
+    }
+
+    [TestMethod]
+    public void AcceptsAnthropicMessagesProviderKind()
+    {
+        WinHarnessOptions options = new();
+        options.Providers.Add(new ProviderOptions
+        {
+            Id = "anthropic",
+            Kind = "anthropic-messages",
+            BaseUrl = "https://api.anthropic.com",
+            Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "anthropic" }
+        });
+
+        WinHarnessOptionsValidator.Validate(options);
     }
 
     [TestMethod]

@@ -702,9 +702,15 @@ app.Add("rpc", async (CancellationToken cancellationToken) =>
 
 app.Add("login", async (string provider, string? enterpriseDomain = null, bool noDiscover = false, CancellationToken cancellationToken = default) =>
 {
+    if (string.Equals(provider, "anthropic", StringComparison.OrdinalIgnoreCase))
+    {
+        await LoginAnthropicAsync(host.Services, cancellationToken).ConfigureAwait(false);
+        return;
+    }
+
     if (!string.Equals(provider, "copilot", StringComparison.OrdinalIgnoreCase))
     {
-        throw new InvalidOperationException($"OAuth provider '{provider}' is not supported yet. Available: copilot.");
+        throw new InvalidOperationException($"OAuth provider '{provider}' is not supported yet. Available: copilot, anthropic.");
     }
 
     ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
@@ -996,6 +1002,85 @@ app.Add("sessions prune", async (
 });
 
 await app.RunAsync(args).ConfigureAwait(false);
+
+
+static async Task LoginAnthropicAsync(IServiceProvider services, CancellationToken cancellationToken)
+{
+    ICredentialStore store = services.GetRequiredService<ICredentialStore>();
+    ConfigStore configStore = services.GetRequiredService<ConfigStore>();
+    using HttpClient http = new();
+    AnthropicOAuthFlow flow = new(http);
+    AnthropicPkceSession session = flow.CreatePkceSession();
+
+    AnsiConsole.MarkupLine($"Open [bold blue]{Markup.Escape(session.AuthorizeUrl)}[/] to authorize Claude Pro/Max.");
+    AnsiConsole.MarkupLine("[dim]Waiting for browser callback… (Ctrl+C to cancel, or paste the redirect URL when prompted)[/]");
+
+    AnthropicCallbackResult callback;
+    try
+    {
+        callback = await flow.WaitForCallbackAsync(session, cancellationToken).ConfigureAwait(false);
+    }
+    catch (InvalidOperationException bindError) when (bindError.Message.Contains("Could not bind OAuth callback", StringComparison.Ordinal))
+    {
+        AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(bindError.Message)}[/]");
+        string pasted = AnsiConsole.Ask<string>("Paste the authorization code or full redirect URL:");
+        callback = AnthropicOAuthFlow.ParseAuthorizationInput(pasted, session);
+    }
+
+    OAuthTokenSet tokens = await flow.ExchangeCodeAsync(session, callback, cancellationToken).ConfigureAwait(false);
+
+    const string providerId = "anthropic";
+    await store.SetSecretAsync(
+        OAuthCredentialNames.ForProvider(providerId),
+        JsonSerializer.Serialize(tokens, WinHarnessJsonSerializerContext.Default.OAuthTokenSet),
+        cancellationToken).ConfigureAwait(false);
+
+    WinHarnessOptions current = await configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+    ProviderOptions? existing = current.Providers.FirstOrDefault(candidate =>
+        string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
+    if (existing is null)
+    {
+        existing = new ProviderOptions { Id = providerId, Kind = "anthropic-messages" };
+        current.Providers.Add(existing);
+    }
+
+    existing.Kind = "anthropic-messages";
+    existing.BaseUrl = tokens.BaseUrl ?? AnthropicOAuthFlow.DefaultBaseUrl;
+    existing.Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "anthropic" };
+    existing.CredentialName = null;
+
+    if (existing.Models.Count == 0)
+    {
+        foreach (ModelSeed seed in AnthropicOAuthFlow.DefaultModels)
+        {
+            existing.Models.Add(new ModelOptions
+            {
+                Id = seed.Id,
+                ProviderModelId = seed.ProviderModelId,
+                Capabilities = new ProviderCapabilities(
+                    Streaming: true,
+                    ToolCalling: true,
+                    Vision: false,
+                    PromptCaching: true,
+                    StructuredOutput: false,
+                    Reasoning: seed.Reasoning),
+                ContextWindow = seed.ContextWindow,
+                SupportedReasoningEfforts = seed.Reasoning ? ["low", "medium", "high", "extra-high"] : null,
+            });
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(current.DefaultProvider))
+    {
+        current.DefaultProvider = providerId;
+        current.DefaultModel = existing.Models[0].Id;
+    }
+
+    await configStore.SaveAsync(current, cancellationToken).ConfigureAwait(false);
+    AnsiConsole.MarkupLine($"[green]Logged in.[/] Provider '{providerId}' configured at {Markup.Escape(existing.BaseUrl)}.");
+    AnsiConsole.MarkupLine($"[dim]Seeded {existing.Models.Count} Claude models. Switch with: winharness models use {existing.Models[0].Id} --provider-id anthropic[/]");
+}
+
 
 internal static class ChatRepl
 {

@@ -149,7 +149,7 @@ stores the token set, and auto-creates/updates the `copilot` provider entry;
 them. REPL `/login` deferred — the CLI command works while chat is closed,
 which covers the core need. Anthropic/OpenAI flows land with PR-B3/PR-B4.
 
-### 4.3 Non-OpenAI-compatible transports (PR-B3, the hard one)
+### 4.3 Non-OpenAI-compatible transports (PR-B3: DONE — Anthropic Messages)
 
 Copilot works over the existing OpenAI-compatible pipeline. Anthropic (Messages API) and OpenAI subscription (Responses API) do **not**. Options:
 
@@ -158,6 +158,8 @@ Copilot works over the existing OpenAI-compatible pipeline. Anthropic (Messages 
 3. Ship Copilot-only in v0.4 and defer Anthropic/OpenAI subscription to v0.4.1 — acceptable fallback if the spike shows the native clients are large.
 
 PR-B3 delivers `AnthropicMessagesChatProvider` behind the existing `IChatProvider`/`IProviderFactory` seams; PR-B4 does the same for the Responses API. Each includes streaming, tool-call round-trips, usage capture (feeds PR-A4), and reasoning/thinking parameter mapping (feeds PR-A6).
+
+Implemented: hand-rolled `AnthropicMessagesChatClient` (`IChatClient`) with SSE streaming, tool_use/tool_result mapping, usage, and thinking budget mapping; `kind: anthropic-messages` factory routing; `AnthropicOAuthFlow` PKCE login/refresh (`winharness login --provider anthropic`) with static Claude model seed and `anthropic-beta: claude-code-20250219,oauth-2025-04-20` headers. OpenAI Responses transport remains PR-B4.
 
 ### 4.4 Failure modes to design in
 
