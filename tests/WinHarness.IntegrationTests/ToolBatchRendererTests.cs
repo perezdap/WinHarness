@@ -75,6 +75,7 @@ public sealed class ToolBatchRendererTests
         return AnsiConsole.Create(new AnsiConsoleSettings
         {
             Ansi = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
             Out = new AnsiConsoleOutput(output)
         });
     }
