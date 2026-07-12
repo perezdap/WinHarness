@@ -68,8 +68,9 @@ public sealed class ToolAIFunctionAdapter : AIFunction
         CancellationToken cancellationToken)
     {
         JsonElement jsonArguments = ConvertArguments(arguments);
+        string? displayLabel = ToolActivitySummarizer.Build(_tool.Name, jsonArguments.GetRawText());
         Stopwatch stopwatch = Stopwatch.StartNew();
-        _activitySink.ToolStarted(_tool.Name);
+        _activitySink.ToolStarted(_tool.Name, displayLabel);
 
         try
         {
@@ -94,13 +95,13 @@ public sealed class ToolAIFunctionAdapter : AIFunction
                         result.Metadata)),
                 cancellationToken).ConfigureAwait(false);
 
-            _activitySink.ToolCompleted(_tool.Name, result, stopwatch.Elapsed);
+            _activitySink.ToolCompleted(_tool.Name, displayLabel, result, stopwatch.Elapsed);
 
             return result.Succeeded ? result.Content : $"Tool failed ({result.ErrorCode}): {result.Content}";
         }
         catch (Exception ex)
         {
-            _activitySink.ToolFailed(_tool.Name, ex, stopwatch.Elapsed);
+            _activitySink.ToolFailed(_tool.Name, displayLabel, ex, stopwatch.Elapsed);
 
             await _diagnosticSink.WriteAsync(
                 new DiagnosticRecord(
@@ -338,15 +339,15 @@ public sealed class ToolAIFunctionAdapter : AIFunction
 
     private sealed class NullToolActivitySink : IToolActivitySink
     {
-        public void ToolStarted(string toolName)
+        public void ToolStarted(string toolName, string? displayLabel)
         {
         }
 
-        public void ToolCompleted(string toolName, ToolResult result, TimeSpan duration)
+        public void ToolCompleted(string toolName, string? displayLabel, ToolResult result, TimeSpan duration)
         {
         }
 
-        public void ToolFailed(string toolName, Exception exception, TimeSpan duration)
+        public void ToolFailed(string toolName, string? displayLabel, Exception exception, TimeSpan duration)
         {
         }
     }

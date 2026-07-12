@@ -698,15 +698,15 @@ Command execution rules:
     {
         private readonly ConcurrentQueue<AgentEvent> _events = new();
 
-        public void ToolStarted(string toolName)
+        public void ToolStarted(string toolName, string? displayLabel)
         {
             _events.Enqueue(new AgentEvent(
                 AgentEventKind.ToolActivity,
                 $"tool started: {toolName}",
-                ToolActivity: new ToolActivityInfo(toolName, ToolActivityPhase.Started)));
+                ToolActivity: new ToolActivityInfo(toolName, ToolActivityPhase.Started, DisplayLabel: displayLabel)));
         }
 
-        public void ToolCompleted(string toolName, ToolResult result, TimeSpan duration)
+        public void ToolCompleted(string toolName, string? displayLabel, ToolResult result, TimeSpan duration)
         {
             string status = result.Succeeded ? "completed" : "failed";
             _events.Enqueue(new AgentEvent(
@@ -716,10 +716,11 @@ Command execution rules:
                     toolName,
                     ToolActivityPhase.Completed,
                     Succeeded: result.Succeeded,
-                    Duration: duration)));
+                    Duration: duration,
+                    DisplayLabel: displayLabel)));
         }
 
-        public void ToolFailed(string toolName, Exception exception, TimeSpan duration)
+        public void ToolFailed(string toolName, string? displayLabel, Exception exception, TimeSpan duration)
         {
             _events.Enqueue(new AgentEvent(
                 AgentEventKind.ToolActivity,
@@ -729,7 +730,8 @@ Command execution rules:
                     ToolActivityPhase.Failed,
                     Succeeded: false,
                     Duration: duration,
-                    ExceptionTypeName: exception.GetType().Name)));
+                    ExceptionTypeName: exception.GetType().Name,
+                    DisplayLabel: displayLabel)));
         }
 
         public IReadOnlyList<AgentEvent> Drain()
