@@ -84,6 +84,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness mcp tools`
 - `winharness login --provider copilot [--enterprise-domain ghe.example.com]` — GitHub Copilot subscription auth via device code flow (see [Subscription auth](#subscription-auth-oauth))
 - `winharness login --provider anthropic` — Claude Pro/Max OAuth (PKCE + loopback; paste fallback)
+- `winharness login --provider openai` (alias: `codex`) — ChatGPT Plus/Pro Codex OAuth
 - `winharness login status` / `winharness logout --provider copilot`
 - `winharness credentials set|get|list|delete`
 
@@ -241,7 +242,7 @@ WinHarness credential target names must use the `WinHarness:` prefix, for exampl
 
 `winharness login --provider anthropic` signs in with Claude Pro/Max via PKCE on a fixed-port loopback (`http://localhost:53692/`). Press Enter while waiting to paste the redirect URL instead (SSH/remote). Tokens are stored under `WinHarness:oauth:anthropic`; the command seeds an `anthropic` provider with `kind: anthropic-messages`.
 
-OpenAI ChatGPT/Codex OAuth lands with PR-B4 (`login --provider openai`) — see `docs/adr/ADR-0005-oauth-subscription-providers.md`.
+`winharness login --provider openai` (or `codex`) signs in with ChatGPT Plus/Pro via PKCE on `http://localhost:1455/auth/callback`. Tokens are stored under `WinHarness:oauth:openai-codex`; the command seeds an `openai-codex` provider with `kind: openai-codex-responses` (Responses API). See `docs/adr/ADR-0005-oauth-subscription-providers.md`.
 
 > **Note:** subscription auth rides the unofficial endpoints the vendors ship for their own CLIs. They can change or be revoked at any time (ADR-0005 records this risk acceptance).
 

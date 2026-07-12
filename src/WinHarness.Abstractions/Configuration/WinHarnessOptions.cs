@@ -70,12 +70,14 @@ public sealed class ProviderOptions
     public string Id { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the provider kind: "openai-compatible" or "anthropic-messages".
+    /// Gets or sets the provider kind: "openai-compatible", "anthropic-messages",
+    /// or "openai-codex-responses".
     /// </summary>
     public string Kind { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the OpenAI-compatible base URL.
+    /// Gets or sets the provider base URL (OpenAI-compatible root, Anthropic
+    /// API host, or Codex backend host).
     /// </summary>
     public string? BaseUrl { get; set; }
 

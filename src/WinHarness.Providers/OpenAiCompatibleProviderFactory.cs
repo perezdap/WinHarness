@@ -54,6 +54,11 @@ public sealed class OpenAiCompatibleProviderFactory : IProviderFactory
             return new AnthropicMessagesChatProvider(provider, model, tokenSource);
         }
 
+        if (string.Equals(provider.Kind, "openai-codex-responses", StringComparison.OrdinalIgnoreCase))
+        {
+            return new OpenAiCodexResponsesChatProvider(provider, model, tokenSource);
+        }
+
         return new OpenAiCompatibleChatProvider(provider, model, tokenSource);
     }
 
@@ -177,5 +182,73 @@ internal sealed class AnthropicMessagesChatProvider : IChatProvider
             _tokenSource,
             useOAuth,
             ownsHttp: true);
+    }
+}
+
+internal sealed class OpenAiCodexResponsesChatProvider : IChatProvider
+{
+    private readonly ProviderOptions _provider;
+    private readonly ModelOptions _model;
+    private readonly IAuthTokenSource _tokenSource;
+
+    public OpenAiCodexResponsesChatProvider(
+        ProviderOptions provider,
+        ModelOptions model,
+        IAuthTokenSource tokenSource)
+    {
+        _provider = provider;
+        _model = model;
+        _tokenSource = tokenSource;
+    }
+
+    public string ProviderId => _provider.Id;
+
+    public string ModelId => _model.Id;
+
+    public ProviderCapabilities Capabilities => _model.Capabilities;
+
+    public IChatClient CreateChatClient()
+    {
+        string baseUrl = _provider.BaseUrl ?? OpenAiCodexOAuthFlow.DefaultBaseUrl;
+        string endpointText = ResolveCodexResponsesUrl(baseUrl);
+        if (!Uri.TryCreate(endpointText, UriKind.Absolute, out Uri? endpoint))
+        {
+            throw new InvalidOperationException($"Provider '{_provider.Id}' baseUrl is not a valid absolute URI.");
+        }
+
+        string? accountId = null;
+        if (_tokenSource is OAuthTokenSource oauthSource)
+        {
+            // Eager load so missing login surfaces at client creation with a clear message.
+            OAuthTokenSet tokens = oauthSource.LoadTokenSetAsync(CancellationToken.None)
+                .AsTask()
+                .GetAwaiter()
+                .GetResult();
+            accountId = tokens.AccountId;
+        }
+
+        return new OpenAiCodexResponsesChatClient(
+            new HttpClient(),
+            endpoint,
+            _model.ProviderModelId,
+            _tokenSource,
+            accountId,
+            ownsHttp: true);
+    }
+
+    private static string ResolveCodexResponsesUrl(string baseUrl)
+    {
+        string normalized = baseUrl.TrimEnd('/');
+        if (normalized.EndsWith("/codex/responses", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized;
+        }
+
+        if (normalized.EndsWith("/codex", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized + "/responses";
+        }
+
+        return normalized + "/codex/responses";
     }
 }
