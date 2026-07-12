@@ -149,7 +149,7 @@ stores the token set, and auto-creates/updates the `copilot` provider entry;
 them. REPL `/login` deferred — the CLI command works while chat is closed,
 which covers the core need. Anthropic/OpenAI flows land with PR-B3/PR-B4.
 
-### 4.3 Non-OpenAI-compatible transports (PR-B3: DONE — Anthropic Messages)
+### 4.3 Non-OpenAI-compatible transports (PR-B3: DONE — Anthropic Messages; PR-B4: DONE — OpenAI Codex)
 
 Copilot works over the existing OpenAI-compatible pipeline. Anthropic (Messages API) and OpenAI subscription (Responses API) do **not**. Options:
 
