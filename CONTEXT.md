@@ -38,7 +38,7 @@ User input queued while a Turn is running (prefix `>>`), delivered as the next T
 A session entry that replaces older messages in the *active context* with a summary. Full history remains in the JSONL file. Triggered manually (`/compact`) or automatically (proactive near the model's context window, or reactive retry-once on a provider context-overflow failure).
 
 **Provider**:
-A configured OpenAI-compatible endpoint (id, base URL, optional credential). Distinct from Model.
+A configured model endpoint (id, kind, base URL, optional credential). Kinds: `openai-compatible` and `anthropic-messages`. Distinct from Model.
 _Avoid_: Backend, vendor, service.
 
 **Model**:

@@ -70,7 +70,7 @@ public sealed class ProviderOptions
     public string Id { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the provider kind. v0.1 supports "openai-compatible".
+    /// Gets or sets the provider kind: "openai-compatible" or "anthropic-messages".
     /// </summary>
     public string Kind { get; set; } = string.Empty;
 

@@ -15,7 +15,7 @@ WinHarness is a Windows-native, terminal-first AI coding harness designed around
 - OpenRouter-compatible endpoints
 - other compatible `/v1` chat-completions style APIs
 
-Anthropic-native support is deferred until its official .NET SDK path can satisfy the Native AOT gate or an ADR approves another AOT-safe approach.
+Anthropic Messages and OpenAI Codex Responses are supported via hand-rolled AOT-safe clients (ADR-0005); use `winharness login --provider anthropic` or `openai` for subscription auth.
 
 ## Native AOT gate
 
@@ -83,6 +83,7 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness mcp remove --id filesystem`
 - `winharness mcp tools`
 - `winharness login --provider copilot [--enterprise-domain ghe.example.com]` — GitHub Copilot subscription auth via device code flow (see [Subscription auth](#subscription-auth-oauth))
+- `winharness login --provider anthropic` — Claude Pro/Max OAuth (PKCE + loopback; paste fallback)
 - `winharness login status` / `winharness logout --provider copilot`
 - `winharness credentials set|get|list|delete`
 
@@ -236,7 +237,11 @@ WinHarness credential target names must use the `WinHarness:` prefix, for exampl
 
 ### Subscription auth (OAuth)
 
-`winharness login --provider copilot` signs in with a GitHub Copilot subscription using the OAuth device code flow: visit the printed URL, enter the code, and WinHarness stores the token set in Windows Credential Manager under `WinHarness:oauth:copilot`. The command creates (or updates) a `copilot` provider pointing at your account's Copilot API endpoint; short-lived bearers refresh automatically during chat. Anthropic (Claude Pro/Max) and OpenAI (ChatGPT/Codex) flows are planned — see `docs/adr/ADR-0005-oauth-subscription-providers.md`.
+`winharness login --provider copilot` signs in with a GitHub Copilot subscription using the OAuth device code flow: visit the printed URL, enter the code, and WinHarness stores the token set in Windows Credential Manager under `WinHarness:oauth:copilot`. The command creates (or updates) a `copilot` provider pointing at your account's Copilot API endpoint; short-lived bearers refresh automatically during chat.
+
+`winharness login --provider anthropic` signs in with Claude Pro/Max via PKCE on a fixed-port loopback (`http://localhost:53692/`). Press Enter while waiting to paste the redirect URL instead (SSH/remote). Tokens are stored under `WinHarness:oauth:anthropic`; the command seeds an `anthropic` provider with `kind: anthropic-messages`.
+
+OpenAI ChatGPT/Codex OAuth lands with PR-B4 (`login --provider openai`) — see `docs/adr/ADR-0005-oauth-subscription-providers.md`.
 
 > **Note:** subscription auth rides the unofficial endpoints the vendors ship for their own CLIs. They can change or be revoked at any time (ADR-0005 records this risk acceptance).
 

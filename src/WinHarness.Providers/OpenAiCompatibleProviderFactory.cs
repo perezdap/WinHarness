@@ -48,7 +48,13 @@ public sealed class OpenAiCompatibleProviderFactory : IProviderFactory
             string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{providerId}'.");
 
-        return new OpenAiCompatibleChatProvider(provider, model, CreateTokenSource(provider));
+        IAuthTokenSource tokenSource = CreateTokenSource(provider);
+        if (string.Equals(provider.Kind, "anthropic-messages", StringComparison.OrdinalIgnoreCase))
+        {
+            return new AnthropicMessagesChatProvider(provider, model, tokenSource);
+        }
+
+        return new OpenAiCompatibleChatProvider(provider, model, tokenSource);
     }
 
     /// <inheritdoc />
@@ -128,5 +134,48 @@ internal sealed class OpenAiCompatibleChatProvider : IChatProvider
             .AsTask()
             .GetAwaiter()
             .GetResult();
+    }
+}
+
+internal sealed class AnthropicMessagesChatProvider : IChatProvider
+{
+    private readonly ProviderOptions _provider;
+    private readonly ModelOptions _model;
+    private readonly IAuthTokenSource _tokenSource;
+
+    public AnthropicMessagesChatProvider(
+        ProviderOptions provider,
+        ModelOptions model,
+        IAuthTokenSource tokenSource)
+    {
+        _provider = provider;
+        _model = model;
+        _tokenSource = tokenSource;
+    }
+
+    public string ProviderId => _provider.Id;
+
+    public string ModelId => _model.Id;
+
+    public ProviderCapabilities Capabilities => _model.Capabilities;
+
+    public IChatClient CreateChatClient()
+    {
+        string baseUrl = _provider.BaseUrl ?? AnthropicOAuthFlow.DefaultBaseUrl;
+        if (!Uri.TryCreate(baseUrl.TrimEnd('/') + "/v1/messages", UriKind.Absolute, out Uri? endpoint))
+        {
+            throw new InvalidOperationException($"Provider '{_provider.Id}' baseUrl is not a valid absolute URI.");
+        }
+
+        bool useOAuth = _provider.Auth is { Scheme: var scheme } &&
+            string.Equals(scheme, "oauth", StringComparison.OrdinalIgnoreCase);
+
+        return new AnthropicMessagesChatClient(
+            new HttpClient(),
+            endpoint,
+            _model.ProviderModelId,
+            _tokenSource,
+            useOAuth,
+            ownsHttp: true);
     }
 }
