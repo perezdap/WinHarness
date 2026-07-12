@@ -66,7 +66,10 @@ public sealed class OpenAiCodexOAuthFlow : IOAuthTokenRefresher
     }
 
     /// <inheritdoc />
-    public string OAuthProviderId => "openai";
+    public string OAuthProviderId => ProviderId;
+
+    /// <summary>Canonical oauthProvider / credential provider id for Codex.</summary>
+    public const string ProviderId = "openai-codex";
 
     /// <summary>
     /// Builds the browser authorize URL and PKCE pair. The caller opens the URL
@@ -245,7 +248,7 @@ public sealed class OpenAiCodexOAuthFlow : IOAuthTokenRefresher
             OpenAiCodexJsonContext.Default.OpenAiCodexTokenResponse,
             cancellationToken).ConfigureAwait(false);
 
-        OAuthTokenSet refreshed = ToTokenSet(token);
+        OAuthTokenSet refreshed = ToTokenSet(token, requireRefreshToken: false, fallbackAccountId: current.AccountId);
         if (string.IsNullOrEmpty(refreshed.RefreshToken))
         {
             refreshed = refreshed with { RefreshToken = current.RefreshToken };
@@ -360,7 +363,10 @@ public sealed class OpenAiCodexOAuthFlow : IOAuthTokenRefresher
         response.OutputStream.Close();
     }
 
-    private static OAuthTokenSet ToTokenSet(OpenAiCodexTokenResponse token)
+    private static OAuthTokenSet ToTokenSet(
+        OpenAiCodexTokenResponse token,
+        bool requireRefreshToken = true,
+        string? fallbackAccountId = null)
     {
         if (!string.IsNullOrEmpty(token.Error))
         {
@@ -368,12 +374,17 @@ public sealed class OpenAiCodexOAuthFlow : IOAuthTokenRefresher
                 $"OpenAI token request failed: {token.Error}{(string.IsNullOrEmpty(token.ErrorDescription) ? "" : $": {token.ErrorDescription}")}");
         }
 
-        if (string.IsNullOrEmpty(token.AccessToken) || token.ExpiresIn is null || string.IsNullOrEmpty(token.RefreshToken))
+        if (string.IsNullOrEmpty(token.AccessToken) || token.ExpiresIn is null)
         {
             throw new InvalidOperationException("Invalid OpenAI Codex token response.");
         }
 
-        string? accountId = ExtractAccountId(token.AccessToken);
+        if (requireRefreshToken && string.IsNullOrEmpty(token.RefreshToken))
+        {
+            throw new InvalidOperationException("Invalid OpenAI Codex token response (missing refresh_token).");
+        }
+
+        string? accountId = ExtractAccountId(token.AccessToken) ?? fallbackAccountId;
         if (string.IsNullOrEmpty(accountId))
         {
             throw new InvalidOperationException(

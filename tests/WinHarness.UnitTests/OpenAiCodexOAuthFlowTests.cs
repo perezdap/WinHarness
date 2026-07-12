@@ -104,6 +104,25 @@ public sealed class OpenAiCodexOAuthFlowTests
     }
 
     [TestMethod]
+    public async Task RefreshPreservesRefreshTokenAndAccountIdWhenOmitted()
+    {
+        // Access JWT without chatgpt_account_id; refresh response omits refresh_token.
+        string header = Base64Url(Encoding.UTF8.GetBytes("""{"alg":"none","typ":"JWT"}"""));
+        string bodyPayload = Base64Url(Encoding.UTF8.GetBytes("""{"sub":"user"}"""));
+        string access = $"{header}.{bodyPayload}.sig";
+        string body = "{\"access_token\":\"" + access + "\",\"expires_in\":1800}";
+        FakeHandler handler = new(body);
+        OpenAiCodexOAuthFlow flow = new(new HttpClient(handler));
+        OAuthTokenSet current = new("old", "refresh-keep", DateTimeOffset.UtcNow, AccountId: "acct-keep");
+
+        OAuthTokenSet tokens = await flow.RefreshAsync(current, CancellationToken.None);
+
+        Assert.AreEqual(access, tokens.AccessToken);
+        Assert.AreEqual("refresh-keep", tokens.RefreshToken);
+        Assert.AreEqual("acct-keep", tokens.AccountId);
+    }
+
+    [TestMethod]
     public async Task RefreshWithoutStoredTokenIsActionable()
     {
         OpenAiCodexOAuthFlow flow = new(new HttpClient(new FakeHandler()));
