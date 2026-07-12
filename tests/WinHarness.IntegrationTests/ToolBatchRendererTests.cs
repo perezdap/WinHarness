@@ -1,5 +1,6 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Spectre.Console;
+using System.Text.RegularExpressions;
 using WinHarness.Cli.Rendering;
 using WinHarness.Runtime;
 
@@ -8,6 +9,10 @@ namespace WinHarness.IntegrationTests;
 [TestClass]
 public sealed class ToolBatchRendererTests
 {
+    private static readonly Regex AnsiEscapeSequence = new(
+        @"\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))",
+        RegexOptions.Compiled);
+
     [TestMethod]
     public void StartedToolUpdatesTheCompactSpinnerLabel()
     {
@@ -54,7 +59,7 @@ public sealed class ToolBatchRendererTests
 
         renderer.Settle();
 
-        StringAssert.Contains(output.ToString(), "2 tool runs · 1 ok · 1 failed");
+        StringAssert.Contains(PlainText(output), "2 tool runs · 1 ok · 1 failed");
     }
 
     [TestMethod]
@@ -66,8 +71,9 @@ public sealed class ToolBatchRendererTests
 
         renderer.Settle();
 
-        StringAssert.Contains(output.ToString(), "tool run · 0 ok · 1 failed");
-        Assert.IsFalse(output.ToString().Contains("0 ok · 0 failed", StringComparison.Ordinal));
+        string rendered = PlainText(output);
+        StringAssert.Contains(rendered, "tool run · 0 ok · 1 failed");
+        Assert.IsFalse(rendered.Contains("0 ok · 0 failed", StringComparison.Ordinal));
     }
 
     private static IAnsiConsole CreateConsole(TextWriter output)
@@ -78,5 +84,10 @@ public sealed class ToolBatchRendererTests
             ColorSystem = ColorSystemSupport.NoColors,
             Out = new AnsiConsoleOutput(output)
         });
+    }
+
+    private static string PlainText(StringWriter output)
+    {
+        return AnsiEscapeSequence.Replace(output.ToString(), string.Empty);
     }
 }
