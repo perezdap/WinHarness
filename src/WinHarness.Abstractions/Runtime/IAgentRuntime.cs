@@ -53,7 +53,8 @@ public sealed record ToolActivityInfo(
     ToolActivityPhase Phase,
     bool? Succeeded = null,
     TimeSpan? Duration = null,
-    string? ExceptionTypeName = null);
+    string? ExceptionTypeName = null,
+    string? DisplayLabel = null);
 
 /// <summary>
 /// The phase of a tool activity event.

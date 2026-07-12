@@ -334,6 +334,43 @@ public sealed class SingleAgentRuntimeTests
     }
 
     [TestMethod]
+    public async Task ReportsToolStartedWhileToolIsStillRunning()
+    {
+        BlockingTool tool = new();
+        SingleAgentRuntime runtime = new(
+            new FakeProviderFactory([]),
+            [new FakeToolProvider(tool)],
+            new RecordingDiagnosticSink(),
+            NullLogger<SingleAgentRuntime>.Instance);
+
+        await using IAsyncEnumerator<AgentEvent> events = runtime.RunAsync(
+                CreateRequest("prompt"),
+                CancellationToken.None)
+            .GetAsyncEnumerator();
+
+        try
+        {
+            bool hasEvent = await events.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.IsTrue(hasEvent);
+            Assert.AreEqual(AgentEventKind.ToolActivity, events.Current.Kind);
+            Assert.AreEqual(ToolActivityPhase.Started, events.Current.ToolActivity!.Phase);
+            Assert.IsTrue(tool.Started.Task.IsCompleted);
+            Assert.IsFalse(tool.Completed.Task.IsCompleted);
+        }
+        finally
+        {
+            tool.Release();
+        }
+
+        while (await events.MoveNextAsync())
+        {
+        }
+
+        Assert.IsTrue(tool.Completed.Task.IsCompleted);
+    }
+
+    [TestMethod]
     public async Task RecordsUsageDiagnosticsWhenProviderReportsTokens()
     {
         RecordingDiagnosticSink diagnostics = new();
@@ -719,11 +756,16 @@ public sealed class SingleAgentRuntimeTests
 
     private sealed class FakeToolProvider : IToolProvider
     {
-        private static readonly IReadOnlyList<ITool> Tools = [new FakeTool()];
+        private readonly IReadOnlyList<ITool> _tools;
+
+        public FakeToolProvider(ITool? tool = null)
+        {
+            _tools = [tool ?? new FakeTool()];
+        }
 
         public ValueTask<IReadOnlyList<ITool>> ListToolsAsync(CancellationToken cancellationToken)
         {
-            return ValueTask.FromResult(Tools);
+            return ValueTask.FromResult(_tools);
         }
     }
 
@@ -744,6 +786,35 @@ public sealed class SingleAgentRuntimeTests
                 true,
                 "pong",
                 Metadata: new Dictionary<string, string> { ["custom.metadata"] = "value" }));
+        }
+    }
+
+    private sealed class BlockingTool : ITool
+    {
+        private static readonly JsonElement Schema = JsonDocument.Parse("""{"type":"object"}""").RootElement.Clone();
+        private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string Name => "blocking_tool";
+
+        public string Description => "Blocks until released by the test.";
+
+        public JsonElement InputSchema => Schema;
+
+        public async ValueTask<ToolResult> ExecuteAsync(ToolInvocation invocation, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult(true);
+            await _release.Task.WaitAsync(cancellationToken);
+            Completed.TrySetResult(true);
+            return new ToolResult(true, "released");
+        }
+
+        public void Release()
+        {
+            _release.TrySetResult(true);
         }
     }
 

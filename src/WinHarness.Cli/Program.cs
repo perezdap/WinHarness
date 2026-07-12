@@ -257,6 +257,7 @@ app.Add("chat", async (
     bool noApprove = false,
     string? template = null,
     string? templateArgs = null,
+    bool verbose = false,
     CancellationToken cancellationToken = default) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
@@ -323,7 +324,8 @@ app.Add("chat", async (
                 bootstrapRequest,
                 reasoningEffort,
                 toolFilter,
-                cancellationToken)
+                cancellationToken,
+                verbose)
             .ConfigureAwait(false);
         return;
     }
@@ -351,7 +353,8 @@ app.Add("chat", async (
         bootstrapRequest,
         reasoningEffort,
         toolFilter,
-        cancellationToken).ConfigureAwait(false);
+        cancellationToken,
+        verbose).ConfigureAwait(false);
 });
 
 app.Add("tools list", async (CancellationToken cancellationToken) =>
@@ -1294,7 +1297,8 @@ internal static class ChatRepl
         ChatSessionBootstrapRequest bootstrapRequest,
         string? reasoningEffort,
         ToolFilter? toolFilter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool verbose = false)
     {
         WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
         ChatSession session = await CreateSessionAsync(
@@ -1428,7 +1432,8 @@ internal static class ChatRepl
                 session,
                 input,
                 followUps,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                verbose).ConfigureAwait(false);
 
             if (!session.IsEphemeral)
             {
@@ -1455,10 +1460,11 @@ internal static class ChatRepl
         ChatSession session,
         string prompt,
         Queue<string> followUps,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool verbose)
     {
         using CancellationTokenSource turnCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task turn = RunTurnAsync(services, session, prompt, turnCts.Token).AsTask();
+        Task turn = RunTurnAsync(services, session, prompt, turnCts.Token, verbose).AsTask();
 
         if (Console.IsInputRedirected)
         {
@@ -1809,7 +1815,8 @@ internal static class ChatRepl
         ChatSessionBootstrapRequest bootstrapRequest,
         string? reasoningEffort,
         ToolFilter? toolFilter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool verbose = false)
     {
         ChatSession session = await CreateSessionAsync(
             services,
@@ -1824,14 +1831,16 @@ internal static class ChatRepl
             services,
             session,
             prompt,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            verbose).ConfigureAwait(false);
     }
 
     private static async ValueTask RunTurnAsync(
         IServiceProvider services,
         ChatSession session,
         string prompt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool verbose)
     {
         WinHarnessOptions options = services.GetRequiredService<WinHarnessOptions>();
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
@@ -1848,7 +1857,7 @@ internal static class ChatRepl
             AnsiConsole.MarkupLine("[dim]" + Markup.Escape(notice) + "[/]");
         }
 
-        string? failureMessage = await ExecuteTurnCoreAsync(services, session, prompt, cancellationToken)
+        string? failureMessage = await ExecuteTurnCoreAsync(services, session, prompt, cancellationToken, verbose)
             .ConfigureAwait(false);
 
         // Reactive: when the provider rejected the request for context overflow,
@@ -1863,7 +1872,7 @@ internal static class ChatRepl
             if (notice is not null)
             {
                 AnsiConsole.MarkupLine("[dim]" + Markup.Escape(notice) + "[/]");
-                await ExecuteTurnCoreAsync(services, session, prompt, cancellationToken).ConfigureAwait(false);
+                await ExecuteTurnCoreAsync(services, session, prompt, cancellationToken, verbose).ConfigureAwait(false);
             }
         }
     }
@@ -1876,7 +1885,8 @@ internal static class ChatRepl
         IServiceProvider services,
         ChatSession session,
         string prompt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool verbose = false)
     {
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
         Conversation runConversation = session.CreateRunConversation(prompt);
@@ -1896,6 +1906,7 @@ internal static class ChatRepl
         StringBuilder segmentBuffer = new();
         AssistantStreamWriter writer = new();
         await using ThinkingIndicator thinking = new();
+        ToolBatchRenderer toolBatch = new(verbose);
 
         bool segmentActive = false;
         bool rawLabelWritten = false;
@@ -1939,54 +1950,6 @@ internal static class ChatRepl
             writer = new AssistantStreamWriter();
         }
 
-        // Renders a persistent, non-overwriting line for a tool activity event
-        // so the user sees a running log of every tool call in the scrollback.
-        void RenderToolActivityLine(ToolActivityInfo info)
-        {
-            string name = Markup.Escape(info.ToolName);
-
-            switch (info.Phase)
-            {
-                case ToolActivityPhase.Started:
-                    AnsiConsole.MarkupLine($"[dim]⠋[/] [bold]{name}[/]");
-                    break;
-
-                case ToolActivityPhase.Completed:
-                {
-                    string icon = info.Succeeded == false ? "[red]✗[/]" : "[green]✓[/]";
-                    string duration = FormatDuration(info.Duration);
-                    AnsiConsole.MarkupLine($"{icon} [bold]{name}[/] [dim]({duration})[/]");
-                    break;
-                }
-
-                case ToolActivityPhase.Failed:
-                {
-                    string duration = FormatDuration(info.Duration);
-                    string exc = info.ExceptionTypeName is null
-                        ? ""
-                        : $" [red]{Markup.Escape(info.ExceptionTypeName)}[/]";
-                    AnsiConsole.MarkupLine($"[red]✗[/] [bold]{name}[/] [dim]({duration})[/]{exc}");
-                    break;
-                }
-            }
-        }
-
-        static string FormatDuration(TimeSpan? duration)
-        {
-            if (duration is null)
-            {
-                return "";
-            }
-
-            double ms = duration.Value.TotalMilliseconds;
-            if (ms >= 1000)
-            {
-                return duration.Value.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture) + " s";
-            }
-
-            return ms.ToString("F0", CultureInfo.InvariantCulture) + " ms";
-        }
-
         if (interactive)
         {
             thinking.Start();
@@ -2011,25 +1974,28 @@ internal static class ChatRepl
                     case AgentEventKind.ToolActivity:
                         if (interactive)
                         {
-                            // Close any in-progress assistant text segment, then
-                            // render a persistent per-tool line that stays in the
-                            // scrollback (like Claude Code / Codex do).
                             await FinalizeSegmentAsync().ConfigureAwait(false);
-                            await thinking.StopAsync().ConfigureAwait(false);
 
                             if (agentEvent.ToolActivity is { } info)
                             {
-                                RenderToolActivityLine(info);
+                                if (verbose)
+                                {
+                                    await thinking.StopAsync().ConfigureAwait(false);
+                                }
+
+                                toolBatch.OnEvent(info);
+                                if (!verbose)
+                                {
+                                    thinking.SetLabel(toolBatch.LiveLabel);
+                                }
                             }
                             else
                             {
-                                // Fallback for events without structured payload.
+                                await thinking.StopAsync().ConfigureAwait(false);
                                 AnsiConsole.MarkupLine("[dim]" + Markup.Escape(agentEvent.Message) + "[/]");
+                                thinking.SetLabel("thinking");
                             }
 
-                            // Resume the spinner on a fresh line for the next
-                            // operation (next tool, or assistant text).
-                            thinking.SetLabel("thinking");
                             thinking.Start();
                         }
 
@@ -2042,6 +2008,7 @@ internal static class ChatRepl
                         {
                             await FinalizeSegmentAsync().ConfigureAwait(false);
                             await thinking.StopAsync().ConfigureAwait(false);
+                            toolBatch.Settle();
                         }
 
                         AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
@@ -2057,6 +2024,14 @@ internal static class ChatRepl
                         break;
 
                     case AgentEventKind.AssistantDelta:
+                        if (interactive && toolBatch.HasPendingBatch)
+                        {
+                            await thinking.StopAsync().ConfigureAwait(false);
+                            toolBatch.Settle();
+                            thinking.SetLabel("thinking");
+                            thinking.Start();
+                        }
+
                         assistantBuffer.Append(agentEvent.Message);
                         if (!string.IsNullOrEmpty(agentEvent.Message))
                         {
@@ -2107,6 +2082,7 @@ internal static class ChatRepl
         if (interactive)
         {
             await FinalizeSegmentAsync().ConfigureAwait(false);
+            toolBatch.Settle();
 
             // The provider can close the stream with no text and no failure (e.g. an
             // empty completion or a response that was entirely reasoning tokens). Without
