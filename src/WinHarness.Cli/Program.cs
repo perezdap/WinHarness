@@ -1886,7 +1886,7 @@ internal static class ChatRepl
         ChatSession session,
         string prompt,
         CancellationToken cancellationToken,
-        bool verbose = false)
+        bool verbose)
     {
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
         Conversation runConversation = session.CreateRunConversation(prompt);
@@ -2008,7 +2008,7 @@ internal static class ChatRepl
                         {
                             await FinalizeSegmentAsync().ConfigureAwait(false);
                             await thinking.StopAsync().ConfigureAwait(false);
-                            toolBatch.Settle();
+                            toolBatch.Settle(terminal: true);
                         }
 
                         AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
@@ -2082,7 +2082,7 @@ internal static class ChatRepl
         if (interactive)
         {
             await FinalizeSegmentAsync().ConfigureAwait(false);
-            toolBatch.Settle();
+            toolBatch.Settle(terminal: true);
 
             // The provider can close the stream with no text and no failure (e.g. an
             // empty completion or a response that was entirely reasoning tokens). Without
