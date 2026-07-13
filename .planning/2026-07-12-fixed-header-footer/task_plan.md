@@ -60,10 +60,18 @@ scroll region.
       `ReadConsoleOutputW` to read the real conhost screen buffer after
       scrolling 60 lines through a 20-row region. `ok=true`; header & footer
       intact, region confined. See `findings.md`. **Verdict: GO.**
-- [ ] Phase 1 — Introduce a `ScreenRegionController` (enter/exit, set region,
+- [x] Phase 1 — Introduce a `ScreenRegionController` (enter/exit, set region,
       repaint header, repaint footer, handle resize). Interactive-only; no-op
       when output redirected. Guaranteed teardown (restore region + cursor) via
       try/finally around the whole REPL and on Ctrl+C/crash.
+      **DONE 2026-07-13:** added `src/WinHarness.Cli/Rendering/ScreenRegionController.cs`
+      + `ScreenRegionLayout` (pure layout decision, unit-tested). Lifecycle
+      wired into `RunAsync` via `try/finally` with `Dispose()` teardown.
+      **Opt-in** via `WINHARNESS_FIXED_HEADER` so the default chat path is
+      unchanged until content (Phase 2) + streaming (Phase 3) land; when active
+      the controller owns the top row and the scrolling `WriteBanner` is
+      suppressed. Resize (`OnResize`) is a Phase 4 stub. Tests: 6 new
+      `ScreenRegionControllerTests` pass; full suite 310/0/0.
 - [ ] Phase 2 — Header: move startup banner content into the fixed top row(s);
       keep it concise (one line). Footer: render the live status line
       (StatusLineFormatter) + usage footer in the fixed bottom row(s).

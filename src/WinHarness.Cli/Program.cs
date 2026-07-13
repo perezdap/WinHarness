@@ -1541,25 +1541,47 @@ internal static class ChatRepl
 
         session.ReasoningEffort = reasoningEffort;
         session.ToolFilter = toolFilter;
-        WriteBanner(session);
 
-        // Prevent Ctrl+C from terminating the process for the whole REPL. The
-        // handler swallows the break (e.Cancel = true); actual cancellation is
-        // driven by our own key loops (Console.TreatControlCAsInput = true) which
-        // see Ctrl+C as a regular key and abort the current turn or clear the
-        // input line. In contexts where TreatControlCAsInput is false (Spectre
-        // pickers, redirected stdin) this at least keeps the process alive.
-        ConsoleCancelEventHandler handler = static (_, e) => e.Cancel = true;
-        Console.CancelKeyPress += handler;
-
+        // Phase 1 fixed header/footer (DECSTBM scroll region). Opt-in via
+        // WINHARNESS_FIXED_HEADER so the default chat experience is unchanged
+        // until content wiring (Phase 2) and streaming routing (Phase 3) land.
+        // When active, the controller owns the top row, so the scrolling banner
+        // is suppressed; otherwise today's banner behavior is preserved.
+        ScreenRegionController screen = ScreenRegionController.Create();
         try
         {
-            await RunReplAsync(services, options, session, cancellationToken, verbose).ConfigureAwait(false);
+            screen.Enter();
+            if (screen.IsActive)
+            {
+                screen.SetHeader("WinHarness chat");
+            }
+            else
+            {
+                WriteBanner(session);
+            }
+
+            // Prevent Ctrl+C from terminating the process for the whole REPL. The
+            // handler swallows the break (e.Cancel = true); actual cancellation is
+            // driven by our own key loops (Console.TreatControlCAsInput = true) which
+            // see Ctrl+C as a regular key and abort the current turn or clear the
+            // input line. In contexts where TreatControlCAsInput is false (Spectre
+            // pickers, redirected stdin) this at least keeps the process alive.
+            ConsoleCancelEventHandler handler = static (_, e) => e.Cancel = true;
+            Console.CancelKeyPress += handler;
+
+            try
+            {
+                await RunReplAsync(services, options, session, cancellationToken, verbose).ConfigureAwait(false);
+            }
+            finally
+            {
+                Console.CancelKeyPress -= handler;
+                Console.TreatControlCAsInput = false;
+            }
         }
         finally
         {
-            Console.CancelKeyPress -= handler;
-            Console.TreatControlCAsInput = false;
+            screen.Dispose();
         }
     }
 
