@@ -24,6 +24,7 @@ internal static class SlashCommandProcessor
         return command switch
         {
             "/exit" or "/quit" => SlashCommandResult.Exit(),
+            "/" => await PickSlashCommandAsync(options, session, context).ConfigureAwait(false),
             "/help" => SlashCommandResult.Handled(CreateHelpLines()),
             "/session" => SlashCommandResult.Handled(CreateSessionLines(session)),
             "/name" => await SetSessionNameAsync(session, argument, context).ConfigureAwait(false),
@@ -200,39 +201,62 @@ internal static class SlashCommandProcessor
     private static SlashCommandResult MissingContext(string command) =>
         SlashCommandResult.Handled([$"'{command}' is only available in an active chat session."]);
 
-    private static IReadOnlyList<string> CreateHelpLines()
+    private static async ValueTask<SlashCommandResult> PickSlashCommandAsync(
+        WinHarnessOptions options,
+        ChatSession session,
+        SlashCommandContext? context)
     {
-        return
-        [
-            "/help                 Show this help",
-            "/session              Show session file, id, name, and status",
-            "/name <name>          Set session display name (persisted sessions)",
-            "/new                  Start a new persisted session file",
-            "/resume               Pick a saved session to open",
-            "/delete [id-or-path]  Delete a session file (trashed by default)",
-            "/providers            List configured providers",
-            "/models [provider]    List all models across providers; use /models picker to switch provider+model at once",
-            "/provider <id>        Switch active provider",
-            "/model <id>           Switch model within current provider; no arg = picker (current provider only)",
-            "/skills               List discovered skills",
-            "/skill <name|off>     Select a skill for the session (or clear it)",
-            "/markdown             Toggle markdown rendering",
-            "/tree                 Navigate session branch",
-            "/fork                 Copy active branch to a new session file",
-            "/effort [level]        Show or set reasoning effort (none/low/medium/high/extra-high)",
-            "/compact [text]       Summarize older context and keep recent messages",
-            "/usage                Show model, context %, and token usage totals",
-            "/trust [always|never]  Save a project trust decision for this folder",
-            "/templates            List prompt templates",
-            "/t <name> [args]      Expand a prompt template and run it",
-            "/clone                Copy the active branch into a new session file",
-            "/export [file]        Export the active branch to HTML or JSONL",
-            "/import <file.jsonl>  Import a JSONL session file and switch to it",
-            "/clear                Clear the in-memory conversation view",
-            "Esc or Ctrl+C         Abort a running turn (same as /abort); Ctrl+C on an empty prompt exits",
-            "/exit, /quit          Leave the session"
-        ];
+        if (!IsInteractive)
+        {
+            return SlashCommandResult.Handled(CreateHelpLines());
+        }
+
+        SelectionPrompt<SlashCommandInfo> prompt = new()
+        {
+            Title = "Select a slash command (Esc to cancel)"
+        };
+        prompt.PageSize(12)
+              .MoreChoicesText("[grey](move up and down to reveal more commands)[/]")
+              .UseConverter(FormatSlashCommandChoice)
+              .AddChoices(SlashCommandCatalog.Commands);
+
+        SlashCommandInfo? selected = await InteractivePicker.ShowAsync(
+            prompt,
+            "Slash command selection cancelled.").ConfigureAwait(false);
+        if (selected is null)
+        {
+            return SlashCommandResult.Handled(["Slash command selection cancelled."]);
+        }
+
+        return await ExecutePaletteSelectionAsync(options, session, selected, context).ConfigureAwait(false);
     }
+
+    private static async ValueTask<SlashCommandResult> ExecutePaletteSelectionAsync(
+        WinHarnessOptions options,
+        ChatSession session,
+        SlashCommandInfo selected,
+        SlashCommandContext? context)
+    {
+        return selected.Name switch
+        {
+            "/name" => await PromptSessionNameAsync(session, context).ConfigureAwait(false),
+            "/effort" => await PickEffortAsync(session).ConfigureAwait(false),
+            _ => await ExecuteAsync(options, session, selected.Name, context).ConfigureAwait(false)
+        };
+    }
+
+    private static string FormatSlashCommandChoice(SlashCommandInfo command)
+    {
+        string invocation = command.ArgsHint.Length == 0
+            ? command.Name
+            : $"{command.Name} {command.ArgsHint}";
+        // The selection prompt parses converter output as Spectre markup, so
+        // escape it: arg hints like "[id-or-path]" would otherwise be treated as
+        // (invalid) style tags and throw at render time.
+        return Markup.Escape($"{invocation.PadRight(24)} {command.Description}");
+    }
+
+    private static IReadOnlyList<string> CreateHelpLines() => SlashCommandCatalog.ToHelpLines();
 
     private static IReadOnlyList<string> CreateSessionLines(ChatSession session)
     {
@@ -247,6 +271,32 @@ internal static class SlashCommandProcessor
             $"messages: {session.CountActiveBranchMessages()}",
             $"provider/model: {session.ProviderId}/{session.ModelId}"
         ];
+    }
+
+    private static async ValueTask<SlashCommandResult> PromptSessionNameAsync(
+        ChatSession session,
+        SlashCommandContext? context)
+    {
+        if (session.IsEphemeral)
+        {
+            return SlashCommandResult.Handled(
+                ["Session names require a persisted session. Use /new or start without --no-session."]);
+        }
+
+        string? name = await InteractivePicker.PromptTextAsync(
+            "Session name",
+            "Session name cancelled.").ConfigureAwait(false);
+        if (name is null)
+        {
+            return SlashCommandResult.Handled(["Session name cancelled."]);
+        }
+
+        if (name.Length == 0)
+        {
+            return SlashCommandResult.Handled(["Session name unchanged."]);
+        }
+
+        return await SetSessionNameAsync(session, name, context).ConfigureAwait(false);
     }
 
     private static async ValueTask<SlashCommandResult> SetSessionNameAsync(
@@ -881,6 +931,27 @@ internal static class SlashCommandProcessor
             session.ProviderId,
             session.ModelId,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async ValueTask<SlashCommandResult> PickEffortAsync(ChatSession session)
+    {
+        SelectionPrompt<string> prompt = new()
+        {
+            Title = "Select reasoning effort (Esc to cancel)"
+        };
+        prompt.PageSize(6)
+              .AddChoices("default", "none", "low", "medium", "high", "extra-high");
+        prompt.DefaultValue(session.ReasoningEffort ?? "default");
+
+        string? selected = await InteractivePicker.ShowAsync(
+            prompt,
+            "Effort selection cancelled.").ConfigureAwait(false);
+        if (selected is null)
+        {
+            return SlashCommandResult.Handled(["Effort selection cancelled."]);
+        }
+
+        return SetEffort(session, selected);
     }
 
     private static SlashCommandResult SetEffort(ChatSession session, string argument)

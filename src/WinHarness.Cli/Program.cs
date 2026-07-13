@@ -2304,7 +2304,7 @@ internal static class ChatRepl
             AnsiConsole.MarkupLine("[dim]" + Markup.Escape(contextLine) + "[/]");
         }
 
-        AnsiConsole.MarkupLine("[dim]/help for commands · /exit or Ctrl+C to quit · Esc/Ctrl+C aborts a running turn[/]");
+        AnsiConsole.MarkupLine("[dim]/ to pick a command · /help for the list · /exit or Ctrl+C to quit · Esc/Ctrl+C aborts a running turn[/]");
         AnsiConsole.WriteLine();
     }
 

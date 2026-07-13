@@ -1,4 +1,7 @@
+using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Spectre.Console;
+using Spectre.Console.Testing;
 using WinHarness.Cli.Chat;
 using WinHarness.Configuration;
 using WinHarness.Conversation;
@@ -127,6 +130,89 @@ public sealed class SlashCommandProcessorTests
     }
 
     [TestMethod]
+    public void BareSlashFallsBackToHelpWhenNonInteractive()
+    {
+        // Under test the stdin is redirected, so the palette degrades to the help listing.
+        WinHarnessOptions options = CreateOptions();
+        ChatSession session = new("local", "coder", renderMarkdown: false);
+
+        SlashCommandResult result = SlashCommandProcessor.Execute(options, session, "/");
+
+        Assert.IsFalse(result.ShouldExit);
+        CollectionAssert.AreEqual(
+            SlashCommandCatalog.ToHelpLines().ToList(),
+            result.Messages.ToList());
+    }
+
+    [TestMethod]
+    public void CatalogCoversHelpAndIsNonEmpty()
+    {
+        Assert.IsTrue(SlashCommandCatalog.Commands.Count > 0);
+        foreach (SlashCommandInfo command in SlashCommandCatalog.Commands)
+        {
+            StringAssert.StartsWith(command.Name, "/");
+            Assert.IsFalse(string.IsNullOrWhiteSpace(command.Description));
+        }
+
+        // Every catalog entry should render into the help listing.
+        var helpText = string.Join("\n", SlashCommandCatalog.ToHelpLines());
+        foreach (SlashCommandInfo command in SlashCommandCatalog.Commands)
+        {
+            StringAssert.Contains(helpText, command.Name);
+        }
+    }
+
+    [TestMethod]
+    public async Task PaletteSelectedEffortPromptsForValue()
+    {
+        TestConsole console = NewInteractiveConsole();
+        console.Input.PushKey(ConsoleKey.DownArrow); // default -> none
+        console.Input.PushKey(ConsoleKey.DownArrow); // none -> low
+        console.Input.PushKey(ConsoleKey.Enter);
+        IAnsiConsole original = AnsiConsole.Console;
+        AnsiConsole.Console = console;
+        try
+        {
+            WinHarnessOptions options = CreateOptions();
+            ChatSession session = new("local", "coder", renderMarkdown: false);
+            MethodInfo executor = typeof(SlashCommandProcessor).GetMethod(
+                "ExecutePaletteSelectionAsync",
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+            ValueTask<SlashCommandResult> task = (ValueTask<SlashCommandResult>)executor.Invoke(
+                null,
+                [options, session, new SlashCommandInfo("/effort", "[level]", "test"), null])!;
+
+            SlashCommandResult result = await task.ConfigureAwait(false);
+
+            Assert.IsFalse(result.ShouldExit);
+            Assert.AreEqual("low", session.ReasoningEffort);
+            CollectionAssert.Contains(result.Messages.ToList(), "Reasoning effort set to 'low'.");
+        }
+        finally
+        {
+            AnsiConsole.Console = original;
+        }
+    }
+
+    [TestMethod]
+    public void PaletteChoiceFormatterEscapesSpectreMarkup()
+    {
+        MethodInfo formatter = typeof(SlashCommandProcessor).GetMethod(
+            "FormatSlashCommandChoice",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        TestConsole console = new();
+
+        foreach (SlashCommandInfo command in SlashCommandCatalog.Commands)
+        {
+            string formatted = (string)formatter.Invoke(null, [command])!;
+
+            // SelectionPrompt renders converter output as Spectre markup. Optional
+            // argument hints such as "[id-or-path]" must therefore be escaped.
+            console.Write(new Markup(formatted));
+        }
+    }
+
+    [TestMethod]
     public void ExitRequestsSessionEnd()
     {
         WinHarnessOptions options = CreateOptions();
@@ -136,6 +222,14 @@ public sealed class SlashCommandProcessorTests
 
         Assert.IsTrue(result.ShouldExit);
         Assert.AreEqual(0, result.Messages.Count);
+    }
+
+    private static TestConsole NewInteractiveConsole()
+    {
+        TestConsole console = new TestConsole().Width(80);
+        typeof(Capabilities).GetProperty(nameof(Capabilities.Interactive))!.SetValue(
+            console.Profile.Capabilities, true);
+        return console;
     }
 
     private static WinHarnessOptions CreateOptions()

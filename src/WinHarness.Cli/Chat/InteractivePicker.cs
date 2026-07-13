@@ -1,3 +1,4 @@
+using System.Text;
 using Spectre.Console;
 
 namespace WinHarness.Cli.Chat;
@@ -54,6 +55,72 @@ internal static class InteractivePicker
     }
 
     /// <summary>
+    /// Prompts for a single line of text with Esc/Ctrl+C-to-cancel. Returns the
+    /// trimmed input, or <c>null</c> when the user cancelled.
+    /// </summary>
+    public static ValueTask<string?> PromptTextAsync(string title, string cancelledMessage = "cancelled.")
+    {
+        AnsiConsole.Markup($"[bold]{Markup.Escape(title)}[/] [grey](Esc/Ctrl+C to cancel)[/]: ");
+        if (Console.IsInputRedirected)
+        {
+            return new(Console.ReadLine()?.Trim());
+        }
+
+        StringBuilder buffer = new();
+        bool previousTreatControlC = Console.TreatControlCAsInput;
+        Console.TreatControlCAsInput = true;
+        try
+        {
+            while (true)
+            {
+                ConsoleKeyInfo key;
+                try
+                {
+                    key = Console.ReadKey(intercept: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    return new((string?)null);
+                }
+
+                if (key.Key == ConsoleKey.Escape || IsCtrlC(key))
+                {
+                    Console.WriteLine();
+                    AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(cancelledMessage)}[/]");
+                    return new((string?)null);
+                }
+
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    return new(buffer.ToString().Trim());
+                }
+
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    if (buffer.Length > 0)
+                    {
+                        buffer.Length--;
+                        Console.Write("\b \b");
+                    }
+
+                    continue;
+                }
+
+                if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
+                {
+                    buffer.Append(key.KeyChar);
+                    Console.Write(key.KeyChar);
+                }
+            }
+        }
+        finally
+        {
+            Console.TreatControlCAsInput = previousTreatControlC;
+        }
+    }
+
+    /// <summary>
     /// Shows a yes/no confirmation with Esc/Ctrl+C-to-cancel. Returns
     /// <c>true</c> for yes, <c>false</c> for no, <c>null</c> when cancelled.
     /// </summary>
@@ -79,4 +146,7 @@ internal static class InteractivePicker
             _ => null
         };
     }
+
+    private static bool IsCtrlC(ConsoleKeyInfo key) =>
+        key.Key == ConsoleKey.C && (key.Modifiers & ConsoleModifiers.Control) != 0;
 }
