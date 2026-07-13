@@ -51,11 +51,15 @@ scroll region.
 
 ## Phases
 
-- [ ] Phase 0 — Spike: prove DECSTBM works under Windows Terminal + ConPTY
+- [x] Phase 0 — Spike: prove DECSTBM works under Windows Terminal + ConPTY
       (tiny throwaway: set region, scroll filler, keep header/footer fixed,
       resize, restore on exit). Decide go/no-go before touching the REPL.
       Initial spike added at `spikes/WinHarness.TerminalRegionSpike`; run it in
       Windows Terminal/ConPTY and record results before Phase 1.
+      **DONE 2026-07-13:** added `--verify <path>` mode using
+      `ReadConsoleOutputW` to read the real conhost screen buffer after
+      scrolling 60 lines through a 20-row region. `ok=true`; header & footer
+      intact, region confined. See `findings.md`. **Verdict: GO.**
 - [ ] Phase 1 — Introduce a `ScreenRegionController` (enter/exit, set region,
       repaint header, repaint footer, handle resize). Interactive-only; no-op
       when output redirected. Guaranteed teardown (restore region + cursor) via
