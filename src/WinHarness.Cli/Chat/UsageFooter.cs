@@ -19,9 +19,12 @@ internal static class UsageFooter
 
         (long input, long output) = SumSessionUsage(session);
 
+        string effort = StatusLineFormatter.ResolveEffort(session, options);
+
         List<string> parts =
         [
             $"{session.ModelId} @ {session.ProviderId}",
+            $"effort {effort}",
             $"ctx ~{percent.ToString("F0", CultureInfo.InvariantCulture)}% ({Compact(estimated)}/{Compact(contextWindow)})"
         ];
 

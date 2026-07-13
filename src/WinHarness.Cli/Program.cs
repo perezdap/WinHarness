@@ -1592,7 +1592,7 @@ internal static class ChatRepl
             }
             else
             {
-                input = ReadIdlePrompt();
+                input = ReadIdlePrompt(options, session);
             }
 
             if (input is null)
@@ -1960,8 +1960,9 @@ internal static class ChatRepl
     /// or when the user requests to exit (Ctrl+C on an empty line). Redirected
     /// stdin falls back to <see cref="Console.ReadLine"/>.
     /// </summary>
-    private static string? ReadIdlePrompt()
+    private static string? ReadIdlePrompt(WinHarnessOptions options, ChatSession session)
     {
+        AnsiConsole.MarkupLine(StatusLineFormatter.FormatMarkup(session, options));
         AnsiConsole.Markup("[bold green]›[/] ");
         if (Console.IsInputRedirected)
         {
@@ -2260,9 +2261,6 @@ internal static class ChatRepl
     private static void WriteBanner(ChatSession session)
     {
         AnsiConsole.Write(new Rule("[bold]WinHarness chat[/]").LeftJustified());
-        string effort = session.ReasoningEffort ?? "default";
-        AnsiConsole.MarkupLine(
-            $"[dim]provider[/] [bold]{Markup.Escape(session.ProviderId)}[/]  [dim]model[/] [bold]{Markup.Escape(session.ModelId)}[/]  [dim]effort[/] [bold]{Markup.Escape(effort)}[/]  [dim]markdown[/] {(session.RenderMarkdown ? "[green]on[/]" : "[grey]off[/]")}");
 
         if (session.IsEphemeral)
         {

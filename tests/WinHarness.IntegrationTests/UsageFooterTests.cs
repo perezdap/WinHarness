@@ -65,7 +65,7 @@ public sealed class UsageFooterTests
     }
 
     [TestMethod]
-    public async Task FormatIncludesModelContextAndTotals()
+    public async Task FormatIncludesModelContextEffortAndTotals()
     {
         WinHarnessOptions options = new() { DefaultProvider = "local", DefaultModel = "coder" };
         ProviderOptions provider = new() { Id = "local", Kind = "openai-compatible" };
@@ -73,15 +73,31 @@ public sealed class UsageFooterTests
         options.Providers.Add(provider);
 
         ChatSession session = await CreateSessionAsync();
+        session.ReasoningEffort = "high";
         await AppendAssistantWithUsageAsync(session, input: 500, output: 200);
         session.SyncConversationFromSession();
 
         string footer = UsageFooter.Format(session, options, UsageFooter.FindLastTurnUsage(session));
 
         StringAssert.Contains(footer, "coder @ local");
+        StringAssert.Contains(footer, "effort high");
         StringAssert.Contains(footer, "ctx ~");
         StringAssert.Contains(footer, "turn ↑500 ↓200");
         StringAssert.Contains(footer, "session ↑500 ↓200");
+    }
+
+    [TestMethod]
+    public async Task StatusLineResolvesModelDefaultEffortWhenSessionOverrideUnset()
+    {
+        WinHarnessOptions options = new() { DefaultProvider = "local", DefaultModel = "coder" };
+        ProviderOptions provider = new() { Id = "local", Kind = "openai-compatible" };
+        provider.Models.Add(new ModelOptions { Id = "coder", ProviderModelId = "m", ReasoningEffort = "medium" });
+        options.Providers.Add(provider);
+        ChatSession session = await CreateSessionAsync();
+
+        string effort = StatusLineFormatter.ResolveEffort(session, options);
+
+        Assert.AreEqual("medium", effort);
     }
 
     private async Task<ChatSession> CreateSessionAsync()
