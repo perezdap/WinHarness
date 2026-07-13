@@ -14,6 +14,7 @@
     <ProjectReference Include="..\..\src\WinHarness.Tools\WinHarness.Tools.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="MSTest" />
+    <PackageReference Include="Spectre.Console.Testing" />
   </ItemGroup>
 
   <ItemGroup>

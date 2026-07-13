@@ -118,7 +118,7 @@ internal static class ChatSessionBootstrap
         }
 
         Table table = new Table()
-            .Border(TableBorder.Rounded)
+            .Border(TableBorder.Square)
             .AddColumn("Session")
             .AddColumn("Name")
             .AddColumn("Messages")
@@ -135,13 +135,19 @@ internal static class ChatSessionBootstrap
 
         AnsiConsole.Write(table);
 
-        SessionSummary selected = AnsiConsole.Prompt(
+        SessionSummary? selected = await InteractivePicker.ShowAsync(
             new SelectionPrompt<SessionSummary>()
-                .Title("Select a session to resume")
+                .Title("Select a session to resume (Esc to cancel)")
                 .PageSize(10)
                 .AddChoices(summaries)
                 .UseConverter(static summary =>
-                    $"{summary.SessionId} · {summary.DisplayName ?? summary.FirstUserPreview ?? "(untitled)"}"));
+                    $"{summary.SessionId} · {summary.DisplayName ?? summary.FirstUserPreview ?? "(untitled)"}"),
+            "Session selection cancelled.").ConfigureAwait(false);
+
+        if (selected is null)
+        {
+            return null;
+        }
 
         return await factory.OpenAsync(selected.FilePath, cancellationToken).ConfigureAwait(false);
     }

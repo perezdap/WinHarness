@@ -271,7 +271,21 @@ app.Add("chat", async (
 
     if (string.IsNullOrWhiteSpace(resolvedProviderId) || string.IsNullOrWhiteSpace(resolvedModelId))
     {
-        throw new InvalidOperationException("Configure defaultProvider/defaultModel or pass --provider-id and --model-id.");
+        // Interactive fallback: when no default provider/model is configured and
+        // stdin is a real terminal, present pickers so the user can start chatting
+        // without editing config.json. Esc/Ctrl+C in the picker falls back to the
+        // configured-error below (or a non-zero exit in scripts).
+        (string ProviderId, string ModelId)? picked =
+            await ChatRepl.ResolveInteractiveProviderModelAsync(options).ConfigureAwait(false);
+        if (picked is { } selection)
+        {
+            resolvedProviderId = selection.ProviderId;
+            resolvedModelId = selection.ModelId;
+        }
+        else
+        {
+            throw new InvalidOperationException("Configure defaultProvider/defaultModel or pass --provider-id and --model-id.");
+        }
     }
 
     // --template expands a prompt template into the one-shot prompt (before
@@ -1529,17 +1543,43 @@ internal static class ChatRepl
         session.ToolFilter = toolFilter;
         WriteBanner(session);
 
+        // Prevent Ctrl+C from terminating the process for the whole REPL. The
+        // handler swallows the break (e.Cancel = true); actual cancellation is
+        // driven by our own key loops (Console.TreatControlCAsInput = true) which
+        // see Ctrl+C as a regular key and abort the current turn or clear the
+        // input line. In contexts where TreatControlCAsInput is false (Spectre
+        // pickers, redirected stdin) this at least keeps the process alive.
+        ConsoleCancelEventHandler handler = static (_, e) => e.Cancel = true;
+        Console.CancelKeyPress += handler;
+
+        try
+        {
+            await RunReplAsync(services, options, session, cancellationToken, verbose).ConfigureAwait(false);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= handler;
+            Console.TreatControlCAsInput = false;
+        }
+    }
+
+    private static async ValueTask RunReplAsync(
+        IServiceProvider services,
+        WinHarnessOptions options,
+        ChatSession session,
+        CancellationToken cancellationToken,
+        bool verbose)
+    {
         SlashCommandContext slashContext = new(
             services,
             services.GetRequiredService<SessionManagerFactory>(),
             services.GetRequiredService<IAgentRuntime>(),
             cancellationToken);
 
-        // Idle input uses plain blocking Console.ReadLine so interactive
-        // pickers (Spectre prompts in /models, /tree, trust) own the console
-        // exclusively. Steering input during a turn is read via
-        // Console.KeyAvailable polling inside RunTurnWithSteeringAsync — never
-        // from a competing background reader.
+        // Idle input is read through a custom key loop (ReadIdlePrompt) so Esc
+        // and Ctrl+C can be handled gracefully instead of terminating the process.
+        // Steering input during a turn is read via Console.KeyAvailable polling
+        // inside RunTurnWithSteeringAsync — never from a competing background reader.
         Queue<string> followUps = new();
 
         while (!cancellationToken.IsCancellationRequested)
@@ -1552,8 +1592,7 @@ internal static class ChatRepl
             }
             else
             {
-                AnsiConsole.Markup("[bold green]›[/] ");
-                input = Console.ReadLine();
+                input = ReadIdlePrompt();
             }
 
             if (input is null)
@@ -1663,11 +1702,81 @@ internal static class ChatRepl
     }
 
     /// <summary>
+    /// Interactive fallback for `winharness chat` when no default provider/model
+    /// is configured. Presents Spectre pickers (provider, then model) and returns
+    /// the selection, or null when interaction is impossible (redirected stdin,
+    /// no output, or no providers with models). Single-option lists are skipped
+    /// automatically.
+    /// </summary>
+    public static async ValueTask<(string ProviderId, string ModelId)?> ResolveInteractiveProviderModelAsync(WinHarnessOptions options)
+    {
+        if (Console.IsInputRedirected || Console.IsOutputRedirected || options.Providers.Count == 0)
+        {
+            return null;
+        }
+
+        List<ProviderOptions> providersWithModels = options.Providers
+            .Where(static p => p.Models.Count > 0)
+            .ToList();
+        if (providersWithModels.Count == 0)
+        {
+            return null;
+        }
+
+        ProviderOptions? provider;
+        if (providersWithModels.Count == 1)
+        {
+            provider = providersWithModels[0];
+        }
+        else
+        {
+            SelectionPrompt<ProviderOptions> providerPrompt = new()
+            {
+                Title = "Select a provider (Esc to cancel)"
+            };
+            providerPrompt.PageSize(10)
+                .MoreChoicesText("[grey](move up and down to reveal more providers)[/]")
+                .UseConverter(static p => p.BaseUrl is { Length: > 0 } baseUrl
+                    ? $"{Markup.Escape(p.Id)} [dim]{Markup.Escape(baseUrl)}[/]"
+                    : Markup.Escape(p.Id))
+                .AddChoices(providersWithModels);
+            provider = await InteractivePicker.ShowAsync(providerPrompt, "Provider selection cancelled.").ConfigureAwait(false);
+            if (provider is null)
+            {
+                return null;
+            }
+        }
+
+        if (provider.Models.Count == 1)
+        {
+            return (provider.Id, provider.Models[0].Id);
+        }
+
+        SelectionPrompt<ModelOptions> modelPrompt = new()
+        {
+            Title = $"Select a model for {Markup.Escape(provider.Id)} (Esc to cancel)"
+        };
+        modelPrompt.PageSize(10)
+            .MoreChoicesText("[grey](move up and down to reveal more models)[/]")
+            .UseConverter(static m => m.ProviderModelId is { Length: > 0 } upstream
+                ? $"{Markup.Escape(m.Id)} [dim]{Markup.Escape(upstream)}[/]"
+                : Markup.Escape(m.Id))
+            .AddChoices(provider.Models);
+        ModelOptions? model = await InteractivePicker.ShowAsync(modelPrompt, "Model selection cancelled.").ConfigureAwait(false);
+        if (model is null)
+        {
+            return null;
+        }
+
+        return (provider.Id, model.Id);
+    }
+
+    /// <summary>
     /// Runs a turn on a background task while polling for typed input:
     /// plain lines queue steering (delivered between tool round-trips),
-    /// "&gt;&gt; text" queues a follow-up turn, and /abort cancels the turn.
-    /// Uses Console.KeyAvailable polling, never a background reader, so
-    /// interactive pickers outside turns own the console exclusively. When
+    /// "&gt;&gt; text" queues a follow-up turn, and /abort, Esc, or Ctrl+C cancel
+    /// the turn. Uses Console.KeyAvailable polling, never a background reader,
+    /// so interactive pickers outside turns own the console exclusively. When
     /// input is redirected, in-turn steering is unavailable and the turn is
     /// simply awaited.
     /// </summary>
@@ -1688,54 +1797,85 @@ internal static class ChatRepl
             return;
         }
 
+        // Treat Ctrl+C as a regular key so we can abort the turn instead of
+        // killing the process. Restored in finally so Spectre pickers and
+        // redirected reads keep their default SIGINT semantics.
+        Console.TreatControlCAsInput = true;
         StringBuilder pending = new();
-        while (!turn.IsCompleted)
+        bool aborted = false;
+        try
         {
-            string? line = TryReadLineNonBlocking(pending);
-            if (line is null)
+            while (!turn.IsCompleted)
             {
-                await Task.WhenAny(turn, Task.Delay(50, CancellationToken.None)).ConfigureAwait(false);
-                continue;
-            }
-
-            line = line.Trim();
-            if (line.Length == 0)
-            {
-                continue;
-            }
-
-            if (string.Equals(line, "/abort", StringComparison.OrdinalIgnoreCase))
-            {
-                AnsiConsole.MarkupLine("[yellow]aborting turn…[/]");
-                await turnCts.CancelAsync().ConfigureAwait(false);
-
-                // Restore unsent steering messages as follow-up input.
-                foreach (string queued in session.Steering.DrainAll())
+                SteeringInput input = TryReadSteeringInput(pending, out string? line);
+                if (input == SteeringInput.None)
                 {
-                    followUps.Enqueue(queued);
+                    await Task.WhenAny(turn, Task.Delay(50, CancellationToken.None)).ConfigureAwait(false);
+                    continue;
                 }
 
-                break;
-            }
-
-            if (line.StartsWith(">>", StringComparison.Ordinal))
-            {
-                string followUp = line[2..].Trim();
-                if (followUp.Length > 0)
+                if (input == SteeringInput.Abort)
                 {
-                    followUps.Enqueue(followUp);
-                    AnsiConsole.MarkupLine("[dim]queued follow-up (runs after this turn)[/]");
+                    AnsiConsole.MarkupLine("[yellow]aborting turn…[/]");
+                    aborted = true;
+                    await turnCts.CancelAsync().ConfigureAwait(false);
+
+                    // Restore unsent steering messages as follow-up input.
+                    foreach (string queued in session.Steering.DrainAll())
+                    {
+                        followUps.Enqueue(queued);
+                    }
+
+                    pending.Clear();
+                    break;
                 }
 
-                continue;
-            }
+                line = line!.Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
 
-            session.Steering.Enqueue(line);
-            AnsiConsole.MarkupLine("[dim]queued steering (delivered after current tool calls)[/]");
+                if (string.Equals(line, "/abort", StringComparison.OrdinalIgnoreCase))
+                {
+                    AnsiConsole.MarkupLine("[yellow]aborting turn…[/]");
+                    aborted = true;
+                    await turnCts.CancelAsync().ConfigureAwait(false);
+
+                    // Restore unsent steering messages as follow-up input.
+                    foreach (string queued in session.Steering.DrainAll())
+                    {
+                        followUps.Enqueue(queued);
+                    }
+
+                    pending.Clear();
+                    break;
+                }
+
+                if (line.StartsWith(">>", StringComparison.Ordinal))
+                {
+                    string followUp = line[2..].Trim();
+                    if (followUp.Length > 0)
+                    {
+                        followUps.Enqueue(followUp);
+                        AnsiConsole.MarkupLine("[dim]queued follow-up (runs after this turn)[/]");
+                    }
+
+                    continue;
+                }
+
+                session.Steering.Enqueue(line);
+                AnsiConsole.MarkupLine("[dim]queued steering (delivered after current tool calls)[/]");
+            }
+        }
+        finally
+        {
+            Console.TreatControlCAsInput = false;
         }
 
         // A partial line typed as the turn ended becomes the next prompt seed.
-        if (pending.Length > 0)
+        // (Aborted turns discard any partial input.)
+        if (!aborted && pending.Length > 0)
         {
             followUps.Enqueue(StripFollowUpPrefix(pending.ToString().Trim()));
         }
@@ -1756,21 +1896,38 @@ internal static class ChatRepl
     }
 
     /// <summary>
-    /// Drains available keys without blocking. Returns a completed line when
-    /// Enter arrives, null otherwise; partial input accumulates in the buffer.
-    /// Backspace edits the buffer; other control keys are ignored.
+    /// Drains available keys without blocking. Returns <see cref="SteeringInput.Abort"/>
+    /// when the user presses Esc or Ctrl+C (turn should be cancelled),
+    /// <see cref="SteeringInput.Line"/> with a completed line on Enter, or
+    /// <see cref="SteeringInput.None"/> when no full input is available. Partial
+    /// input accumulates in <paramref name="pending"/>; Backspace edits it.
     /// </summary>
-    private static string? TryReadLineNonBlocking(StringBuilder pending)
+    private static SteeringInput TryReadSteeringInput(StringBuilder pending, out string? line)
     {
+        line = null;
         while (Console.KeyAvailable)
         {
             ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+
+            // Esc or Ctrl+C aborts the running turn immediately, discarding any
+            // partially typed steering text.
+            if (key.Key == ConsoleKey.Escape || IsCtrlC(key))
+            {
+                if (pending.Length > 0)
+                {
+                    ClearTyped(pending.Length);
+                    pending.Clear();
+                }
+
+                return SteeringInput.Abort;
+            }
+
             if (key.Key == ConsoleKey.Enter)
             {
                 Console.WriteLine();
-                string line = pending.ToString();
+                line = pending.ToString();
                 pending.Clear();
-                return line;
+                return SteeringInput.Line;
             }
 
             if (key.Key == ConsoleKey.Backspace)
@@ -1791,7 +1948,138 @@ internal static class ChatRepl
             }
         }
 
-        return null;
+        return SteeringInput.None;
+    }
+
+    private enum SteeringInput { None, Line, Abort }
+
+    /// <summary>
+    /// Reads one line of idle prompt input. Enter submits the line; Esc clears
+    /// the current buffer (or is a no-op when empty); Ctrl+C on an empty line
+    /// exits the REPL, and on a non-empty line clears it. Returns null on EOF
+    /// or when the user requests to exit (Ctrl+C on an empty line). Redirected
+    /// stdin falls back to <see cref="Console.ReadLine"/>.
+    /// </summary>
+    private static string? ReadIdlePrompt()
+    {
+        AnsiConsole.Markup("[bold green]›[/] ");
+        if (Console.IsInputRedirected)
+        {
+            return Console.ReadLine();
+        }
+
+        return ReadKeyLine(controlCancels: false);
+    }
+
+    /// <summary>
+    /// Blocking single-line reader built on <see cref="Console.ReadKey"/> so
+    /// Esc and Ctrl+C can be handled instead of terminating the process.
+    /// Temporarily enables <see cref="Console.TreatControlCAsInput"/>. When
+    /// <paramref name="controlCancels"/> is true (multi-line blocks), both Esc
+    /// and Ctrl+C cancel and return null. When false (idle prompt), Esc clears
+    /// the buffer, Ctrl+C clears a non-empty buffer or returns null (exits the
+    /// REPL) when empty.
+    /// </summary>
+    private static string? ReadKeyLine(bool controlCancels)
+    {
+        StringBuilder buffer = new();
+        bool previousTreatControlC = Console.TreatControlCAsInput;
+        Console.TreatControlCAsInput = true;
+        try
+        {
+            while (true)
+            {
+                ConsoleKeyInfo key;
+                try
+                {
+                    key = Console.ReadKey(intercept: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // stdin was closed (EOF, e.g. Ctrl+Z then Enter on Windows).
+                    return null;
+                }
+
+                if (IsCtrlC(key))
+                {
+                    if (controlCancels)
+                    {
+                        Console.WriteLine();
+                        return null;
+                    }
+
+                    if (buffer.Length > 0)
+                    {
+                        ClearTyped(buffer.Length);
+                        buffer.Clear();
+                        continue;
+                    }
+
+                    // Empty line + Ctrl+C exits the REPL (like /exit).
+                    Console.WriteLine("^C");
+                    return null;
+                }
+
+                if (key.Key == ConsoleKey.Escape)
+                {
+                    if (controlCancels)
+                    {
+                        return null;
+                    }
+
+                    if (buffer.Length > 0)
+                    {
+                        ClearTyped(buffer.Length);
+                        buffer.Clear();
+                    }
+
+                    continue;
+                }
+
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    return buffer.ToString();
+                }
+
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    if (buffer.Length > 0)
+                    {
+                        buffer.Length--;
+                        Console.Write("\b \b");
+                    }
+
+                    continue;
+                }
+
+                if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
+                {
+                    buffer.Append(key.KeyChar);
+                    Console.Write(key.KeyChar);
+                }
+            }
+        }
+        finally
+        {
+            Console.TreatControlCAsInput = previousTreatControlC;
+        }
+    }
+
+    private static bool IsCtrlC(ConsoleKeyInfo key) =>
+        key.Key == ConsoleKey.C && (key.Modifiers & ConsoleModifiers.Control) != 0;
+
+    /// <summary>
+    /// Erases <paramref name="count"/> previously echoed characters from the
+    /// console by backspacing over them. Assumes the cursor sits immediately
+    /// after the typed run (no line wrapping).
+    /// </summary>
+    private static void ClearTyped(int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            Console.Write("\b \b");
+        }
     }
 
     private static string StripFollowUpPrefix(string line) =>
@@ -1811,10 +2099,10 @@ internal static class ChatRepl
             lines.Add(remainder);
         }
 
-        AnsiConsole.MarkupLine("[dim]multi-line input — end with \"\"\" on its own line[/]");
+        AnsiConsole.MarkupLine("[dim]multi-line input — end with \"\"\" on its own line (Esc/Ctrl+C to cancel)[/]");
         while (true)
         {
-            string? line = Console.ReadLine();
+            string? line = ReadKeyLine(controlCancels: true);
             if (line is null)
             {
                 return null;
@@ -1886,10 +2174,10 @@ internal static class ChatRepl
             bootstrapRequest,
             cancellationToken).ConfigureAwait(false);
 
-        bool trusted = ResolveProjectTrust(
+        bool trusted = await ResolveProjectTrustAsync(
             services,
             interactive: !bootstrapRequest.IsOneShot && !Console.IsInputRedirected,
-            bootstrapRequest.ApproveOverride);
+            bootstrapRequest.ApproveOverride).ConfigureAwait(false);
 
         return ChatSessionBootstrap.CreateChatSession(
             sessionManager,
@@ -1907,7 +2195,7 @@ internal static class ChatRepl
     /// prompt (persisting always/never), then defaultProjectTrust setting
     /// (ask/never =&gt; untrusted, always =&gt; trusted).
     /// </summary>
-    private static bool ResolveProjectTrust(IServiceProvider services, bool interactive, bool? approveOverride)
+    private static async ValueTask<bool> ResolveProjectTrustAsync(IServiceProvider services, bool interactive, bool? approveOverride)
     {
         string workspaceRoot = Environment.CurrentDirectory;
         if (approveOverride is { } forced)
@@ -1936,10 +2224,16 @@ internal static class ChatRepl
             AnsiConsole.MarkupLine(
                 $"[yellow]This folder contains project-local WinHarness resources[/] [dim]({Markup.Escape(workspaceRoot)})[/]");
             AnsiConsole.MarkupLine("[dim]Project SYSTEM.md and skills can steer the model. Trust this folder?[/]");
-            string choice = AnsiConsole.Prompt(
-                new TextPrompt<string>("[bold]always / once / never[/]")
-                    .AddChoice("always").AddChoice("once").AddChoice("never")
-                    .DefaultValue("once"));
+            SelectionPrompt<string> trustPrompt = new()
+            {
+                Title = "Trust this folder? (Esc to cancel)"
+            };
+            trustPrompt.PageSize(5)
+                .AddChoices("always", "once", "never")
+                .DefaultValue("once");
+            string? choice = await InteractivePicker.ShowAsync(trustPrompt, "Trust prompt cancelled; defaulting to once.")
+                .ConfigureAwait(false);
+            choice ??= "once";
             switch (choice.ToLowerInvariant())
             {
                 case "always":
@@ -2010,7 +2304,7 @@ internal static class ChatRepl
             AnsiConsole.MarkupLine("[dim]" + Markup.Escape(contextLine) + "[/]");
         }
 
-        AnsiConsole.MarkupLine("[dim]/help for commands · /exit to quit[/]");
+        AnsiConsole.MarkupLine("[dim]/help for commands · /exit or Ctrl+C to quit · Esc/Ctrl+C aborts a running turn[/]");
         AnsiConsole.WriteLine();
     }
 

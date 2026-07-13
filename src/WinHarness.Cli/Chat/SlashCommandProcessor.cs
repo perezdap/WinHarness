@@ -229,6 +229,7 @@ internal static class SlashCommandProcessor
             "/export [file]        Export the active branch to HTML or JSONL",
             "/import <file.jsonl>  Import a JSONL session file and switch to it",
             "/clear                Clear the in-memory conversation view",
+            "Esc or Ctrl+C         Abort a running turn (same as /abort); Ctrl+C on an empty prompt exits",
             "/exit, /quit          Leave the session"
         ];
     }
@@ -355,15 +356,23 @@ internal static class SlashCommandProcessor
                 return SlashCommandResult.Handled(["No other deletable sessions in this workspace (the only session is active)."]);
             }
 
-            var selected = AnsiConsole.Prompt(
+            var selected = await InteractivePicker.ShowAsync(
                 new SelectionPrompt<SessionSummary>()
-                    .Title("Select a session to delete (will be moved to trash)")
+                    .Title("Select a session to delete (will be moved to trash; Esc to cancel)")
                     .PageSize(10)
                     .AddChoices(deletableSummaries)
                     .UseConverter(static s =>
-                        $"{s.SessionId} · {s.DisplayName ?? s.FirstUserPreview ?? "(untitled)"}"));
+                        $"{s.SessionId} · {s.DisplayName ?? s.FirstUserPreview ?? "(untitled)"}"),
+                "Session selection cancelled.").ConfigureAwait(false);
 
-            if (!AnsiConsole.Confirm($"Are you sure you want to delete session '{selected.SessionId}'?"))
+            if (selected is null)
+            {
+                return SlashCommandResult.Handled(["Deletion cancelled."]);
+            }
+
+            bool? confirmed = await InteractivePicker.ConfirmAsync(
+                $"Are you sure you want to delete session '{selected.SessionId}'?").ConfigureAwait(false);
+            if (confirmed is not true)
             {
                 return SlashCommandResult.Handled(["Deletion cancelled."]);
             }
@@ -470,19 +479,19 @@ internal static class SlashCommandProcessor
     /// </summary>
     private static bool IsInteractive => !Console.IsInputRedirected;
 
-    private static ValueTask<SlashCommandResult> ListProvidersAsync(
+    private static async ValueTask<SlashCommandResult> ListProvidersAsync(
         WinHarnessOptions options,
         ChatSession session,
         SlashCommandContext? context)
     {
         if (options.Providers.Count == 0)
         {
-            return new(SlashCommandResult.Handled(["No providers configured. Run 'winharness config wizard'."]));
+            return SlashCommandResult.Handled(["No providers configured. Run 'winharness config wizard'."]);
         }
 
         if (!IsInteractive)
         {
-            return new(SlashCommandResult.Handled(CreateProviderLines(options, session.ProviderId)));
+            return SlashCommandResult.Handled(CreateProviderLines(options, session.ProviderId));
         }
 
         string current = session.ProviderId;
@@ -495,16 +504,21 @@ internal static class SlashCommandProcessor
               .AddChoices(options.Providers.Select(p =>
                   $"{(string.Equals(p.Id, current, StringComparison.OrdinalIgnoreCase) ? "*" : " ")} {p.Id} {p.BaseUrl}"));
 
-        string selected = AnsiConsole.Prompt(prompt);
+        string? selected = await InteractivePicker.ShowAsync(prompt, "Provider selection cancelled.").ConfigureAwait(false);
+        if (selected is null)
+        {
+            return SlashCommandResult.Handled(["Provider selection cancelled."]);
+        }
+
         string providerId = ExtractFirstToken(selected);
 
         // If the user re-selected the current provider, no-op.
         if (string.Equals(providerId, current, StringComparison.OrdinalIgnoreCase))
         {
-            return new(SlashCommandResult.Handled([$"Already on provider '{providerId}'."]));
+            return SlashCommandResult.Handled([$"Already on provider '{providerId}'."]);
         }
 
-        return SwitchProviderAsync(options, session, providerId, context);
+        return await SwitchProviderAsync(options, session, providerId, context).ConfigureAwait(false);
     }
 
     private static async ValueTask<SlashCommandResult> ListModelsAsync(
@@ -567,7 +581,11 @@ internal static class SlashCommandProcessor
             prompt.AddChoiceGroup(new ModelChoice(provider.Id, string.Empty, header), group);
         }
 
-        ModelChoice selected = AnsiConsole.Prompt(prompt);
+        ModelChoice? selected = await InteractivePicker.ShowAsync(prompt, "Model selection cancelled.").ConfigureAwait(false);
+        if (selected is null || selected.ModelId.Length == 0)
+        {
+            return SlashCommandResult.Handled(["Model selection cancelled."]);
+        }
 
         // If the user re-selected the active provider+model, no-op.
         if (string.Equals(selected.ProviderId, session.ProviderId, StringComparison.OrdinalIgnoreCase) &&
@@ -642,7 +660,7 @@ internal static class SlashCommandProcessor
     /// </summary>
     private sealed record ModelChoice(string ProviderId, string ModelId, string Display);
 
-    private static ValueTask<SlashCommandResult> ListSkillsAsync(
+    private static async ValueTask<SlashCommandResult> ListSkillsAsync(
         ChatSession session,
         SlashCommandContext? context)
     {
@@ -650,13 +668,13 @@ internal static class SlashCommandProcessor
 
         if (session.Skills.Count == 0)
         {
-            return new(SlashCommandResult.Handled(
-                ["No skills found. Add SKILL.md files under .winharness/skills, .agents/skills, or %APPDATA%/WinHarness/skills."]));
+            return SlashCommandResult.Handled(
+                ["No skills found. Add SKILL.md files under .winharness/skills, .agents/skills, or %APPDATA%/WinHarness/skills."]);
         }
 
         if (!IsInteractive)
         {
-            return new(SlashCommandResult.Handled(CreateSkillLines(session)));
+            return SlashCommandResult.Handled(CreateSkillLines(session));
         }
 
         SkillDefinition? current = session.SelectedSkill;
@@ -669,23 +687,28 @@ internal static class SlashCommandProcessor
               .AddChoices(session.Skills.Select(s =>
                   $"{(ReferenceEquals(s, current) ? "*" : " ")} {s.Name} - {Summarize(s.Description)}"));
 
-        string selected = AnsiConsole.Prompt(prompt);
+        string? selected = await InteractivePicker.ShowAsync(prompt, "Skill selection cancelled.").ConfigureAwait(false);
+        if (selected is null)
+        {
+            return SlashCommandResult.Handled(["Skill selection cancelled."]);
+        }
+
         string skillName = ExtractFirstToken(selected);
 
         SkillDefinition? skill = session.Skills.FirstOrDefault(candidate =>
             string.Equals(candidate.Name, skillName, StringComparison.OrdinalIgnoreCase));
         if (skill is null)
         {
-            return new(SlashCommandResult.Handled([$"Skill '{skillName}' not found."]));
+            return SlashCommandResult.Handled([$"Skill '{skillName}' not found."]);
         }
 
         if (ReferenceEquals(skill, current))
         {
-            return new(SlashCommandResult.Handled([$"Skill '{skill.Name}' is already active."]));
+            return SlashCommandResult.Handled([$"Skill '{skill.Name}' is already active."]);
         }
 
         session.SelectedSkill = skill;
-        return new(SlashCommandResult.Handled([$"Skill '{skill.Name}' activated."]));
+        return SlashCommandResult.Handled([$"Skill '{skill.Name}' activated."]);
     }
 
     /// <summary>

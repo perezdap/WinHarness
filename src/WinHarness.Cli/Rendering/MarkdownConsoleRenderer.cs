@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Spectre.Console;
 
@@ -15,8 +16,11 @@ internal static class MarkdownConsoleRenderer
         string fenceLanguage = string.Empty;
         List<string> fenceLines = [];
 
-        foreach (string line in markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        string[] lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+
+        for (int i = 0; i < lines.Length; i++)
         {
+            string line = lines[i];
             string trimmedStart = line.TrimStart();
 
             if (trimmedStart.StartsWith("```", StringComparison.Ordinal))
@@ -40,6 +44,26 @@ internal static class MarkdownConsoleRenderer
             if (inFence)
             {
                 fenceLines.Add(line);
+                continue;
+            }
+
+            // GFM table: a header row followed by a separator row (| --- | --- |).
+            // Detection requires the separator to validate, so prose containing a
+            // pipe never accidentally renders as a table.
+            if (TryParseTableRow(line, out List<string>? headerCells) &&
+                i + 1 < lines.Length &&
+                TryParseTableSeparator(lines[i + 1], out List<TableColumnAlignment>? alignments))
+            {
+                List<List<string>> rows = [];
+                int j = i + 2;
+                while (j < lines.Length && TryParseTableRow(lines[j], out List<string>? rowCells))
+                {
+                    rows.Add(rowCells);
+                    j++;
+                }
+
+                WriteTable(headerCells, alignments, rows);
+                i = j - 1;
                 continue;
             }
 
@@ -301,5 +325,164 @@ internal static class MarkdownConsoleRenderer
         return string.Equals(language, "csharp", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(language, "cs", StringComparison.OrdinalIgnoreCase) ||
                string.Equals(language, "c#", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Column alignment parsed from a GFM table separator row.
+    /// </summary>
+    private enum TableColumnAlignment { Default, Left, Center, Right }
+
+    /// <summary>
+    /// Splits a line on unescaped <c>|</c> into trimmed cells. Drops the empty
+    /// leading/trailing cells produced by leading/trailing pipes so both
+    /// <c>| a | b |</c> and <c>a | b</c> parse identically. Returns false when
+    /// the line contains no pipe at all.
+    /// </summary>
+    private static bool TryParseTableRow(string line, [NotNullWhen(true)] out List<string>? cells)
+    {
+        cells = null;
+        string trimmed = line.Trim();
+        if (!trimmed.Contains('|'))
+        {
+            return false;
+        }
+
+        List<string> parts = [];
+        StringBuilder current = new();
+        for (int k = 0; k < trimmed.Length; k++)
+        {
+            char c = trimmed[k];
+            if (c == '\\' && k + 1 < trimmed.Length && trimmed[k + 1] == '|')
+            {
+                current.Append('|');
+                k++;
+                continue;
+            }
+
+            if (c == '|')
+            {
+                parts.Add(current.ToString());
+                current.Clear();
+                continue;
+            }
+
+            current.Append(c);
+        }
+
+        parts.Add(current.ToString());
+
+        if (parts.Count > 0 && parts[0].Trim().Length == 0)
+        {
+            parts.RemoveAt(0);
+        }
+
+        if (parts.Count > 0 && parts[^1].Trim().Length == 0)
+        {
+            parts.RemoveAt(parts.Count - 1);
+        }
+
+        if (parts.Count == 0)
+        {
+            return false;
+        }
+
+        cells = parts.Select(static p => p.Trim()).ToList();
+        return true;
+    }
+
+    /// <summary>
+    /// Parses a GFM separator row (<c>| :--- | ---: | :---: | --- |</c>) into
+    /// per-column alignments. Each cell must be non-empty and contain only
+    /// <c>-</c>, <c>:</c>, and spaces, with at least one <c>-</c>.
+    /// </summary>
+    private static bool TryParseTableSeparator(
+        string line,
+        [NotNullWhen(true)] out List<TableColumnAlignment>? alignments)
+    {
+        alignments = null;
+        if (!TryParseTableRow(line, out List<string>? cells))
+        {
+            return false;
+        }
+
+        List<TableColumnAlignment> result = [];
+        foreach (string raw in cells)
+        {
+            string cell = raw.Trim();
+            if (cell.Length == 0 || !cell.Contains('-'))
+            {
+                return false;
+            }
+
+            foreach (char ch in cell)
+            {
+                if (ch is not ('-' or ':' or ' '))
+                {
+                    return false;
+                }
+            }
+
+            bool leftColon = cell.StartsWith(':');
+            bool rightColon = cell.EndsWith(':');
+            result.Add((leftColon, rightColon) switch
+            {
+                (true, true) => TableColumnAlignment.Center,
+                (false, true) => TableColumnAlignment.Right,
+                (true, false) => TableColumnAlignment.Left,
+                _ => TableColumnAlignment.Default
+            });
+        }
+
+        alignments = result;
+        return true;
+    }
+
+    /// <summary>
+    /// Renders a GFM table as a rounded-border Spectre table. Inline markdown
+    /// (bold, code, links) is rendered in each cell. Rows with fewer cells than
+    /// the header are padded; extra cells are truncated to the header width.
+    /// </summary>
+    private static void WriteTable(
+        IReadOnlyList<string> header,
+        IReadOnlyList<TableColumnAlignment> alignments,
+        IReadOnlyList<IReadOnlyList<string>> rows)
+    {
+        Table table = new Table()
+            .Border(TableBorder.Square)
+            .BorderColor(Color.Grey);
+
+        int columnCount = header.Count;
+        for (int col = 0; col < columnCount; col++)
+        {
+            TableColumn column = new TableColumn(RenderInline(header[col]));
+            TableColumnAlignment align = col < alignments.Count ? alignments[col] : TableColumnAlignment.Default;
+            switch (align)
+            {
+                case TableColumnAlignment.Left:
+                    column.LeftAligned();
+                    break;
+                case TableColumnAlignment.Right:
+                    column.RightAligned();
+                    break;
+                case TableColumnAlignment.Center:
+                    column.Centered();
+                    break;
+            }
+
+            table.AddColumn(column);
+        }
+
+        foreach (IReadOnlyList<string> row in rows)
+        {
+            string[] rendered = new string[columnCount];
+            for (int col = 0; col < columnCount; col++)
+            {
+                rendered[col] = col < row.Count ? RenderInline(row[col]) : string.Empty;
+            }
+
+            table.AddRow(rendered);
+        }
+
+        AnsiConsole.Write(table);
     }
 }
