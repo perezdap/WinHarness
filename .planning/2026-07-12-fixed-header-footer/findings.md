@@ -60,20 +60,30 @@ Result file `spike-result.json` (committed alongside):
    `SetConsoleWindowInfo`/`SetConsoleScreenBufferSize` + `ReadConsoleOutputW`;
    this self-verify pattern could become a headless test for the eventual
    `ScreenRegionController`.
+4. Markdown line-length (MD013) is disabled repo-wide via `.editorconfig`
+   (`[*.md] max_line_length = off`); the repo has never enforced 80-col
+   markdown, so MD013 was firing as noise.
 
 ## Technical direction
 
 - Use DECSTBM scroll-region: `ESC[{top};{bottom}r`.
 - Keep row 1+ as fixed header, last row(s) as fixed footer/input/status.
-- Normal output must happen with cursor inside the scroll region. Fixed rows are repainted with absolute cursor moves.
+- Normal output must happen with cursor inside the scroll region. Fixed
+  rows are repainted with absolute cursor moves.
 - Restore with `ESC[r` (or `ESC[1;<height>r`) and clear/repaint on teardown.
 
 ## Risks / things to inspect before implementation
 
-- `AssistantStreamWriter.TryEraseForReRender` row math uses full terminal height; with scroll region it should use the scroll-region height and be conservative when the block may scroll.
-- `ThinkingIndicator` writes `\r` on current row; if current row is near footer or prompt it can corrupt fixed UI unless constrained.
-- Spectre.Console may write cursor-control sequences; keep Spectre output inside the scroll region and avoid Spectre full-screen/live primitives initially.
-- Window resize must be handled by polling `Console.WindowWidth/Height` before prompt, during steering loop, and possibly spinner tick.
+- `AssistantStreamWriter.TryEraseForReRender` row math uses full terminal
+  height; with scroll region it should use the scroll-region height and be
+  conservative when the block may scroll.
+- `ThinkingIndicator` writes `\r` on current row; if current row is near
+  footer or prompt it can corrupt fixed UI unless constrained.
+- Spectre.Console may write cursor-control sequences; keep Spectre output
+  inside the scroll region and avoid Spectre full-screen/live primitives
+  initially.
+- Window resize must be handled by polling `Console.WindowWidth/Height`
+  before prompt, during steering loop, and possibly spinner tick.
 - Redirected output must bypass fixed UI entirely.
 
 ## Manual test matrix

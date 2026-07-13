@@ -31,3 +31,8 @@ dotnet_diagnostic.CA1848.severity = none
 [*.{json,md,yml,yaml,props,targets,csproj,sln}]
 indent_style = space
 indent_size = 2
+
+[*.md]
+# The repo has never enforced 80-col markdown (README/CONTEXT routinely exceed it);
+# disable MD013 line-length so it does not fire as noise.
+max_line_length = off

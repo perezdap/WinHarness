@@ -7,7 +7,7 @@ namespace WinHarness.TerminalRegionSpike;
 /// fixed rows survive scrolling. Run with no args for the interactive demo; pass
 /// a file path to run the headless self-verify and write a JSON result there.
 /// </summary>
-internal static partial class Program
+internal static class Program
 {
     private const int StdOutputHandle = -11;
     private const short VerifyWidth = 80;
@@ -198,7 +198,7 @@ internal static partial class Program
         // Shrink the window to 1x1 first so reducing the buffer size is permitted,
         // then size the buffer, then open the window back up to the full buffer.
         SmallRect tiny = new() { Left = 0, Top = 0, Right = 0, Bottom = 0 };
-        if (!SetConsoleWindowInfo(handle, absolute: true, in tiny))
+        if (!SetConsoleWindowInfo(handle, absolute: true, ref tiny))
         {
             return false;
         }
@@ -209,7 +209,7 @@ internal static partial class Program
         }
 
         SmallRect full = new() { Left = 0, Top = 0, Right = (short)(width - 1), Bottom = (short)(height - 1) };
-        return SetConsoleWindowInfo(handle, absolute: true, in full);
+        return SetConsoleWindowInfo(handle, absolute: true, ref full);
     }
 
     private static bool ReadGrid(IntPtr handle, short width, short height, out string[]? rows)
@@ -240,20 +240,20 @@ internal static partial class Program
         return true;
     }
 
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int nStdHandle);
 
-    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool SetConsoleScreenBufferSize(IntPtr hConsoleOutput, Coord dwSize);
+    private static extern bool SetConsoleScreenBufferSize(IntPtr hConsoleOutput, Coord dwSize);
 
-    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool SetConsoleWindowInfo(IntPtr hConsoleOutput, [MarshalAs(UnmanagedType.Bool)] bool absolute, in SmallRect lpConsoleWindow);
+    private static extern bool SetConsoleWindowInfo(IntPtr hConsoleOutput, [MarshalAs(UnmanagedType.Bool)] bool absolute, ref SmallRect lpConsoleWindow);
 
-    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool ReadConsoleOutputW(IntPtr hConsoleOutput, [Out] CharInfo[] lpBuffer, Coord dwBufferSize, Coord dwBufferCoord, ref SmallRect lpReadRegion);
+    private static extern bool ReadConsoleOutputW(IntPtr hConsoleOutput, [Out] CharInfo[] lpBuffer, Coord dwBufferSize, Coord dwBufferCoord, ref SmallRect lpReadRegion);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Coord
