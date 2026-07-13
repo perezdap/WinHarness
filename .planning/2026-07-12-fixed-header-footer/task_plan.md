@@ -72,9 +72,21 @@ scroll region.
       the controller owns the top row and the scrolling `WriteBanner` is
       suppressed. Resize (`OnResize`) is a Phase 4 stub. Tests: 6 new
       `ScreenRegionControllerTests` pass; full suite 310/0/0.
-- [ ] Phase 2 — Header: move startup banner content into the fixed top row(s);
+- [x] Phase 2 — Header: move startup banner content into the fixed top row(s);
       keep it concise (one line). Footer: render the live status line
       (StatusLineFormatter) + usage footer in the fixed bottom row(s).
+      **DONE 2026-07-13:** added `ScreenHeaderFormatter` (one row:
+      `WinHarness chat · provider · model · effort`) and `ScreenFooterFormatter`
+      (status: `md on/off · context · tools`) in `WinHarness.Cli.Chat`.
+      `ScreenRegionLayout` gained `Width` + `MinimumWidth`; `SetHeader`/`SetFooter`
+      truncate to width. `WriteFixed` now saves/restores the cursor
+      (`ESC 7`/`ESC 8` = DECSC/DECRC) so painting the fixed rows never moves the
+      conversation cursor. Wired into `RunReplAsync`/`ReadIdlePrompt`: header +
+      footer refresh every idle prompt (so `/model`, `/effort`, `/md`, tool-filter
+      changes are reflected), and the in-region status line is skipped when active.
+      Per-turn `UsageFooter` still renders in the scroll stream. The `›` prompt
+      stays in the region (Phase 4 moves it into the footer). Tests: 5 new
+      formatter tests + width/narrow-layout test; full suite 315/0/0.
 - [ ] Phase 3 — Route all streaming/tool/markdown output through the scroll
       region; audit AssistantStreamWriter + ThinkingIndicator cursor math.
 - [ ] Phase 4 — Input loops (ReadKeyLine idle + steering poll) repaint footer

@@ -1541,18 +1541,19 @@ internal static class ChatRepl
         session.ReasoningEffort = reasoningEffort;
         session.ToolFilter = toolFilter;
 
-        // Phase 1 fixed header/footer (DECSTBM scroll region). Opt-in via
+        // Fixed header/footer (DECSTBM scroll region). Opt-in via
         // WINHARNESS_FIXED_HEADER so the default chat experience is unchanged
-        // until content wiring (Phase 2) and streaming routing (Phase 3) land.
-        // When active, the controller owns the top row, so the scrolling banner
-        // is suppressed; otherwise today's banner behavior is preserved.
+        // until streaming routing (Phase 3) lands. When active, the controller
+        // owns the top/bottom rows (banner content + live status); otherwise
+        // today's scrolling banner behavior is preserved.
         ScreenRegionController screen = ScreenRegionController.Create();
         try
         {
             screen.Enter();
             if (screen.IsActive)
             {
-                screen.SetHeader("WinHarness chat");
+                screen.SetHeader(ScreenHeaderFormatter.Format(session, options));
+                screen.SetFooter(ScreenFooterFormatter.Format(session));
             }
             else
             {
@@ -1570,7 +1571,7 @@ internal static class ChatRepl
 
             try
             {
-                await RunReplAsync(services, options, session, cancellationToken, verbose).ConfigureAwait(false);
+                await RunReplAsync(services, options, screen, session, cancellationToken, verbose).ConfigureAwait(false);
             }
             finally
             {
@@ -1587,6 +1588,7 @@ internal static class ChatRepl
     private static async ValueTask RunReplAsync(
         IServiceProvider services,
         WinHarnessOptions options,
+        ScreenRegionController screen,
         ChatSession session,
         CancellationToken cancellationToken,
         bool verbose)
@@ -1613,7 +1615,7 @@ internal static class ChatRepl
             }
             else
             {
-                input = ReadIdlePrompt(options, session);
+                input = ReadIdlePrompt(options, screen, session);
             }
 
             if (input is null)
@@ -1981,9 +1983,21 @@ internal static class ChatRepl
     /// or when the user requests to exit (Ctrl+C on an empty line). Redirected
     /// stdin falls back to <see cref="Console.ReadLine"/>.
     /// </summary>
-    private static string? ReadIdlePrompt(WinHarnessOptions options, ChatSession session)
+    private static string? ReadIdlePrompt(WinHarnessOptions options, ScreenRegionController screen, ChatSession session)
     {
-        AnsiConsole.MarkupLine(StatusLineFormatter.FormatMarkup(session, options));
+        if (screen.IsActive)
+        {
+            // Fixed rows own the status; refresh them so /model, /effort, /md,
+            // and tool-filter changes are reflected without scrolling away.
+            screen.SetHeader(ScreenHeaderFormatter.Format(session, options));
+            screen.SetFooter(ScreenFooterFormatter.Format(session));
+        }
+        else
+        {
+            // Status line scrolls with history (shipped behavior).
+            AnsiConsole.MarkupLine(StatusLineFormatter.FormatMarkup(session, options));
+        }
+
         AnsiConsole.Markup("[bold green]›[/] ");
         if (Console.IsInputRedirected)
         {
