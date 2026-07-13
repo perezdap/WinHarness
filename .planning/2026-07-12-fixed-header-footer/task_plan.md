@@ -1,18 +1,21 @@
 # Task: True fixed (sticky) header + footer in `winharness chat`
 
 ## Goal
+
 Pin a header row at the top and a status/footer row at the bottom of the
 terminal so they stay on screen while conversation output scrolls between them.
 This supersedes the pragmatic "status line above the prompt" already shipped
 (commit d2431be) with a genuinely fixed region.
 
 ## Motivation / follow-up context
+
 The shipped change re-renders a compact status line above the prompt each turn
 (good enough, always accurate) but it still scrolls away with history. The user
 wants a real fixed header/footer. This requires taking control of the terminal
 scroll region.
 
 ## Approach (chosen): DECSTBM scroll-region, stay in main buffer
+
 - Use VT sequence `ESC [ <top> ; <bottom> r` (DECSTBM) to constrain the
   scrolling region to rows `top..bottom`, leaving row 1 (header) and the last
   1-2 rows (footer/prompt) fixed.
@@ -22,12 +25,14 @@ scroll region.
   batch rendering, Spectre markup) must emit *inside* the scroll region only.
 
 ### Why not the alternate options
+
 - Alt-screen buffer (`ESC [ ?1049h`): would lose native scrollback — the user
   scrolls history a lot in a REPL; rejected.
 - Full Spectre `Live`/`Layout`: fights our custom `Console.ReadKey` input loop
   and streaming token writer; high risk, large rewrite; rejected for now.
 
 ## Key risks (must be validated)
+
 1. ConPTY / Windows Terminal DECSTBM support + interaction with Spectre.
 2. Resize handling: `Console.WindowWidth/Height` changes mid-session must
    recompute the region and repaint. No `SIGWINCH` on Windows — poll size.
@@ -45,9 +50,12 @@ scroll region.
    handled in ThinkingIndicator.Truncate).
 
 ## Phases
+
 - [ ] Phase 0 — Spike: prove DECSTBM works under Windows Terminal + ConPTY
       (tiny throwaway: set region, scroll filler, keep header/footer fixed,
       resize, restore on exit). Decide go/no-go before touching the REPL.
+      Initial spike added at `spikes/WinHarness.TerminalRegionSpike`; run it in
+      Windows Terminal/ConPTY and record results before Phase 1.
 - [ ] Phase 1 — Introduce a `ScreenRegionController` (enter/exit, set region,
       repaint header, repaint footer, handle resize). Interactive-only; no-op
       when output redirected. Guaranteed teardown (restore region + cursor) via
@@ -68,6 +76,7 @@ scroll region.
       AOT to PATH for manual verification.
 
 ## Decisions
+
 - Stay in main screen buffer (preserve scrollback); use DECSTBM, not alt-screen.
 - Interactive-only feature; redirected/one-shot paths unchanged.
 - If Phase 0 shows DECSTBM is unreliable on target terminals, STOP and reassess
@@ -75,6 +84,7 @@ scroll region.
   Live). Do not force a fragile solution.
 
 ## Open questions for the user (raise before Phase 1 if unsure)
+
 - Header content: just `WinHarness chat | provider · model · effort`? Or include
   session name / context files / tool filter too (multi-row header)?
 - Footer content: live status + usage in one row, or a two-row footer (status
@@ -82,6 +92,7 @@ scroll region.
 - Acceptable to drop the feature (fall back) on terminals without DECSTBM?
 
 ## Files (anticipated)
+
 - new: `src/WinHarness.Cli/Rendering/ScreenRegionController.cs`
 - `src/WinHarness.Cli/Program.cs` (RunReplAsync, WriteBanner, ReadIdlePrompt,
   RunTurnWithSteeringAsync teardown)
