@@ -73,7 +73,8 @@ public sealed class BuiltinToolProvider : IToolProvider
             new EditFileTool(_workspaceRoot, _longPathService),
             new RunCommandTool(_workspaceRoot, _commandExecutor, _longPathService),
             new GlobTool(_workspaceRoot, _longPathService),
-            new GrepTool(_workspaceRoot, _longPathService)
+            new GrepTool(_workspaceRoot, _longPathService),
+            new WinHarnessDocsTool()
         ];
 
         return ValueTask.FromResult(tools);
@@ -195,7 +196,7 @@ public sealed class BuiltinToolProvider : IToolProvider
 
         private static readonly HashSet<string> IgnoredDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
         {
-            ".git", "bin", "obj", "node_modules", ".vs", ".idea", ".vscode"
+            ".git", ".claude", "bin", "obj", "node_modules", ".vs", ".idea", ".vscode"
         };
 
         /// <summary>
@@ -608,7 +609,7 @@ public sealed class BuiltinToolProvider : IToolProvider
     private sealed class GlobTool : BuiltinTool
     {
         public GlobTool(string workspaceRoot, ILongPathService longPathService)
-            : base(workspaceRoot, longPathService, "glob", "List files matching a simple glob pattern (* and ? wildcards; skips .git, bin, obj, node_modules).", """{"type":"object","properties":{"pattern":{"type":"string"},"maxResults":{"type":"integer"}},"required":["pattern"]}""")
+            : base(workspaceRoot, longPathService, "glob", "List files matching a simple glob pattern (* and ? wildcards; skips .git, .claude, bin, obj, node_modules).", """{"type":"object","properties":{"pattern":{"type":"string"},"maxResults":{"type":"integer"}},"required":["pattern"]}""")
         {
         }
 
@@ -639,7 +640,7 @@ public sealed class BuiltinToolProvider : IToolProvider
     private sealed class GrepTool : BuiltinTool
     {
         public GrepTool(string workspaceRoot, ILongPathService longPathService)
-            : base(workspaceRoot, longPathService, "grep", "Search text files (skips .git, bin, obj, node_modules).", """{"type":"object","properties":{"pattern":{"type":"string"},"filePattern":{"type":"string"},"maxResults":{"type":"integer"},"maxFileBytes":{"type":"integer"}},"required":["pattern"]}""")
+            : base(workspaceRoot, longPathService, "grep", "Search text files (skips .git, .claude, bin, obj, node_modules).", """{"type":"object","properties":{"pattern":{"type":"string"},"filePattern":{"type":"string"},"maxResults":{"type":"integer"},"maxFileBytes":{"type":"integer"}},"required":["pattern"]}""")
         {
         }
 

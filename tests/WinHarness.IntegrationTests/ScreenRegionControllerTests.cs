@@ -42,6 +42,14 @@ public sealed class ScreenRegionControllerTests
     }
 
     [TestMethod]
+    public void AdjustHeightForHostSubtractsTwoRowsInVsCodeIntegratedTerminal()
+    {
+        Assert.AreEqual(22, ScreenRegionController.AdjustHeightForHost(24, vsCodeTerminal: true));
+        Assert.AreEqual(24, ScreenRegionController.AdjustHeightForHost(24, vsCodeTerminal: false));
+        Assert.AreEqual(ScreenRegionLayout.MinimumHeight, ScreenRegionController.AdjustHeightForHost(7, vsCodeTerminal: true));
+    }
+
+    [TestMethod]
     public void LayoutPinsHeaderRowOneAndLeavesTwoFooterRowsWhenOptedIn()
     {
         const int height = 40;

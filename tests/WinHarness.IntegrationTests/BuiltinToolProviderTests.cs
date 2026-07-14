@@ -47,6 +47,29 @@ public sealed class BuiltinToolProviderTests
     }
 
     [TestMethod]
+    public async Task GlobAndGrepSkipClaudeWorktrees()
+    {
+        string root = CreateTempDirectory();
+        string worktreeFile = Path.Combine(root, ".claude", "worktrees", "branch-a", "hidden.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(worktreeFile)!);
+        await File.WriteAllTextAsync(worktreeFile, "worktree-only");
+        await File.WriteAllTextAsync(Path.Combine(root, "visible.txt"), "worktree-only");
+
+        BuiltinToolProvider provider = new(root);
+        IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
+
+        ToolResult globResult = await tools.Single(static tool => tool.Name == "glob")
+            .ExecuteAsync(new ToolInvocation("glob", Json("""{"pattern":"*.txt"}""")), CancellationToken.None);
+        ToolResult grepResult = await tools.Single(static tool => tool.Name == "grep")
+            .ExecuteAsync(new ToolInvocation("grep", Json("""{"pattern":"worktree-only","filePattern":"*.txt"}""")), CancellationToken.None);
+
+        StringAssert.Contains(globResult.Content, "visible.txt");
+        StringAssert.DoesNotMatch(globResult.Content, new System.Text.RegularExpressions.Regex(@"\.claude[/\\]worktrees"));
+        StringAssert.Contains(grepResult.Content, "visible.txt");
+        StringAssert.DoesNotMatch(grepResult.Content, new System.Text.RegularExpressions.Regex(@"\.claude[/\\]worktrees"));
+    }
+
+    [TestMethod]
     public async Task EditFileDryRunDoesNotChangeFile()
     {
         string root = CreateTempDirectory();

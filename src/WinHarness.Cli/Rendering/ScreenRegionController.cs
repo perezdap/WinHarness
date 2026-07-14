@@ -96,9 +96,39 @@ internal sealed class ScreenRegionController : IDisposable
             Environment.GetEnvironmentVariable(OptInEnvironmentVariable),
             ansiConfigurator.IsVirtualTerminalEnabled);
         bool redirected = Console.IsOutputRedirected || Console.IsInputRedirected;
-        int height = TryGetWindowDimension(Console.WindowHeight, out int h) ? h : -1;
+        int height = TryGetWindowDimension(Console.WindowHeight, out int h) ? AdjustHeightForHost(h) : -1;
         int width = TryGetWindowDimension(Console.WindowWidth, out int w) ? w : -1;
         return new ScreenRegionController(ScreenRegionLayout.Resolve(optedIn, redirected, width, height), optedIn, redirected);
+    }
+
+    /// <summary>
+    /// VS Code / Cursor integrated terminals set <c>TERM_PROGRAM=vscode</c> and
+    /// clip the bottom row(s) under the panel chrome / Windows taskbar overlap.
+    /// </summary>
+    internal static bool IsVsCodeIntegratedTerminal() =>
+        string.Equals(Environment.GetEnvironmentVariable("TERM_PROGRAM"), "vscode", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Rows to leave unused at the physical bottom in VS Code/Cursor.</summary>
+    private const int VsCodeBottomReserveRows = 2;
+
+    /// <summary>
+    /// Returns a layout height that avoids clipped bottom rows in VS Code's
+    /// integrated terminal. Other hosts use the reported height unchanged.
+    /// </summary>
+    internal static int AdjustHeightForHost(int height, bool? vsCodeTerminal = null)
+    {
+        if (height <= 0)
+        {
+            return height;
+        }
+
+        bool vsCode = vsCodeTerminal ?? IsVsCodeIntegratedTerminal();
+        if (!vsCode)
+        {
+            return height;
+        }
+
+        return Math.Max(ScreenRegionLayout.MinimumHeight, height - VsCodeBottomReserveRows);
     }
 
     /// <summary>
@@ -232,7 +262,7 @@ internal sealed class ScreenRegionController : IDisposable
             return;
         }
 
-        int height = TryGetWindowDimension(Console.WindowHeight, out int h) ? h : -1;
+        int height = TryGetWindowDimension(Console.WindowHeight, out int h) ? AdjustHeightForHost(h) : -1;
         int width = TryGetWindowDimension(Console.WindowWidth, out int w) ? w : -1;
         ScreenRegionLayout next = ScreenRegionLayout.Resolve(_optedIn, _redirected, width, height);
         if (next == _layout)
@@ -279,7 +309,11 @@ internal sealed class ScreenRegionController : IDisposable
         }
 
         // DECSC first so EndPrompt can restore the conversation cursor. Then
-        // paint the empty prompt (prefix only) via WritePromptInput.
+        // paint the empty prompt (prefix only) via WritePromptInput. Show the
+        // cursor while editing — some hosts (notably VS Code's integrated
+        // terminal) do not repaint the fixed prompt row unless the cursor sits
+        // on it.
+        Console.CursorVisible = true;
         Console.Write("\u001b7");
         WritePromptInput(string.Empty);
     }
@@ -331,12 +365,19 @@ internal sealed class ScreenRegionController : IDisposable
 
         // Paint status + prompt without DECSC/DECRC — BeginPrompt already holds
         // the conversation cursor in the single DECSC slot. Status is a cyan
-        // accent bar; prompt rows stay normal so typing reads clearly.
+        // accent bar; prompt rows reset SGR and use a green › prefix so typed
+        // text stays visible on hosts that do not repaint off-cursor rows.
         Console.Write($"\u001b[{statusRow};1H\u001b[2K{FormatBar(_footerText, Layout.Width, BarStyle.Status)}");
         for (int i = 0; i < promptRows; i++)
         {
-            Console.Write($"\u001b[{statusRow + 1 + i};1H\u001b[2K{wrapped[start + i]}");
+            int row = statusRow + 1 + i;
+            Console.Write($"\u001b[{row};1H\u001b[2K{FormatPromptRow(wrapped[start + i])}");
         }
+
+        string lastPlain = wrapped[start + promptRows - 1];
+        int cursorRow = statusRow + promptRows;
+        Console.Write($"\u001b[{cursorRow};{lastPlain.Length + 1}H");
+        Console.CursorVisible = true;
     }
 
     /// <summary>
@@ -362,6 +403,7 @@ internal sealed class ScreenRegionController : IDisposable
         SetRegion(Layout.ScrollTop, Layout.ScrollBottom);
         // Put the status bar back on its default row (Height - 1).
         Console.Write($"\u001b[{Layout.FooterStatusRow};1H\u001b[2K{FormatBar(_footerText, Layout.Width, BarStyle.Status)}");
+        Console.CursorVisible = false;
         Console.Write("\u001b8");
     }
 
@@ -488,6 +530,22 @@ internal sealed class ScreenRegionController : IDisposable
     /// </summary>
     private void WriteBar(int row, string text, BarStyle style) =>
         Console.Write($"\u001b7\u001b[{row};1H\u001b[2K{FormatBar(text, Layout.Width, style)}\u001b8");
+
+    /// <summary>
+    /// Formats one prompt display row with an explicit SGR reset and a green
+    /// <see cref="PromptLineView.Prefix"/> on the first row only (matches the
+    /// inactive-path Spectre prompt styling).
+    /// </summary>
+    private static string FormatPromptRow(string line)
+    {
+        if (!line.StartsWith(PromptLineView.Prefix, StringComparison.Ordinal))
+        {
+            return $"\x1b[0m{line}";
+        }
+
+        string content = line[PromptLineView.Prefix.Length..];
+        return $"\x1b[0m\x1b[1;32m{PromptLineView.Prefix}\x1b[0m{content}";
+    }
 }
 
 /// <summary>

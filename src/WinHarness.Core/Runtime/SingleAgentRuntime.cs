@@ -29,6 +29,8 @@ Command execution rules:
 - To check whether a CLI exists, use where.exe <name> or pwsh -NoProfile -Command "Get-Command <name>".
 - Do not use Unix shell builtins or POSIX-only commands such as command -v, which, bash, sh, ls, cat, rm -rf, chmod, or sudo unless the user explicitly asks for WSL/POSIX and the executable is known to exist.
 - Prefer PowerShell equivalents: Get-ChildItem, Get-Content, Remove-Item, New-Item, Set-Content, Join-Path.
+
+WinHarness reference: call winharness_docs before guessing paths or searching the workspace. Omit topic to list subjects (paths, sessions, tools, providers, mcp, chat, diagnostics).
 """;
 
     // Safety net for a single streamed response that never stops (e.g. a model that

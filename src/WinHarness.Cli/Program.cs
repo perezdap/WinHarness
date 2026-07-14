@@ -25,6 +25,7 @@ using WinHarness.Runtime;
 using WinHarness.Sessions;
 using WinHarness.Serialization;
 using WinHarness.Tools;
+using WinHarness.Tools.Docs;
 
 const string Version = "0.3.0";
 
@@ -460,6 +461,21 @@ app.Add("tools call", async (string name, string argumentsJson = "{}", Cancellat
                 result.Metadata)),
         cancellationToken).ConfigureAwait(false);
 
+    Console.WriteLine(result.Content);
+    if (!result.Succeeded)
+    {
+        Environment.ExitCode = 1;
+    }
+});
+
+app.Add("docs list", () =>
+{
+    Console.WriteLine(WinHarnessDocsCatalog.FormatCatalog());
+});
+
+app.Add("docs get", (string topic, string? query = null, int maxOutputBytes = 16 * 1024) =>
+{
+    WinHarnessDocsCatalog.DocLookupResult result = WinHarnessDocsCatalog.Lookup(topic, query, maxOutputBytes);
     Console.WriteLine(result.Content);
     if (!result.Succeeded)
     {

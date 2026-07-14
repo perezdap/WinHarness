@@ -8,4 +8,8 @@
     <PackageReference Include="Microsoft.Extensions.AI" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
   </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Docs\topics\*.md" />
+  </ItemGroup>
 </Project>

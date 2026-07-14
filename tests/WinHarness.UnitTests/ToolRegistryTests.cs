@@ -168,7 +168,7 @@ public sealed class ToolRegistryTests
         IReadOnlyList<ITool> tools = await provider.ListToolsAsync(CancellationToken.None);
 
         CollectionAssert.AreEquivalent(
-            new[] { "read_file", "write_file", "edit_file", "run_command", "glob", "grep" },
+            new[] { "read_file", "write_file", "edit_file", "run_command", "glob", "grep", "winharness_docs" },
             tools.Select(static tool => tool.Name).ToArray());
         foreach (ITool tool in tools)
         {

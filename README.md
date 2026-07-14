@@ -75,6 +75,8 @@ dotnet publish .\src\WinHarness.Cli\WinHarness.Cli.csproj -c Release -r win-x64 
 - `winharness models use --model-id local-coder`
 - `winharness tools list`
 - `winharness tools call --name read_file --arguments-json '{"path":"README.md"}'`
+- `winharness docs list`
+- `winharness docs get --topic sessions`
 - `winharness mcp list`
 - `winharness mcp add-stdio --id filesystem --command filesystem-mcp-server.exe [--arguments-json '["--root","C:\\src"]' --environment-json '{}' --enabled true]`
 - `winharness mcp add-http --id remote --endpoint https://example.com/mcp [--transport http|sse --headers-json '{"X-Client-Name":"WinHarness"}' --enabled true]`

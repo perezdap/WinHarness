@@ -13,7 +13,7 @@ One run of the agent against a Conversation built from the active session branch
 _Avoid_: Round, exchange, request.
 
 **Session**:
-A persisted JSONL file plus in-memory tree state. Distinct from Conversation (the ephemeral projection sent to the runtime for one turn).
+A persisted JSONL file plus in-memory tree state. Distinct from Conversation (the ephemeral projection sent to the runtime for one turn). Stored under `%APPDATA%\WinHarness\sessions\{workspaceKey}\` (override the config root with `WINHARNESS_CONFIG_DIR`).
 _Avoid_: Thread, chat (overloaded).
 
 **Session entry**:
