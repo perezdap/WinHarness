@@ -12,6 +12,35 @@ public sealed partial class WindowsAnsiConsoleConfigurator : IAnsiConsoleConfigu
     private const uint EnableVirtualTerminalProcessing = 0x0004;
 
     /// <inheritdoc />
+    public bool IsVirtualTerminalEnabled
+    {
+        get
+        {
+            // Non-Windows terminals are xterm-compatible and process DECSTBM
+            // natively; redirected output is filtered by the controller itself.
+            if (!OperatingSystem.IsWindows())
+            {
+                return true;
+            }
+
+            IntPtr handle = GetStdHandle(StdOutputHandle);
+            if (handle == IntPtr.Zero || handle == new IntPtr(-1))
+            {
+                return false;
+            }
+
+            if (!GetConsoleMode(handle, out uint mode))
+            {
+                return false;
+            }
+
+            // EnableAnsi() tried to set this flag at startup; if the terminal
+            // accepted it, DECSTBM scroll regions are honored.
+            return (mode & EnableVirtualTerminalProcessing) != 0;
+        }
+    }
+
+    /// <inheritdoc />
     public void EnableAnsi()
     {
         // Ensure Unicode (emoji, box-drawing, etc.) renders instead of "??".

@@ -9,6 +9,15 @@ public interface IAnsiConsoleConfigurator
     /// Enables ANSI processing for the current console.
     /// </summary>
     void EnableAnsi();
+
+    /// <summary>
+    /// Gets a value indicating whether the terminal actually honors virtual-terminal
+    /// sequences (i.e. <c>ENABLE_VIRTUAL_TERMINAL_PROCESSING</c> is set on the
+    /// output handle, on Windows). True on non-Windows terminals (xterm-compatible;
+    /// redirected output is filtered elsewhere). Used by the fixed header/footer
+    /// controller to decide whether its DECSTBM scroll region will be honored.
+    /// </summary>
+    bool IsVirtualTerminalEnabled { get; }
 }
 
 /// <summary>

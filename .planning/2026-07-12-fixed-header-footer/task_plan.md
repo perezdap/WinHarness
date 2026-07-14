@@ -120,9 +120,26 @@ scroll region.
       scrolling path. Steering input stays inline in the region during a turn.
       Tests: +4 headless tests; suite 315 → 319, 0 failed. Phase 0 spike re-run
       `ok=true`.
-- [ ] Phase 5 — Robust teardown + fallbacks: restore terminal on exit, abort,
+- [x] Phase 5 — Robust teardown + fallbacks: restore terminal on exit, abort,
       exceptions; auto-disable region on unsupported terminals (from Phase 0
       capability probe) and fall back to shipped behavior.
+      **DONE 2026-07-13:** replaced the hard env opt-in with a capability probe.
+      `WINHARNESS_FIXED_HEADER` is now an override: unset → trust the probe,
+      `1`/`true` → force on, `0`/`false` → force off. Added
+      `IAnsiConsoleConfigurator.IsVirtualTerminalEnabled` and implemented it in
+      `WindowsAnsiConsoleConfigurator` (checks `ENABLE_VIRTUAL_TERMINAL_PROCESSING`
+      is set on the output handle via the existing `GetConsoleMode` P/Invoke;
+      non-Windows returns `true`). `ScreenRegionController.Create(ansi)` resolves
+      it via DI; the pure three-state decision lives in `ResolveOptIn` (unit-tested).
+      Hardened teardown: `Enter` captures the prior output encoding + sets an
+      `_entered` flag; `Exit` keys off `_entered` (not `IsActive`, so it restores
+      even after `OnResize` deactivated mid-session), resets the region via the
+      parameter-less `ESC [ r` (robust when `Layout.Height` is 0 post-shrink),
+      restores cursor visibility + encoding; `Dispose` is exception-safe
+      (`IOException`/`PlatformNotSupportedException`) and idempotent. Feature now
+      on by default in modern WT/conhost; off when redirected or pre-Win10.
+      Tests: +4 (probe/override resolution + idempotent teardown); suite
+      319 → 323, 0 failed. Phase 0 spike re-run `ok=true`. Build clean.
 - [ ] Phase 6 — Tests: unit-test region math + formatters (headless); manual
       test matrix on Windows Terminal, conhost, VS Code terminal, redirected.
 - [ ] Phase 7 — Build (Release, warnings-as-errors) + full test suite + publish

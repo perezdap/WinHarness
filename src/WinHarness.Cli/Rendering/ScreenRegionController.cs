@@ -1,4 +1,5 @@
 using System.Text;
+using WinHarness.Platform;
 
 namespace WinHarness.Cli.Rendering;
 
@@ -20,15 +21,19 @@ namespace WinHarness.Cli.Rendering;
 internal sealed class ScreenRegionController : IDisposable
 {
     /// <summary>
-    /// Opt-in environment variable. Phase 1-2 stage the feature behind this flag
-    /// so the default chat experience is unchanged; Phase 5 replaces it with a
-    /// terminal-capability probe and the flag becomes a force-off override.
+    /// Override environment variable. Phase 5 replaces the hard opt-in with a
+    /// terminal-capability probe: when unset, the controller auto-enables on
+    /// terminals that report virtual-terminal processing (the DECSTBM scroll
+    /// region is honored). Set <c>1</c>/<c>true</c> to force on (skip the probe,
+    /// for terminals the probe mis-detects), or <c>0</c>/<c>false</c> to force off.
     /// </summary>
     public const string OptInEnvironmentVariable = "WINHARNESS_FIXED_HEADER";
 
     private ScreenRegionLayout _layout;
     private readonly bool _optedIn;
     private readonly bool _redirected;
+    private bool _entered;
+    private Encoding? _priorEncoding;
     private string _headerText = string.Empty;
     private string _footerText = string.Empty;
 
@@ -69,19 +74,45 @@ internal sealed class ScreenRegionController : IDisposable
     public bool IsActive => _layout.Active;
 
     /// <summary>
-    /// Resolves a controller against the current console. Returns an inactive
-    /// instance (every method a no-op) when output is redirected, the terminal is
-    /// smaller than <see cref="ScreenRegionLayout.MinimumHeight"/>/
-    /// <see cref="ScreenRegionLayout.MinimumWidth"/>, or
-    /// <see cref="OptInEnvironmentVariable"/> is unset/0.
+    /// Resolves a controller against the current console. When
+    /// <see cref="OptInEnvironmentVariable"/> is unset, the controller auto-enables
+    /// only if <paramref name="ansiConfigurator"/> reports the terminal processes
+    /// virtual-terminal sequences (so DECSTBM is honored); <c>1</c>/<c>true</c>
+    /// forces on and <c>0</c>/<c>false</c> forces off. Returns an inactive instance
+    /// (every method a no-op) when forced/ probes off, output is redirected, or the
+    /// terminal is smaller than <see cref="ScreenRegionLayout.MinimumHeight"/>/
+    /// <see cref="ScreenRegionLayout.MinimumWidth"/>.
     /// </summary>
-    public static ScreenRegionController Create()
+    public static ScreenRegionController Create(IAnsiConsoleConfigurator ansiConfigurator)
     {
-        bool optedIn = IsOptedIn(Environment.GetEnvironmentVariable(OptInEnvironmentVariable));
+        bool optedIn = ResolveOptIn(
+            Environment.GetEnvironmentVariable(OptInEnvironmentVariable),
+            ansiConfigurator.IsVirtualTerminalEnabled);
         bool redirected = Console.IsOutputRedirected || Console.IsInputRedirected;
         int height = TryGetWindowDimension(Console.WindowHeight, out int h) ? h : -1;
         int width = TryGetWindowDimension(Console.WindowWidth, out int w) ? w : -1;
         return new ScreenRegionController(ScreenRegionLayout.Resolve(optedIn, redirected, width, height), optedIn, redirected);
+    }
+
+    /// <summary>
+    /// Maps the override environment value plus the probed terminal capability to
+    /// the final opt-in decision. Unset → trust the probe; <c>0</c>/<c>false</c> →
+    /// off; anything else → on (force). Pure so it is unit-testable headlessly.
+    /// </summary>
+    internal static bool ResolveOptIn(string? value, bool terminalSupportsVirtualTerminal)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return terminalSupportsVirtualTerminal;
+        }
+
+        if (string.Equals(value, "0", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "false", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -91,14 +122,17 @@ internal sealed class ScreenRegionController : IDisposable
     /// </summary>
     public void Enter()
     {
-        if (!IsActive)
+        if (!IsActive || _entered)
         {
             return;
         }
 
         // Phase 0 finding: raw Console.Write of non-ASCII is transliterated via
         // the console output codepage. Header/footer content includes the middle
-        // dot (·) and ellipsis (…); emit as UTF-8 so they render correctly.
+        // dot (·) and ellipsis (…); emit as UTF-8 so they render correctly. Capture
+        // the prior encoding so Exit can restore it (the startup configurator may
+        // have set UTF-8 already; restore keeps teardown symmetric).
+        _priorEncoding = Console.OutputEncoding;
         Console.OutputEncoding = Encoding.UTF8;
 
         Console.CursorVisible = false;
@@ -106,6 +140,7 @@ internal sealed class ScreenRegionController : IDisposable
         SetRegion(Layout.ScrollTop, Layout.ScrollBottom);
         Repaint();
         Console.Write($"\x1b[{Layout.ScrollTop};1H");
+        _entered = true;
     }
 
     /// <summary>
@@ -232,35 +267,63 @@ internal sealed class ScreenRegionController : IDisposable
     }
 
     /// <summary>
-    /// Restores the terminal: resets the scroll region to the full height and
-    /// shows the cursor. Safe to call multiple times. No-op when inactive.
+    /// Restores the terminal: resets the scroll region to the full screen, shows
+    /// the cursor, and restores the output encoding captured by <see cref="Enter"/>.
+    /// Idempotent — keys off the internal entered flag (not <see cref="IsActive"/>),
+    /// so it still restores after <see cref="OnResize"/> deactivated the layout
+    /// mid-session. Safe to call multiple times; a no-op when <see cref="Enter"/>
+    /// never ran (inactive controller).
     /// </summary>
     public void Exit()
     {
-        if (!IsActive)
+        if (!_entered)
         {
             return;
         }
 
-        SetRegion(1, Layout.Height);
+        _entered = false;
+
+        // ESC[r with no params resets the scroll region to the full screen —
+        // robust both when the layout is still active and when OnResize already
+        // shrank the layout to inactive (where Layout.Height would be 0 and a
+        // parameterized SetRegion(1, 0) would be invalid).
+        Console.Write("\x1b[r");
         Console.CursorVisible = true;
+
+        if (_priorEncoding is not null)
+        {
+            try
+            {
+                Console.OutputEncoding = _priorEncoding;
+            }
+            catch (IOException)
+            {
+                // Output redirected away from a console mid-session; leave the
+                // encoding as-is rather than failing teardown.
+            }
+        }
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// Best-effort: swallows console exceptions so a teardown failure on an exit /
+    /// exception / Ctrl+C path can never leave the process in a worse state than
+    /// the region already being restored.
+    /// </remarks>
     public void Dispose()
     {
-        Exit();
-    }
-
-    private static bool IsOptedIn(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
+        try
         {
-            return false;
+            Exit();
         }
-
-        return !string.Equals(value, "0", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(value, "false", StringComparison.OrdinalIgnoreCase);
+        catch (IOException)
+        {
+            // Console gone (redirected/closed) during teardown — nothing to restore.
+        }
+        catch (PlatformNotSupportedException)
+        {
+            // Encoding/console APIs unavailable on this host during teardown.
+        }
     }
 
     private static bool TryGetWindowDimension(int value, out int resolved)

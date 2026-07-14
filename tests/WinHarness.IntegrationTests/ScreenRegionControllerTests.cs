@@ -119,6 +119,57 @@ public sealed class ScreenRegionControllerTests
         Assert.IsFalse(controller.IsActive);
     }
 
+    // --- Phase 5: capability probe + override resolution (pure, headless) ---
+
+    [TestMethod]
+    public void ResolveOptInDefaultsToTerminalCapabilityWhenEnvUnset()
+    {
+        // Unset/whitespace env var → trust the probe: enable when VT is supported,
+        // disable when not. (Empty string is treated as unset, matching the prior
+        // opt-in parser.)
+        Assert.IsTrue(ScreenRegionController.ResolveOptIn(null, terminalSupportsVirtualTerminal: true));
+        Assert.IsFalse(ScreenRegionController.ResolveOptIn(null, terminalSupportsVirtualTerminal: false));
+        Assert.IsTrue(ScreenRegionController.ResolveOptIn(string.Empty, terminalSupportsVirtualTerminal: true));
+        Assert.IsTrue(ScreenRegionController.ResolveOptIn("   ", terminalSupportsVirtualTerminal: true));
+        Assert.IsFalse(ScreenRegionController.ResolveOptIn("   ", terminalSupportsVirtualTerminal: false));
+    }
+
+    [TestMethod]
+    public void ResolveOptInForcesOffRegardlessOfProbeWhenEnvIsZeroOrFalse()
+    {
+        // Force-off wins even on a VT-capable terminal (the escape hatch for
+        // terminals the probe mis-detects or where the feature misbehaves).
+        Assert.IsFalse(ScreenRegionController.ResolveOptIn("0", terminalSupportsVirtualTerminal: true));
+        Assert.IsFalse(ScreenRegionController.ResolveOptIn("false", terminalSupportsVirtualTerminal: true));
+        Assert.IsFalse(ScreenRegionController.ResolveOptIn("FALSE", terminalSupportsVirtualTerminal: true));
+    }
+
+    [TestMethod]
+    public void ResolveOptInForcesOnRegardlessOfProbeWhenEnvIsTruthy()
+    {
+        // Force-on wins even on a terminal the probe rejected (e.g. a VT-capable
+        // terminal whose console-mode flag wasn't set).
+        Assert.IsTrue(ScreenRegionController.ResolveOptIn("1", terminalSupportsVirtualTerminal: false));
+        Assert.IsTrue(ScreenRegionController.ResolveOptIn("true", terminalSupportsVirtualTerminal: false));
+        Assert.IsTrue(ScreenRegionController.ResolveOptIn("yes", terminalSupportsVirtualTerminal: false));
+    }
+
+    [TestMethod]
+    public void InactiveControllerTeardownIsIdempotentAndDoesNotThrow()
+    {
+        // An inactive controller never Enter()ed; Exit/Dispose must be safe no-ops
+        // (the entered flag, not IsActive, guards teardown) so double-dispose and
+        // dispose-without-enter paths cannot corrupt the terminal.
+        ScreenRegionController controller = new(ScreenRegionLayout.Resolve(optedIn: false, redirected: false, Width, height: 40));
+
+        controller.Exit();
+        controller.Exit();
+        controller.Dispose();
+        controller.Dispose();
+
+        Assert.IsFalse(controller.IsActive);
+    }
+
     [TestMethod]
     public void InactiveControllerIsNoOpAndDoesNotThrow()
     {

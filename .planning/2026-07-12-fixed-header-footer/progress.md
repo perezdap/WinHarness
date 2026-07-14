@@ -12,20 +12,33 @@
 
 ## Current status
 
-Phase 4 complete (2026-07-13). The footer is now genuinely two rows: status on
-row `H-1` and the `›` prompt + typed input on the last row `H` (outside the
-DECSTBM region), so typed input never scrolls the conversation. Added
-`ScreenRegionController.BeginPrompt`/`EndPrompt` (DECSC save → position on
-row `H` → write `›` … clear row → DECRC restore) and a `submitNewline`
-parameter on the shared `ReadKeyLine` (the active idle path passes `false` so no
-newline is written on the terminal's last row). `ReadIdlePrompt` calls `OnResize`
-before repainting; `RunTurnWithSteeringAsync` takes `screen` and calls `OnResize`
-per steering tick. Implemented `OnResize`: re-resolve layout, early-return on
-unchanged size, re-establish region + repaint on resize-while-active, deactivate
-(reset region to full screen) on shrink-below-minimum so callers fall back to
-the shipped scrolling status-line path. Steering input stays inline in the
-region during a turn (deliberately not moved to the footer). Next: Phase 5
-(capability probe replaces env opt-in; harden teardown).
+Phase 5 complete (2026-07-13). The hard env opt-in is replaced by a
+capability probe: `WINHARNESS_FIXED_HEADER` is now an override (unset → trust
+the probe, `1` → force on, `0` → force off). Added
+`IAnsiConsoleConfigurator.IsVirtualTerminalEnabled`, implemented in
+`WindowsAnsiConsoleConfigurator` (checks `ENABLE_VIRTUAL_TERMINAL_PROCESSING`
+is set on the output handle via the existing `GetConsoleMode` P/Invoke;
+non-Windows → `true`). `ScreenRegionController.Create(ansi)` resolves it via DI;
+the pure three-state decision lives in `ResolveOptIn` (unit-tested). Feature is
+now on by default in modern Windows Terminal / conhost and off when redirected
+or on pre-Win10-Threshold terminals. Hardened teardown: `Enter` captures the
+prior output encoding + sets an `_entered` flag; `Exit` keys off `_entered`
+(not `IsActive`, so it restores even after `OnResize` deactivated mid-session),
+resets the region via the parameter-less `ESC [ r` (robust when `Layout.Height`
+is 0 post-shrink), restores cursor visibility + encoding; `Dispose` is
+exception-safe (`IOException`/`PlatformNotSupportedException`) and idempotent.
+Next: Phase 6 (manual test matrix on WT / conhost / VS Code / redirected).
+
+### Earlier: Phase 4 complete (2026-07-13)
+
+The footer is now genuinely two rows: status on row `H-1` and the `›` prompt +
+typed input on the last row `H` (outside the DECSTBM region), so typed input
+never scrolls the conversation. Added `BeginPrompt`/`EndPrompt` (DECSC save →
+position on row `H` → write `›` … clear row → DECRC restore) and a
+`submitNewline` parameter on `ReadKeyLine` (active idle path passes `false`).
+`ReadIdlePrompt` calls `OnResize` before repainting; `RunTurnWithSteeringAsync`
+takes `screen` and calls `OnResize` per steering tick. Steering input stays
+inline in the region during a turn.
 
 ### Earlier: Phase 2 complete (2026-07-13)
 
@@ -53,6 +66,12 @@ redirected).
   prompt moved into footer row `H`; implemented `OnResize` (re-resolve, re-establish
   region, deactivate below minimum); `RunTurnWithSteeringAsync` polls `OnResize`
   per tick. +4 headless tests; build clean (0 warnings); suite 315 → 319 passed,
+  0 failed, 0 skipped. Phase 0 spike re-run `ok=true`.
+- Phase 5: replaced env opt-in with capability probe (`IsVirtualTerminalEnabled`
+  on `IAnsiConsoleConfigurator`; `ResolveOptIn` pure decision); hardened
+  teardown (idempotent `_entered`-guarded `Enter`/`Exit`, encoding capture/restore,
+  parameter-less `ESC [ r` reset, exception-safe `Dispose`); `Create(ansi)` wired
+  via DI. +4 headless tests; build clean (0 warnings); suite 319 → 323 passed,
   0 failed, 0 skipped. Phase 0 spike re-run `ok=true`.
 
 ## Errors

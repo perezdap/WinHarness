@@ -1541,12 +1541,14 @@ internal static class ChatRepl
         session.ReasoningEffort = reasoningEffort;
         session.ToolFilter = toolFilter;
 
-        // Fixed header/footer (DECSTBM scroll region). Opt-in via
-        // WINHARNESS_FIXED_HEADER so the default chat experience is unchanged
-        // until streaming routing (Phase 3) lands. When active, the controller
-        // owns the top/bottom rows (banner content + live status); otherwise
-        // today's scrolling banner behavior is preserved.
-        ScreenRegionController screen = ScreenRegionController.Create();
+        // Fixed header/footer (DECSTBM scroll region). Phase 5: auto-enables on
+        // terminals that honor virtual-terminal processing (probed via the
+        // console configurator) and falls back to the shipped scrolling banner
+        // otherwise. WINHARNESS_FIXED_HEADER overrides: 1 forces on, 0 forces off.
+        // When active, the controller owns the top/bottom rows (banner content +
+        // live status); otherwise today's scrolling banner behavior is preserved.
+        ScreenRegionController screen = ScreenRegionController.Create(
+            services.GetRequiredService<IAnsiConsoleConfigurator>());
         try
         {
             screen.Enter();
