@@ -92,6 +92,34 @@ public sealed class OpenAiCompatibleProviderFactoryTests
     }
 
     [TestMethod]
+    public async Task CreateTokenSourceResolvesLegacyOpenAiOAuthAlias()
+    {
+        WinHarnessOptions options = CreateOptions();
+        options.Providers.Add(new ProviderOptions
+        {
+            Id = "openai",
+            Kind = "openai-codex-responses",
+            BaseUrl = OpenAiCodexOAuthFlow.DefaultBaseUrl,
+            Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "openai" }
+        });
+
+        InMemoryCredentialStore store = new();
+        OAuthTokenSet fresh = new("bearer-fresh", "refresh", DateTimeOffset.UtcNow.AddHours(1));
+        await store.SetSecretAsync(
+            OAuthCredentialNames.ForProvider("openai"),
+            JsonSerializer.Serialize(fresh, WinHarnessJsonSerializerContext.Default.OAuthTokenSet),
+            CancellationToken.None);
+
+        StubRefresher refresher = new(OpenAiCodexOAuthFlow.ProviderId);
+        OpenAiCompatibleProviderFactory factory = new(options, store, [refresher]);
+
+        IAuthTokenSource source = factory.CreateTokenSource("openai");
+
+        Assert.AreEqual("bearer-fresh", await source.GetAccessTokenAsync(CancellationToken.None));
+        Assert.AreEqual(0, refresher.Refreshes, "Fresh bearer must not trigger a refresh.");
+    }
+
+    [TestMethod]
     public void CreateTokenSourceThrowsActionableErrorForUnknownProvider()
     {
         WinHarnessOptions options = CreateOptions();

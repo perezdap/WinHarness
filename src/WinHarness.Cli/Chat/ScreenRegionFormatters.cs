@@ -9,7 +9,8 @@ namespace WinHarness.Cli.Chat;
 /// (<c>WinHarness chat · provider · model · effort</c>). Read fresh on each
 /// idle prompt so <c>/model</c> and <c>/effort</c> changes are reflected.
 /// Plain text only; the fixed row is written via raw <c>Console.Write</c>, so
-/// Spectre markup would render literally.
+/// Spectre markup would render literally. Bar colors are applied by the
+/// controller, not here.
 /// </summary>
 internal static class ScreenHeaderFormatter
 {
@@ -25,20 +26,24 @@ internal static class ScreenHeaderFormatter
 }
 
 /// <summary>
-/// Builds the plain-text footer status line for the fixed bottom row:
-/// <c>md on · context: AGENTS.md · SYSTEM.md · tools allow:read_file</c>.
-/// Holds only the status bits that are not already in the header (markdown,
-/// context files, tool filter). Plain text only.
+/// Builds the plain-text footer status line for the fixed status row:
+/// <c>~/project · md on · context: AGENTS.md · tools allow:read_file</c>.
+/// Leads with the workspace path (home shortened to <c>~</c>) so the cwd stays
+/// visible when the row is truncated. Plain text only; bar colors are applied
+/// by the controller.
 /// </summary>
 internal static class ScreenFooterFormatter
 {
     /// <summary>
-    /// Formats the footer status. Always includes the markdown toggle; context
-    /// and tool-filter segments are omitted when absent.
+    /// Formats the footer status. Always includes the shortened workspace path
+    /// and markdown toggle; context and tool-filter segments are omitted when
+    /// absent.
     /// </summary>
     public static string Format(ChatSession session)
     {
-        List<string> parts = [session.RenderMarkdown ? "md on" : "md off"];
+        List<string> parts = [ShortenPath(session.WorkspaceRoot)];
+
+        parts.Add(session.RenderMarkdown ? "md on" : "md off");
 
         string? context = ContextBannerFormatter.Format(session.ProjectContext);
         if (!string.IsNullOrWhiteSpace(context))
@@ -53,6 +58,44 @@ internal static class ScreenFooterFormatter
         }
 
         return string.Join(" · ", parts);
+    }
+
+    /// <summary>
+    /// Replaces a leading user-profile prefix with <c>~</c> so the cwd fits the
+    /// status bar. Leaves the path unchanged when it is not under the profile.
+    /// </summary>
+    internal static string ShortenPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return ".";
+        }
+
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return path.Trim();
+        }
+
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrEmpty(home)
+            && full.StartsWith(home, StringComparison.OrdinalIgnoreCase))
+        {
+            string tail = full[home.Length..];
+            if (tail.Length == 0)
+            {
+                return "~";
+            }
+
+            // Keep the directory separator that follows the home prefix.
+            return "~" + tail;
+        }
+
+        return full;
     }
 
     private static string? FormatToolFilter(ToolFilter? filter)

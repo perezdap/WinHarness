@@ -28,11 +28,11 @@ _Avoid_: Current thread.
 All ConversationMessages produced during one agent run: user input, assistant segments (text + tool calls), and tool results. The caller appends these to the session, not just the final assistant text.
 
 **Steering message**:
-User input queued while a Turn is running, injected as a user message between tool round-trips within the same Turn. Persisted as a normal user-message artifact.
+User input queued while a Turn is running with a `>>` prefix, injected as a user message between tool round-trips within the same Turn. Persisted as a normal user-message artifact. Unconsumed steering is promoted to a Follow-up when the Turn ends.
 _Avoid_: Interrupt, injection.
 
 **Follow-up message**:
-User input queued while a Turn is running (prefix `>>`), delivered as the next Turn's prompt after the current Turn completes.
+User input queued while a Turn is running (plain Enter, no prefix), delivered as the next Turn's prompt after the current Turn completes.
 
 **Compaction**:
 A session entry that replaces older messages in the *active context* with a summary. Full history remains in the JSONL file. Triggered manually (`/compact`) or automatically (proactive near the model's context window, or reactive retry-once on a provider context-overflow failure).

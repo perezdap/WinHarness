@@ -103,7 +103,7 @@ WinHarness persists multi-turn work as append-only JSONL files with a tree struc
 **`winharness chat` session flags:**
 
 | Flag | Short | Behavior |
-|------|-------|----------|
+| ------ | ------- | ---------- |
 | *(default)* | | Continue the most recent session for the current directory, or create a new file if none exist |
 | `--no-session` | | Ephemeral in-memory session (v0.1 behavior) |
 | `--continue-session` | `-c` | Persist the chat (required for one-shot `--prompt` to write a session file) |
@@ -118,7 +118,7 @@ One-shot `winharness chat --prompt "..."` is **ephemeral by default**. Pass `--c
 **Slash commands (sessions):**
 
 | Command | Behavior |
-|---------|----------|
+| --------- | ---------- |
 | `/session` | Show file path, id, display name, leaf id, message count, provider/model |
 | `/name <name>` | Append a `session_info` display name |
 | `/new` | Create a new session file (previous file remains on disk) |
@@ -144,6 +144,16 @@ One-shot `winharness chat --prompt "..."` is **ephemeral by default**. Pass `--c
 
 Set `"autoCompact": false` to rely on manual `/compact` only. Ephemeral sessions (`--no-session`) are never auto-compacted.
 
+**Per-request timeout.** Chat provider requests default to an **infinite** HTTP timeout so high-effort reasoning models can spend arbitrarily long thinking before their first token without WinHarness canceling the request. To bound hangs instead, set `requestTimeoutSeconds` (top-level in `config.json`) to a positive number of seconds:
+
+```json
+{
+  "requestTimeoutSeconds": 600
+}
+```
+
+A value of `0` (or omitted) means infinite.
+
 Existing commands still work: `/provider`, `/model`, `/skills`, `/skill`, `/markdown`, `/clear`, `/help`, `/exit`. `/provider` and `/model` append `model_change` entries when the session is persisted.
 
 ### Steering (typing while the agent works)
@@ -151,18 +161,20 @@ Existing commands still work: `/provider`, `/model`, `/skills`, `/skill`, `/mark
 While a turn is running you can keep typing in the REPL:
 
 | Input | Behavior |
-|-------|----------|
-| `some text` + Enter | **Steering**: delivered to the model after the current tool calls finish, within the same turn |
-| `>> some text` + Enter | **Follow-up**: runs as the next prompt after the current turn completes |
+| ------- | ---------- |
+| `some text` + Enter | **Follow-up**: queued and run as the next prompt after the current turn completes |
+| `>> some text` + Enter | **Steering**: delivered to the model after the current tool calls finish, within the same turn |
 | `/abort` + Enter | Cancels the turn; unsent steering messages become follow-up input |
+| Shift+Enter or Ctrl+J | Insert a newline without submitting (idle prompt and in-turn typing) |
 
-Steering messages are persisted in the session as ordinary user messages.
+Steering messages are persisted in the session as ordinary user messages. Steering that never finds a tool-round injection point is promoted to a follow-up when the turn ends.
 
 ### Editor input
 
 | Input | Behavior |
-|-------|----------|
+| ------- | ---------- |
 | `"""` | Start multi-line input; finish with `"""` on its own line (text after the opening marker becomes the first line) |
+| Shift+Enter / Ctrl+J | Soft newline in the single-line prompt (grows the fixed footer when region mode is on) |
 | `!command` | Run via `cmd.exe /c` (captured), print the output, and send it to the model as a user message |
 | `!!command` | Run and print only — nothing is sent to the model |
 | `@path` | Attach a file: the token stays in the prompt text and the file contents are appended as a fenced block (missing paths are left alone; files over 256 KB are skipped with a notice) |
@@ -172,7 +184,7 @@ Steering messages are persisted in the session as ordinary user messages.
 Project instructions are loaded at startup and injected into the system prompt chain (not written to the session file):
 
 | File | Scope |
-|------|-------|
+| ------ | ------- |
 | `AGENTS.md` | Global (`%APPDATA%\WinHarness\`), then each ancestor directory down to cwd |
 | `CLAUDE.md` | Same walk as `AGENTS.md` (both filenames are supported) |
 | `.winharness/SYSTEM.md` | Replaces the built-in runtime system prompt (project first, then global) |
@@ -242,7 +254,7 @@ WinHarness credential target names must use the `WinHarness:` prefix, for exampl
 
 `winharness login --provider anthropic` signs in with Claude Pro/Max via PKCE on a fixed-port loopback (`http://localhost:53692/`). Press Enter while waiting to paste the redirect URL instead (SSH/remote). Tokens are stored under `WinHarness:oauth:anthropic`; the command seeds an `anthropic` provider with `kind: anthropic-messages`.
 
-`winharness login --provider openai` (or `codex`) signs in with ChatGPT Plus/Pro via PKCE on `http://localhost:1455/auth/callback`. Tokens are stored under `WinHarness:oauth:openai-codex`; the command seeds an `openai-codex` provider with `kind: openai-codex-responses` (Responses API). See `docs/adr/ADR-0005-oauth-subscription-providers.md`.
+`winharness login --provider openai` (or `codex`) signs in with ChatGPT Plus/Pro via PKCE on `http://localhost:1455/auth/callback`. Tokens are stored under `WinHarness:oauth:openai`; the command configures an `openai` provider with `kind: openai-codex-responses` (Responses API) and discovers the account's current Codex model catalog. See `docs/adr/ADR-0005-oauth-subscription-providers.md`.
 
 > **Note:** subscription auth rides the unofficial endpoints the vendors ship for their own CLIs. They can change or be revoked at any time (ADR-0005 records this risk acceptance).
 

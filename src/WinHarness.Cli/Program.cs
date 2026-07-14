@@ -50,6 +50,7 @@ hostBuilder.Services
 
 using IHost host = hostBuilder.Build();
 host.Services.GetRequiredService<IAnsiConsoleConfigurator>().EnableAnsi();
+ConsoleApp.ServiceProvider = host.Services;
 
 var app = ConsoleApp.Create();
 
@@ -163,22 +164,23 @@ app.Add("models discover", async (
     string resolvedBaseUrl;
     string? resolvedApiKey;
     IReadOnlyDictionary<string, string>? extraHeaders = null;
+    ProviderOptions? configuredProvider = null;
 
     if (!string.IsNullOrWhiteSpace(providerId))
     {
         WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
-        ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
+        configuredProvider = options.Providers.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
 
-        resolvedBaseUrl = provider.BaseUrl
+        resolvedBaseUrl = configuredProvider.BaseUrl
             ?? throw new InvalidOperationException($"Provider '{providerId}' has no base URL; run 'winharness login --provider {providerId}' or 'winharness config wizard'.");
 
         IProviderFactory factory = host.Services.GetRequiredService<IProviderFactory>();
         resolvedApiKey = await factory.CreateTokenSource(providerId)
             .GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
 
-        if (string.Equals(provider.Auth?.OAuthProvider, "copilot", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(configuredProvider.Auth?.OAuthProvider, "copilot", StringComparison.OrdinalIgnoreCase))
         {
             extraHeaders = GitHubCopilotOAuthFlow.CopilotHeaders;
         }
@@ -189,8 +191,30 @@ app.Add("models discover", async (
         resolvedApiKey = apiKey;
     }
 
-    IReadOnlyList<CatalogModel> models = await catalog.ListModelsAsync(
-        resolvedBaseUrl, resolvedApiKey, cancellationToken, extraHeaders).ConfigureAwait(false);
+    IReadOnlyList<CatalogModel> models;
+    if (configuredProvider is not null &&
+        string.Equals(configuredProvider.Kind, "openai-codex-responses", StringComparison.OrdinalIgnoreCase))
+    {
+        string codexProviderId = providerId ?? throw new InvalidOperationException("Codex model discovery requires a provider id.");
+        IProviderFactory providerFactory = host.Services.GetRequiredService<IProviderFactory>();
+        if (providerFactory.CreateTokenSource(codexProviderId) is not OAuthTokenSource oauthSource)
+        {
+            throw new InvalidOperationException($"Provider '{providerId}' is not using an OAuth token source.");
+        }
+
+        OAuthTokenSet tokenSet = await oauthSource.LoadTokenSetAsync(cancellationToken).ConfigureAwait(false);
+        string accessToken = await oauthSource.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+        models = await new OpenAiCodexModelCatalog().ListModelsAsync(
+            resolvedBaseUrl,
+            accessToken,
+            tokenSet.AccountId ?? throw new InvalidOperationException("OpenAI token set has no account id."),
+            cancellationToken).ConfigureAwait(false);
+    }
+    else
+    {
+        models = await catalog.ListModelsAsync(
+            resolvedBaseUrl, resolvedApiKey, cancellationToken, extraHeaders).ConfigureAwait(false);
+    }
     if (models.Count == 0)
     {
         Console.WriteLine("No models returned.");
@@ -716,130 +740,7 @@ app.Add("rpc", async (CancellationToken cancellationToken) =>
     await rpcHost.RunAsync(cancellationToken).ConfigureAwait(false);
 });
 
-app.Add("login", async (string provider, string? enterpriseDomain = null, bool noDiscover = false, CancellationToken cancellationToken = default) =>
-{
-    if (string.Equals(provider, "anthropic", StringComparison.OrdinalIgnoreCase))
-    {
-        await LoginAnthropicAsync(host.Services, cancellationToken).ConfigureAwait(false);
-        return;
-    }
-
-    if (string.Equals(provider, "openai", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(provider, "codex", StringComparison.OrdinalIgnoreCase))
-    {
-        await LoginOpenAiCodexAsync(host.Services, cancellationToken).ConfigureAwait(false);
-        return;
-    }
-
-    if (!string.Equals(provider, "copilot", StringComparison.OrdinalIgnoreCase))
-    {
-        throw new InvalidOperationException($"OAuth provider '{provider}' is not supported yet. Available: copilot, anthropic, openai.");
-    }
-
-    ICredentialStore store = host.Services.GetRequiredService<ICredentialStore>();
-    ConfigStore configStore = host.Services.GetRequiredService<ConfigStore>();
-    using HttpClient http = new();
-    GitHubCopilotOAuthFlow flow = new(http, enterpriseDomain ?? "github.com");
-
-    CopilotDeviceCode device = await flow.StartDeviceFlowAsync(cancellationToken).ConfigureAwait(false);
-    AnsiConsole.MarkupLine($"Visit [bold blue]{Markup.Escape(device.VerificationUri)}[/] and enter code [bold]{Markup.Escape(device.UserCode)}[/]");
-    AnsiConsole.MarkupLine("[dim]Waiting for authorization… (Ctrl+C to cancel)[/]");
-
-    string githubToken = await flow.PollForGitHubTokenAsync(device, cancellationToken).ConfigureAwait(false);
-    OAuthTokenSet tokens = await flow.ExchangeForBearerAsync(githubToken, cancellationToken).ConfigureAwait(false);
-
-    const string providerId = "copilot";
-    await store.SetSecretAsync(
-        OAuthCredentialNames.ForProvider(providerId),
-        JsonSerializer.Serialize(tokens, WinHarnessJsonSerializerContext.Default.OAuthTokenSet),
-        cancellationToken).ConfigureAwait(false);
-
-    // Create or update the provider entry pointing at the token's proxy endpoint.
-    WinHarnessOptions current = await configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-    ProviderOptions? existing = current.Providers.FirstOrDefault(candidate =>
-        string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
-    if (existing is null)
-    {
-        existing = new ProviderOptions { Id = providerId, Kind = "openai-compatible" };
-        current.Providers.Add(existing);
-    }
-
-    existing.BaseUrl = tokens.BaseUrl ?? GitHubCopilotOAuthFlow.DefaultBaseUrl;
-    existing.Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "copilot" };
-
-    // Seed the model list from the live <baseUrl>/models endpoint (ADR-0005:
-    // available model ids come from there). The freshly-exchanged bearer and
-    // the required Copilot editor headers are attached to the request. On any
-    // failure (network, 403, empty), fall back to a single gpt-4o entry so chat
-    // still works and the user can re-run `models discover` later.
-    bool discovered = false;
-    if (!noDiscover)
-    {
-        try
-        {
-            IModelCatalog catalog = host.Services.GetRequiredService<IModelCatalog>();
-            IReadOnlyList<CatalogModel> liveModels = await AnsiConsole.Status()
-                .StartAsync("Discovering models…", async _ =>
-                    await catalog.ListModelsAsync(
-                        existing.BaseUrl,
-                        tokens.AccessToken,
-                        cancellationToken,
-                        GitHubCopilotOAuthFlow.CopilotHeaders).ConfigureAwait(false))
-                .ConfigureAwait(false);
-
-            if (liveModels.Count > 0)
-            {
-                existing.Models.Clear();
-                foreach (CatalogModel model in liveModels)
-                {
-                    existing.Models.Add(new ModelOptions
-                    {
-                        Id = model.Id,
-                        ProviderModelId = model.Id,
-                        Capabilities = new ProviderCapabilities(
-                            Streaming: true,
-                            ToolCalling: model.ToolCalling ?? true,
-                            Vision: model.Vision ?? false,
-                            PromptCaching: model.PromptCaching ?? false,
-                            StructuredOutput: model.StructuredOutput ?? false,
-                            Reasoning: model.Reasoning ?? false),
-                        ContextWindow = model.ContextWindow
-                    });
-                }
-                discovered = true;
-                AnsiConsole.MarkupLine($"[green]✓[/] Discovered [bold]{liveModels.Count}[/] models from {Markup.Escape(existing.BaseUrl)}.");
-            }
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            AnsiConsole.MarkupLine($"[yellow]Model discovery failed:[/] {Markup.Escape(ex.Message)}");
-        }
-    }
-
-    if (!discovered && existing.Models.Count == 0)
-    {
-        existing.Models.Add(new ModelOptions
-        {
-            Id = "gpt-4o",
-            ProviderModelId = "gpt-4o",
-            Capabilities = new ProviderCapabilities(
-                Streaming: true, ToolCalling: true, Vision: true,
-                PromptCaching: false, StructuredOutput: true, Reasoning: false),
-            ContextWindow = 128_000
-        });
-        if (!noDiscover)
-        {
-            AnsiConsole.MarkupLine("[dim]Seeded a fallback gpt-4o model. Re-run discovery later with: winharness models discover --provider-id copilot[/]");
-        }
-    }
-
-    await configStore.SaveAsync(current, cancellationToken).ConfigureAwait(false);
-    AnsiConsole.MarkupLine($"[green]Logged in.[/] Provider '{providerId}' configured at {Markup.Escape(existing.BaseUrl)}.");
-    if (!discovered)
-    {
-        AnsiConsole.MarkupLine("[dim]Discover models with: winharness models discover --provider-id copilot[/]");
-    }
-});
+app.Add("login", LoginCommand.Run);
 
 app.Add("login status", async (CancellationToken cancellationToken) =>
 {
@@ -1025,209 +926,6 @@ app.Add("sessions prune", async (
 });
 
 await app.RunAsync(args).ConfigureAwait(false);
-
-
-static async Task<AnthropicCallbackResult> WaitForAnthropicCallbackOrPasteAsync(
-    AnthropicOAuthFlow flow,
-    AnthropicPkceSession session,
-    CancellationToken cancellationToken)
-{
-    using CancellationTokenSource raceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-    Task<AnthropicCallbackResult> loopbackTask = flow.WaitForCallbackAsync(session, raceCts.Token).AsTask();
-    Task<AnthropicCallbackResult> pasteTask = Task.Run(async () =>
-    {
-        while (!raceCts.Token.IsCancellationRequested)
-        {
-            if (Console.KeyAvailable)
-            {
-                ConsoleKeyInfo key = Console.ReadKey(intercept: true);
-                if (key.Key is ConsoleKey.Enter or ConsoleKey.P)
-                {
-                    string pasted = AnsiConsole.Ask<string>("Paste the authorization code or full redirect URL:");
-                    return AnthropicOAuthFlow.ParseAuthorizationInput(pasted, session);
-                }
-            }
-
-            try
-            {
-                await Task.Delay(100, raceCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-        }
-
-        raceCts.Token.ThrowIfCancellationRequested();
-        throw new OperationCanceledException(raceCts.Token);
-    }, raceCts.Token);
-
-    Task completed = await Task.WhenAny(loopbackTask, pasteTask).ConfigureAwait(false);
-    await raceCts.CancelAsync().ConfigureAwait(false);
-
-    if (completed == loopbackTask)
-    {
-        return await loopbackTask.ConfigureAwait(false);
-    }
-
-    return await pasteTask.ConfigureAwait(false);
-}
-
-
-static async Task LoginOpenAiCodexAsync(IServiceProvider services, CancellationToken cancellationToken)
-{
-    ICredentialStore store = services.GetRequiredService<ICredentialStore>();
-    ConfigStore configStore = services.GetRequiredService<ConfigStore>();
-    using HttpClient http = new();
-    OpenAiCodexOAuthFlow flow = new(http);
-    OpenAiCodexPkceSession session = flow.CreatePkceSession();
-
-    AnsiConsole.MarkupLine($"Open [bold blue]{Markup.Escape(session.AuthorizeUrl)}[/] to authorize ChatGPT Plus/Pro (Codex).");
-    AnsiConsole.MarkupLine("[dim]Waiting for browser callback… (Ctrl+C to cancel, or paste the redirect URL when prompted)[/]");
-
-    OpenAiCodexCallbackResult callback;
-    try
-    {
-        callback = await flow.WaitForCallbackAsync(session, cancellationToken).ConfigureAwait(false);
-    }
-    catch (InvalidOperationException bindError) when (bindError.Message.Contains("Could not bind OAuth callback", StringComparison.Ordinal))
-    {
-        AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(bindError.Message)}[/]");
-        string pasted = AnsiConsole.Ask<string>("Paste the authorization code or full redirect URL:");
-        callback = OpenAiCodexOAuthFlow.ParseAuthorizationInput(pasted, session);
-    }
-
-    OAuthTokenSet tokens = await flow.ExchangeCodeAsync(session, callback, cancellationToken).ConfigureAwait(false);
-
-    const string providerId = "openai";
-    await store.SetSecretAsync(
-        OAuthCredentialNames.ForProvider(providerId),
-        JsonSerializer.Serialize(tokens, WinHarnessJsonSerializerContext.Default.OAuthTokenSet),
-        cancellationToken).ConfigureAwait(false);
-
-    WinHarnessOptions current = await configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-    ProviderOptions? existing = current.Providers.FirstOrDefault(candidate =>
-        string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
-    if (existing is null)
-    {
-        existing = new ProviderOptions { Id = providerId, Kind = "openai-codex-responses" };
-        current.Providers.Add(existing);
-    }
-
-    existing.Kind = "openai-codex-responses";
-    existing.BaseUrl = tokens.BaseUrl ?? OpenAiCodexOAuthFlow.DefaultBaseUrl;
-    existing.Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "openai" };
-    existing.CredentialName = null;
-
-    if (existing.Models.Count == 0)
-    {
-        foreach (ModelSeed seed in OpenAiCodexOAuthFlow.DefaultModels)
-        {
-            existing.Models.Add(new ModelOptions
-            {
-                Id = seed.Id,
-                ProviderModelId = seed.ProviderModelId,
-                Capabilities = new ProviderCapabilities(
-                    Streaming: true,
-                    ToolCalling: true,
-                    Vision: true,
-                    PromptCaching: true,
-                    StructuredOutput: false,
-                    Reasoning: seed.Reasoning),
-                ContextWindow = seed.ContextWindow,
-                SupportedReasoningEfforts = seed.Reasoning ? ["minimal", "low", "medium", "high", "extra-high"] : null,
-            });
-        }
-    }
-
-    if (string.IsNullOrWhiteSpace(current.DefaultProvider))
-    {
-        current.DefaultProvider = providerId;
-        current.DefaultModel = existing.Models[0].Id;
-    }
-
-    await configStore.SaveAsync(current, cancellationToken).ConfigureAwait(false);
-    AnsiConsole.MarkupLine($"[green]Logged in.[/] Provider '{providerId}' configured at {Markup.Escape(existing.BaseUrl)}.");
-    AnsiConsole.MarkupLine($"[dim]Seeded {existing.Models.Count} Codex models. Account: {Markup.Escape(tokens.AccountId ?? "?")}. Switch with: winharness models use {existing.Models[0].Id} --provider-id openai[/]");
-}
-
-static async Task LoginAnthropicAsync(IServiceProvider services, CancellationToken cancellationToken)
-{
-    ICredentialStore store = services.GetRequiredService<ICredentialStore>();
-    ConfigStore configStore = services.GetRequiredService<ConfigStore>();
-    using HttpClient http = new();
-    AnthropicOAuthFlow flow = new(http);
-    AnthropicPkceSession session = flow.CreatePkceSession();
-
-    AnsiConsole.MarkupLine($"Open [bold blue]{Markup.Escape(session.AuthorizeUrl)}[/] to authorize Claude Pro/Max.");
-    AnsiConsole.MarkupLine("[dim]Waiting for browser callback… Press Enter to paste the redirect URL instead (Ctrl+C to cancel).[/]");
-
-    AnthropicCallbackResult callback;
-    try
-    {
-        callback = await WaitForAnthropicCallbackOrPasteAsync(flow, session, cancellationToken).ConfigureAwait(false);
-    }
-    catch (InvalidOperationException bindError) when (bindError.Message.Contains("Could not bind OAuth callback", StringComparison.Ordinal))
-    {
-        AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(bindError.Message)}[/]");
-        string pasted = AnsiConsole.Ask<string>("Paste the authorization code or full redirect URL:");
-        callback = AnthropicOAuthFlow.ParseAuthorizationInput(pasted, session);
-    }
-
-    OAuthTokenSet tokens = await flow.ExchangeCodeAsync(session, callback, cancellationToken).ConfigureAwait(false);
-
-    const string providerId = "anthropic";
-    await store.SetSecretAsync(
-        OAuthCredentialNames.ForProvider(providerId),
-        JsonSerializer.Serialize(tokens, WinHarnessJsonSerializerContext.Default.OAuthTokenSet),
-        cancellationToken).ConfigureAwait(false);
-
-    WinHarnessOptions current = await configStore.LoadAsync(cancellationToken).ConfigureAwait(false);
-    ProviderOptions? existing = current.Providers.FirstOrDefault(candidate =>
-        string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
-    if (existing is null)
-    {
-        existing = new ProviderOptions { Id = providerId, Kind = "anthropic-messages" };
-        current.Providers.Add(existing);
-    }
-
-    existing.Kind = "anthropic-messages";
-    existing.BaseUrl = tokens.BaseUrl ?? AnthropicOAuthFlow.DefaultBaseUrl;
-    existing.Auth = new ProviderAuthOptions { Scheme = "oauth", OAuthProvider = "anthropic" };
-    existing.CredentialName = null;
-
-    if (existing.Models.Count == 0)
-    {
-        foreach (ModelSeed seed in AnthropicOAuthFlow.DefaultModels)
-        {
-            existing.Models.Add(new ModelOptions
-            {
-                Id = seed.Id,
-                ProviderModelId = seed.ProviderModelId,
-                Capabilities = new ProviderCapabilities(
-                    Streaming: true,
-                    ToolCalling: true,
-                    Vision: false,
-                    PromptCaching: true,
-                    StructuredOutput: false,
-                    Reasoning: seed.Reasoning),
-                ContextWindow = seed.ContextWindow,
-                SupportedReasoningEfforts = seed.Reasoning ? ["low", "medium", "high", "extra-high"] : null,
-            });
-        }
-    }
-
-    if (string.IsNullOrWhiteSpace(current.DefaultProvider))
-    {
-        current.DefaultProvider = providerId;
-        current.DefaultModel = existing.Models[0].Id;
-    }
-
-    await configStore.SaveAsync(current, cancellationToken).ConfigureAwait(false);
-    AnsiConsole.MarkupLine($"[green]Logged in.[/] Provider '{providerId}' configured at {Markup.Escape(existing.BaseUrl)}.");
-    AnsiConsole.MarkupLine($"[dim]Seeded {existing.Models.Count} Claude models. Switch with: winharness models use {existing.Models[0].Id} --provider-id anthropic[/]");
-}
-
 
 internal static class ChatRepl
 {
@@ -1618,6 +1316,13 @@ internal static class ChatRepl
             else
             {
                 input = ReadIdlePrompt(options, screen, session);
+                // In region mode the fixed prompt row is cleared on submit
+                // (EndPrompt), so echo the input into the scrolling conversation
+                // area — otherwise the user can't see what they just sent.
+                if (input is not null && screen.IsActive)
+                {
+                    AnsiConsole.MarkupLine("[dim]›[/] " + Markup.Escape(input));
+                }
             }
 
             if (input is null)
@@ -1799,12 +1504,12 @@ internal static class ChatRepl
 
     /// <summary>
     /// Runs a turn on a background task while polling for typed input:
-    /// plain lines queue steering (delivered between tool round-trips),
-    /// "&gt;&gt; text" queues a follow-up turn, and /abort, Esc, or Ctrl+C cancel
-    /// the turn. Uses Console.KeyAvailable polling, never a background reader,
-    /// so interactive pickers outside turns own the console exclusively. When
-    /// input is redirected, in-turn steering is unavailable and the turn is
-    /// simply awaited.
+    /// plain lines queue as follow-ups (run after this turn finishes),
+    /// "&gt;&gt; text" steers the current turn (delivered between tool
+    /// round-trips), and /abort, Esc, or Ctrl+C cancel the turn. Uses
+    /// Console.KeyAvailable polling, never a background reader, so interactive
+    /// pickers outside turns own the console exclusively. When input is
+    /// redirected, in-turn input is unavailable and the turn is simply awaited.
     /// </summary>
     private static async ValueTask RunTurnWithSteeringAsync(
         IServiceProvider services,
@@ -1862,6 +1567,8 @@ internal static class ChatRepl
                     break;
                 }
 
+                // Preserve internal newlines from Shift+Enter / Ctrl+J; only trim
+                // the outer edges so blank submits stay no-ops.
                 line = line!.Trim();
                 if (line.Length == 0)
                 {
@@ -1886,18 +1593,18 @@ internal static class ChatRepl
 
                 if (line.StartsWith(">>", StringComparison.Ordinal))
                 {
-                    string followUp = line[2..].Trim();
-                    if (followUp.Length > 0)
+                    string steer = line[2..].Trim();
+                    if (steer.Length > 0)
                     {
-                        followUps.Enqueue(followUp);
-                        AnsiConsole.MarkupLine("[dim]queued follow-up (runs after this turn)[/]");
+                        session.Steering.Enqueue(steer);
+                        AnsiConsole.MarkupLine("[dim]queued steering (delivered after current tool calls)[/]");
                     }
 
                     continue;
                 }
 
-                session.Steering.Enqueue(line);
-                AnsiConsole.MarkupLine("[dim]queued steering (delivered after current tool calls)[/]");
+                followUps.Enqueue(line);
+                AnsiConsole.MarkupLine("[dim]queued follow-up (runs after this turn)[/]");
             }
         }
         finally
@@ -1909,7 +1616,21 @@ internal static class ChatRepl
         // (Aborted turns discard any partial input.)
         if (!aborted && pending.Length > 0)
         {
-            followUps.Enqueue(StripFollowUpPrefix(pending.ToString().Trim()));
+            string leftover = pending.ToString().Trim();
+            if (leftover.Length > 0)
+            {
+                followUps.Enqueue(StripSteerPrefix(leftover));
+            }
+        }
+
+        // Steering that never found a tool-round injection point must not be
+        // lost — promote it to follow-up so it still runs.
+        if (!aborted)
+        {
+            foreach (string queued in session.Steering.DrainAll())
+            {
+                followUps.Enqueue(queued);
+            }
         }
 
         await AwaitTurnAsync(turn, cancellationToken).ConfigureAwait(false);
@@ -1932,7 +1653,8 @@ internal static class ChatRepl
     /// when the user presses Esc or Ctrl+C (turn should be cancelled),
     /// <see cref="SteeringInput.Line"/> with a completed line on Enter, or
     /// <see cref="SteeringInput.None"/> when no full input is available. Partial
-    /// input accumulates in <paramref name="pending"/>; Backspace edits it.
+    /// input accumulates in <paramref name="pending"/>; Backspace edits it;
+    /// Shift+Enter / Ctrl+J insert a soft newline without submitting.
     /// </summary>
     private static SteeringInput TryReadSteeringInput(StringBuilder pending, out string? line)
     {
@@ -1942,16 +1664,22 @@ internal static class ChatRepl
             ConsoleKeyInfo key = Console.ReadKey(intercept: true);
 
             // Esc or Ctrl+C aborts the running turn immediately, discarding any
-            // partially typed steering text.
+            // partially typed text.
             if (key.Key == ConsoleKey.Escape || IsCtrlC(key))
             {
                 if (pending.Length > 0)
                 {
-                    ClearTyped(pending.Length);
-                    pending.Clear();
+                    ClearTyped(pending, paint: null);
                 }
 
                 return SteeringInput.Abort;
+            }
+
+            if (IsSoftNewline(key))
+            {
+                pending.Append('\n');
+                Console.WriteLine();
+                continue;
             }
 
             if (key.Key == ConsoleKey.Enter)
@@ -2009,15 +1737,20 @@ internal static class ChatRepl
             screen.SetHeader(ScreenHeaderFormatter.Format(session, options));
             screen.SetFooter(ScreenFooterFormatter.Format(session));
 
-            // The prompt lives on the fixed bottom row (outside the scroll
-            // region) so typed input never scrolls the conversation. BeginPrompt
-            // saves the conversation cursor (DECSC) and positions on the prompt
-            // row; ReadKeyLine echoes there with no submit newline (a newline
-            // on the terminal's last row is the one cursor move DECSTBM does not
-            // cleanly handle); EndPrompt clears the row and restores the
-            // conversation cursor (DECRC) for the next turn's streaming output.
+            // The prompt lives in the fixed footer (outside the scroll region) so
+            // typed input never scrolls the conversation. BeginPrompt saves the
+            // conversation cursor (DECSC) and paints the empty prompt; ReadKeyLine
+            // repaints after every keystroke, soft-wrapping onto new footer rows
+            // as the buffer exceeds the width (the controller grows the footer
+            // upward); no submit newline (a newline on the terminal's last row is
+            // the one cursor move DECSTBM does not cleanly handle); EndPrompt
+            // clears the prompt block and restores the conversation cursor
+            // (DECRC) for the next turn's streaming output.
             screen.BeginPrompt();
-            string? line = ReadKeyLine(controlCancels: false, submitNewline: false);
+            string? line = ReadKeyLine(
+                controlCancels: false,
+                submitNewline: false,
+                paint: screen.WritePromptInput);
             screen.EndPrompt();
             return line;
         }
@@ -2040,9 +1773,15 @@ internal static class ChatRepl
     /// <paramref name="controlCancels"/> is true (multi-line blocks), both Esc
     /// and Ctrl+C cancel and return null. When false (idle prompt), Esc clears
     /// the buffer, Ctrl+C clears a non-empty buffer or returns null (exits the
-    /// REPL) when empty.
+    /// REPL) when empty. When <paramref name="paint"/> is set (fixed prompt
+    /// footer), every buffer change is fully redrawn through that callback
+    /// instead of echoing characters — required so soft-wrap can grow the
+    /// footer without relying on terminal autowrap on the last row.
     /// </summary>
-    private static string? ReadKeyLine(bool controlCancels, bool submitNewline = true)
+    private static string? ReadKeyLine(
+        bool controlCancels,
+        bool submitNewline = true,
+        Action<string>? paint = null)
     {
         StringBuilder buffer = new();
         bool previousTreatControlC = Console.TreatControlCAsInput;
@@ -2072,8 +1811,7 @@ internal static class ChatRepl
 
                     if (buffer.Length > 0)
                     {
-                        ClearTyped(buffer.Length);
-                        buffer.Clear();
+                        ClearTyped(buffer, paint);
                         continue;
                     }
 
@@ -2091,8 +1829,22 @@ internal static class ChatRepl
 
                     if (buffer.Length > 0)
                     {
-                        ClearTyped(buffer.Length);
-                        buffer.Clear();
+                        ClearTyped(buffer, paint);
+                    }
+
+                    continue;
+                }
+
+                if (IsSoftNewline(key))
+                {
+                    buffer.Append('\n');
+                    if (paint is not null)
+                    {
+                        paint(buffer.ToString());
+                    }
+                    else
+                    {
+                        Console.WriteLine();
                     }
 
                     continue;
@@ -2113,7 +1865,14 @@ internal static class ChatRepl
                     if (buffer.Length > 0)
                     {
                         buffer.Length--;
-                        Console.Write("\b \b");
+                        if (paint is not null)
+                        {
+                            paint(buffer.ToString());
+                        }
+                        else
+                        {
+                            Console.Write("\b \b");
+                        }
                     }
 
                     continue;
@@ -2122,7 +1881,14 @@ internal static class ChatRepl
                 if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
                 {
                     buffer.Append(key.KeyChar);
-                    Console.Write(key.KeyChar);
+                    if (paint is not null)
+                    {
+                        paint(buffer.ToString());
+                    }
+                    else
+                    {
+                        Console.Write(key.KeyChar);
+                    }
                 }
             }
         }
@@ -2136,19 +1902,40 @@ internal static class ChatRepl
         key.Key == ConsoleKey.C && (key.Modifiers & ConsoleModifiers.Control) != 0;
 
     /// <summary>
-    /// Erases <paramref name="count"/> previously echoed characters from the
-    /// console by backspacing over them. Assumes the cursor sits immediately
-    /// after the typed run (no line wrapping).
+    /// Shift+Enter or Ctrl+J — insert a newline without submitting the buffer.
     /// </summary>
-    private static void ClearTyped(int count)
+    private static bool IsSoftNewline(ConsoleKeyInfo key) =>
+        (key.Key == ConsoleKey.Enter && (key.Modifiers & ConsoleModifiers.Shift) != 0)
+        || (key.Key == ConsoleKey.J && (key.Modifiers & ConsoleModifiers.Control) != 0)
+        || (key.KeyChar == '\n' && (key.Modifiers & ConsoleModifiers.Control) != 0);
+
+    /// <summary>
+    /// Clears the typed buffer. With <paramref name="paint"/>, redraws an empty
+    /// prompt row; otherwise backspaces over the echoed characters (assumes no
+    /// line wrapping — the non-region scrolling prompt path).
+    /// </summary>
+    private static void ClearTyped(StringBuilder buffer, Action<string>? paint)
     {
+        if (paint is not null)
+        {
+            buffer.Clear();
+            paint(string.Empty);
+            return;
+        }
+
+        int count = buffer.Length;
+        buffer.Clear();
         for (int i = 0; i < count; i++)
         {
             Console.Write("\b \b");
         }
     }
 
-    private static string StripFollowUpPrefix(string line) =>
+    /// <summary>
+    /// Strips a leading <c>&gt;&gt;</c> steer prefix from a partial in-turn buffer
+    /// promoted to a follow-up when the turn ends mid-keystroke.
+    /// </summary>
+    private static string StripSteerPrefix(string line) =>
         line.StartsWith(">>", StringComparison.Ordinal) ? line[2..].Trim() : line;
 
     /// <summary>
@@ -2367,7 +2154,8 @@ internal static class ChatRepl
             AnsiConsole.MarkupLine("[dim]" + Markup.Escape(contextLine) + "[/]");
         }
 
-        AnsiConsole.MarkupLine("[dim]/ to pick a command · /help for the list · /exit or Ctrl+C to quit · Esc/Ctrl+C aborts a running turn[/]");
+        AnsiConsole.MarkupLine("[dim]/ to pick a command · /help for the list · /exit or Ctrl+C to quit[/]");
+        AnsiConsole.MarkupLine("[dim]during a turn: Enter queues a follow-up · >> text steers · Esc/Ctrl+C aborts · Shift+Enter/Ctrl+J newline[/]");
         AnsiConsole.WriteLine();
     }
 

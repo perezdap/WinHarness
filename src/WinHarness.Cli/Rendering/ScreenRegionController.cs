@@ -38,6 +38,13 @@ internal sealed class ScreenRegionController : IDisposable
     private string _footerText = string.Empty;
 
     /// <summary>
+    /// How many terminal rows the active prompt currently occupies (1 when idle /
+    /// empty). Grows as <see cref="WritePromptInput"/> soft-wraps past the width;
+    /// reset by <see cref="EndPrompt"/>.
+    /// </summary>
+    private int _promptRows = 1;
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="ScreenRegionController"/>
     /// class. Use <see cref="Create"/> to resolve the layout against the real
     /// console; this constructor is for test seams that already hold a layout.
@@ -136,6 +143,9 @@ internal sealed class ScreenRegionController : IDisposable
         Console.OutputEncoding = Encoding.UTF8;
 
         Console.CursorVisible = false;
+        // Alternate screen buffer so Exit can restore the caller's prior
+        // terminal contents instead of leaving fixed-row chrome behind.
+        Console.Write("\x1b[?1049h");
         Console.Write("\x1b[2J\x1b[H");
         SetRegion(Layout.ScrollTop, Layout.ScrollBottom);
         Repaint();
@@ -145,34 +155,35 @@ internal sealed class ScreenRegionController : IDisposable
 
     /// <summary>
     /// Sets the header text (plain text; Spectre markup is not interpreted in
-    /// the fixed row) and repaints the fixed header row, truncated to the
-    /// terminal width. No-op when inactive.
+    /// the fixed row) and repaints the fixed header row as a blue accent bar,
+    /// truncated/padded to the terminal width. No-op when inactive.
     /// </summary>
     public void SetHeader(string text)
     {
         _headerText = text;
         if (IsActive)
         {
-            WriteFixed(1, Truncate(text, Layout.Width));
+            WriteBar(1, _headerText, BarStyle.Header);
         }
     }
 
     /// <summary>
-    /// Sets the footer text (plain text) on the last terminal row, truncated to
-    /// the terminal width, and repaints it. No-op when inactive.
+    /// Sets the footer status text (plain text) and repaints it as a cyan
+    /// accent bar on the status row, truncated/padded to the terminal width.
+    /// No-op when inactive.
     /// </summary>
     public void SetFooter(string text)
     {
         _footerText = text;
         if (IsActive)
         {
-            WriteFixed(Layout.FooterStatusRow, Truncate(text, Layout.Width));
+            WriteBar(Layout.FooterStatusRow, _footerText, BarStyle.Status);
         }
     }
 
     /// <summary>
-    /// Repaints the fixed header and footer rows from the last text set via
-    /// <see cref="SetHeader"/>/<see cref="SetFooter"/>. No-op when inactive.
+    /// Repaints the fixed header and footer status bars from the last text set
+    /// via <see cref="SetHeader"/>/<see cref="SetFooter"/>. No-op when inactive.
     /// </summary>
     public void Repaint()
     {
@@ -181,8 +192,8 @@ internal sealed class ScreenRegionController : IDisposable
             return;
         }
 
-        WriteFixed(1, Truncate(_headerText, Layout.Width));
-        WriteFixed(Layout.FooterStatusRow, Truncate(_footerText, Layout.Width));
+        WriteBar(1, _headerText, BarStyle.Header);
+        WriteBar(Layout.FooterStatusRow, _footerText, BarStyle.Status);
     }
 
     /// <summary>
@@ -218,6 +229,7 @@ internal sealed class ScreenRegionController : IDisposable
             // away naturally.
             Console.Write("\x1b[r");
             Console.CursorVisible = true;
+            _promptRows = 1;
             _layout = next;
             return;
         }
@@ -225,6 +237,8 @@ internal sealed class ScreenRegionController : IDisposable
         // Resize while active: re-establish the region against the new size and
         // repaint the fixed rows. Conversation content already on screen is not
         // reflowed (DECSTBM does not track it); acceptable for an opt-in feature.
+        // Prompt wrap is recomputed on the next WritePromptInput keystroke.
+        _promptRows = 1;
         _layout = next;
         Console.Write("\x1b[2J\x1b[H");
         SetRegion(next.ScrollTop, next.ScrollBottom);
@@ -233,11 +247,10 @@ internal sealed class ScreenRegionController : IDisposable
     }
 
     /// <summary>
-    /// Saves the conversation cursor (DECSC), moves to the fixed prompt row
-    /// (the last terminal row), clears it, and writes the <c>›</c> prompt glyph
-    /// so the subsequent key loop can echo typed input on that row without
-    /// scrolling the conversation region. Pair with <see cref="EndPrompt"/>. No-op
-    /// when inactive.
+    /// Saves the conversation cursor (DECSC) and paints an empty prompt on the
+    /// fixed footer so the subsequent key loop can echo typed input without
+    /// scrolling the conversation region. Pair with <see cref="EndPrompt"/>.
+    /// No-op when inactive.
     /// </summary>
     public void BeginPrompt()
     {
@@ -246,14 +259,72 @@ internal sealed class ScreenRegionController : IDisposable
             return;
         }
 
-        int row = Layout.FooterPromptRow;
-        Console.Write($"\x1b7\x1b[{row};1H\x1b[2K› ");
+        // DECSC first so EndPrompt can restore the conversation cursor. Then
+        // paint the empty prompt (prefix only) via WritePromptInput.
+        Console.Write("\u001b7");
+        WritePromptInput(string.Empty);
     }
 
     /// <summary>
-    /// Clears the fixed prompt row and restores the conversation cursor saved by
-    /// <see cref="BeginPrompt"/> (DECRC). Safe to call when inactive or when
-    /// <see cref="BeginPrompt"/> was not called. No-op when inactive.
+    /// Repaints the fixed prompt with <paramref name="buffer"/> soft-wrapped to
+    /// the terminal width. When the wrap needs more than one row, the scroll
+    /// region shrinks and the status/prompt block grows upward so typing past the
+    /// edge continues on the next line. Call after every keystroke while the
+    /// prompt is active. No-op when inactive.
+    /// </summary>
+    public void WritePromptInput(string buffer)
+    {
+        if (!IsActive)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> wrapped = PromptLineView.Wrap(buffer, Layout.Width);
+        if (wrapped.Count == 0)
+        {
+            return;
+        }
+
+        // Keep at least one scrolling row so DECSTBM stays valid (top <= bottom).
+        int maxPromptRows = Math.Max(1, Layout.Height - ScreenRegionLayout.HeaderRows - 1 /* status */ - 1 /* scroll */);
+        int start = wrapped.Count > maxPromptRows ? wrapped.Count - maxPromptRows : 0;
+        int promptRows = wrapped.Count - start;
+        int statusRow = Layout.Height - promptRows;
+        int scrollBottom = statusRow - 1;
+
+        if (promptRows != _promptRows)
+        {
+            // Growing: steal rows from the scroll region. Shrinking: give them
+            // back. Clear abandoned prompt rows when shrinking so stale glyphs
+            // do not linger above the new status line.
+            if (promptRows < _promptRows)
+            {
+                int oldStatusRow = Layout.Height - _promptRows;
+                for (int row = oldStatusRow; row < statusRow; row++)
+                {
+                    Console.Write($"\u001b[{row};1H\u001b[2K");
+                }
+            }
+
+            SetRegion(Layout.ScrollTop, scrollBottom);
+            _promptRows = promptRows;
+        }
+
+        // Paint status + prompt without DECSC/DECRC — BeginPrompt already holds
+        // the conversation cursor in the single DECSC slot. Status is a cyan
+        // accent bar; prompt rows stay normal so typing reads clearly.
+        Console.Write($"\u001b[{statusRow};1H\u001b[2K{FormatBar(_footerText, Layout.Width, BarStyle.Status)}");
+        for (int i = 0; i < promptRows; i++)
+        {
+            Console.Write($"\u001b[{statusRow + 1 + i};1H\u001b[2K{wrapped[start + i]}");
+        }
+    }
+
+    /// <summary>
+    /// Clears the prompt block, restores the default one-row footer layout, and
+    /// restores the conversation cursor saved by <see cref="BeginPrompt"/>
+    /// (DECRC). Safe to call when inactive or when <see cref="BeginPrompt"/> was
+    /// not called. No-op when inactive.
     /// </summary>
     public void EndPrompt()
     {
@@ -262,13 +333,23 @@ internal sealed class ScreenRegionController : IDisposable
             return;
         }
 
-        int row = Layout.FooterPromptRow;
-        Console.Write($"\x1b[{row};1H\x1b[2K\x1b8");
+        int statusRow = Layout.Height - _promptRows;
+        for (int row = statusRow; row <= Layout.Height; row++)
+        {
+            Console.Write($"\u001b[{row};1H\u001b[2K");
+        }
+
+        _promptRows = 1;
+        SetRegion(Layout.ScrollTop, Layout.ScrollBottom);
+        // Put the status bar back on its default row (Height - 1).
+        Console.Write($"\u001b[{Layout.FooterStatusRow};1H\u001b[2K{FormatBar(_footerText, Layout.Width, BarStyle.Status)}");
+        Console.Write("\u001b8");
     }
 
     /// <summary>
-    /// Restores the terminal: resets the scroll region to the full screen, shows
-    /// the cursor, and restores the output encoding captured by <see cref="Enter"/>.
+    /// Restores the terminal: resets the scroll region, leaves the alternate
+    /// screen buffer (bringing back the caller's prior contents), shows the
+    /// cursor, and restores the output encoding captured by <see cref="Enter"/>.
     /// Idempotent — keys off the internal entered flag (not <see cref="IsActive"/>),
     /// so it still restores after <see cref="OnResize"/> deactivated the layout
     /// mid-session. Safe to call multiple times; a no-op when <see cref="Enter"/>
@@ -282,12 +363,12 @@ internal sealed class ScreenRegionController : IDisposable
         }
 
         _entered = false;
+        _promptRows = 1;
 
-        // ESC[r with no params resets the scroll region to the full screen —
-        // robust both when the layout is still active and when OnResize already
-        // shrank the layout to inactive (where Layout.Height would be 0 and a
-        // parameterized SetRegion(1, 0) would be invalid).
-        Console.Write("\x1b[r");
+        // Reset scroll region first (parameterless ESC[r works even when the
+        // layout was deactivated mid-session), then leave the alternate screen
+        // so the fixed header/footer/prompt chrome disappears with the buffer.
+        Console.Write("\x1b[r\x1b[?1049l");
         Console.CursorVisible = true;
 
         if (_priorEncoding is not null)
@@ -351,12 +432,43 @@ internal sealed class ScreenRegionController : IDisposable
         return text[..(width - 1)] + "…";
     }
 
+    private enum BarStyle
+    {
+        Header,
+        Status,
+    }
+
     /// <summary>
-    /// Paints a fixed row: save the cursor (DECSC), move to <paramref name="row"/>,
-    /// clear the line, write the text, then restore the cursor (DECRC) so the
-    /// conversation cursor is undisturbed.
+    /// Truncates/pads <paramref name="text"/> to <paramref name="width"/> and wraps
+    /// it in a solid accent-bar SGR (blue header / cyan status, bright white text)
+    /// so the chrome reads apart from the scrolling conversation.
     /// </summary>
-    private static void WriteFixed(int row, string text) => Console.Write($"\x1b7\x1b[{row};1H\x1b[2K{text}\x1b8");
+    private static string FormatBar(string text, int width, BarStyle style)
+    {
+        if (width <= 0)
+        {
+            return string.Empty;
+        }
+
+        string body = Truncate(text, width);
+        if (body.Length < width)
+        {
+            body = body.PadRight(width);
+        }
+
+        // 44 = blue bg, 46 = cyan bg, 97 = bright white fg. Reset with SGR 0 so
+        // lingering reverse/intensity from other writers cannot leak into the bar.
+        string open = style == BarStyle.Header ? "\x1b[44;97m" : "\x1b[46;97m";
+        return $"{open}{body}\x1b[0m";
+    }
+
+    /// <summary>
+    /// Paints a colored fixed bar: save the cursor (DECSC), move to
+    /// <paramref name="row"/>, clear the line, write the bar, then restore the
+    /// cursor (DECRC) so the conversation cursor is undisturbed.
+    /// </summary>
+    private void WriteBar(int row, string text, BarStyle style) =>
+        Console.Write($"\u001b7\u001b[{row};1H\u001b[2K{FormatBar(text, Layout.Width, style)}\u001b8");
 }
 
 /// <summary>

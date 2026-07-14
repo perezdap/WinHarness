@@ -183,9 +183,76 @@ public sealed class ScreenRegionControllerTests
         controller.SetHeader("x");
         controller.SetFooter("y");
         controller.Repaint();
+        controller.WritePromptInput("typed");
         controller.OnResize();
         controller.Exit();
         controller.Dispose();
+    }
+
+    // --- Fixed prompt footer: soft-wrap onto additional rows ---
+
+    [TestMethod]
+    public void PromptLineViewFitsShortBufferWithPrefix()
+    {
+        IReadOnlyList<string> lines = PromptLineView.Wrap("hello", width: 20);
+
+        Assert.AreEqual(1, lines.Count);
+        Assert.AreEqual("› hello", lines[0]);
+    }
+
+    [TestMethod]
+    public void PromptLineViewWrapsAtWordBoundaryWhenBufferExceedsWidth()
+    {
+        const int width = 10;
+        // Prefix is 2 chars ("› "), so first row holds 8 content chars.
+        // "hello world" → break after "hello", not mid-"world".
+        IReadOnlyList<string> lines = PromptLineView.Wrap("hello world", width);
+
+        Assert.AreEqual(2, lines.Count);
+        Assert.AreEqual(PromptLineView.Prefix + "hello", lines[0]);
+        Assert.AreEqual("world", lines[1]);
+        Assert.IsTrue(lines.All(static line => line.Length <= width));
+    }
+
+    [TestMethod]
+    public void PromptLineViewHardBreaksOversizedToken()
+    {
+        const int width = 10;
+        // No whitespace — must hard-break mid-token as a last resort.
+        string buffer = new('x', 12);
+
+        IReadOnlyList<string> lines = PromptLineView.Wrap(buffer, width);
+
+        Assert.AreEqual(2, lines.Count);
+        Assert.AreEqual(PromptLineView.Prefix + new string('x', 8), lines[0]);
+        Assert.AreEqual(new string('x', 4), lines[1]);
+    }
+
+    [TestMethod]
+    public void PromptLineViewEmptyBufferIsPrefixOnly()
+    {
+        IReadOnlyList<string> lines = PromptLineView.Wrap(string.Empty, width: 40);
+
+        Assert.AreEqual(1, lines.Count);
+        Assert.AreEqual(PromptLineView.Prefix, lines[0]);
+    }
+
+    [TestMethod]
+    public void PromptLineViewHardNewlineStartsNewRow()
+    {
+        IReadOnlyList<string> lines = PromptLineView.Wrap("ab\ncd", width: 20);
+
+        Assert.AreEqual(2, lines.Count);
+        Assert.AreEqual(PromptLineView.Prefix + "ab", lines[0]);
+        Assert.AreEqual("cd", lines[1]);
+    }
+
+    [TestMethod]
+    public void PromptLineViewDegenerateWidthNeverThrows()
+    {
+        Assert.AreEqual(0, PromptLineView.Wrap("abc", width: 0).Count);
+        Assert.AreEqual(0, PromptLineView.Wrap("abc", width: -1).Count);
+        Assert.AreEqual("›", PromptLineView.Wrap("abc", width: 1)[0]);
     }
 
     // The formatters are plain text (the fixed rows are written via raw
@@ -222,14 +289,27 @@ public sealed class ScreenRegionControllerTests
     }
 
     [TestMethod]
-    public void FooterFormatterIncludesMarkdownAndOmitsAbsentSegments()
+    public void FooterFormatterLeadsWithWorkspacePathAndMarkdown()
     {
         ChatSession session = NewSession();
 
         string footer = ScreenFooterFormatter.Format(session);
 
-        Assert.AreEqual("md on", footer);
+        string expectedPath = ScreenFooterFormatter.ShortenPath(session.WorkspaceRoot);
+        StringAssert.StartsWith(footer, expectedPath + " · md on");
         Assert.IsFalse(footer.Contains('['), "footer must not contain Spectre markup");
+    }
+
+    [TestMethod]
+    public void FooterFormatterShortensHomePrefixedPaths()
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        Assert.IsFalse(string.IsNullOrEmpty(home), "user profile must be resolvable");
+
+        string root = Path.Combine(home, "WinHarnessFooterCwd");
+        string shortened = ScreenFooterFormatter.ShortenPath(root);
+
+        Assert.AreEqual("~" + Path.DirectorySeparatorChar + "WinHarnessFooterCwd", shortened);
     }
 
     [TestMethod]

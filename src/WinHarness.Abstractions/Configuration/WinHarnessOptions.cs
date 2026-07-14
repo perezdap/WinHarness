@@ -38,6 +38,15 @@ public sealed class WinHarnessOptions
     /// as untrusted), "always", or "never".
     /// </summary>
     public string DefaultProjectTrust { get; set; } = "ask";
+
+    /// <summary>
+    /// Gets or sets the per-request HTTP timeout applied to chat provider
+    /// requests, in seconds. A value of 0 (the default) means an infinite
+    /// timeout, which lets high-effort reasoning models spend arbitrarily long
+    /// "thinking" before emitting their first token without the harness
+    /// canceling the request. Set to a positive number to bound hangs.
+    /// </summary>
+    public int RequestTimeoutSeconds { get; set; } = 0;
 }
 
 /// <summary>

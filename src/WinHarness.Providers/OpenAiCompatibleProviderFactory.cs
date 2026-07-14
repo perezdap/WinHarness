@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using OpenAI.Chat;
@@ -49,17 +50,18 @@ public sealed class OpenAiCompatibleProviderFactory : IProviderFactory
             ?? throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{providerId}'.");
 
         IAuthTokenSource tokenSource = CreateTokenSource(provider);
+        TimeSpan requestTimeout = ResolveRequestTimeout(_options.RequestTimeoutSeconds);
         if (string.Equals(provider.Kind, "anthropic-messages", StringComparison.OrdinalIgnoreCase))
         {
-            return new AnthropicMessagesChatProvider(provider, model, tokenSource);
+            return new AnthropicMessagesChatProvider(provider, model, tokenSource, requestTimeout);
         }
 
         if (string.Equals(provider.Kind, "openai-codex-responses", StringComparison.OrdinalIgnoreCase))
         {
-            return new OpenAiCodexResponsesChatProvider(provider, model, tokenSource);
+            return new OpenAiCodexResponsesChatProvider(provider, model, tokenSource, requestTimeout);
         }
 
-        return new OpenAiCompatibleChatProvider(provider, model, tokenSource);
+        return new OpenAiCompatibleChatProvider(provider, model, tokenSource, requestTimeout);
     }
 
     /// <inheritdoc />
@@ -83,7 +85,7 @@ public sealed class OpenAiCompatibleProviderFactory : IProviderFactory
             string.Equals(scheme, "oauth", StringComparison.OrdinalIgnoreCase))
         {
             IOAuthTokenRefresher refresher = _refreshers.FirstOrDefault(candidate =>
-                string.Equals(candidate.OAuthProviderId, auth.OAuthProvider, StringComparison.OrdinalIgnoreCase))
+                MatchesOAuthProvider(candidate, auth.OAuthProvider))
                 ?? throw new InvalidOperationException(
                     $"Provider '{provider.Id}' uses OAuth flow '{auth.OAuthProvider}', but no such flow is available.");
 
@@ -92,6 +94,28 @@ public sealed class OpenAiCompatibleProviderFactory : IProviderFactory
 
         return new ApiKeyTokenSource(_credentialStore, provider.CredentialName);
     }
+
+    private static bool MatchesOAuthProvider(IOAuthTokenRefresher refresher, string? configuredProvider)
+    {
+        if (string.Equals(refresher.OAuthProviderId, configuredProvider, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Early Codex logins wrote "openai" into oauthProvider while the flow's
+        // canonical id is "openai-codex". Keep those existing configurations
+        // usable; new logins write the canonical id.
+        return string.Equals(configuredProvider, "openai", StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(refresher.OAuthProviderId, OpenAiCodexOAuthFlow.ProviderId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Resolves the per-request HTTP timeout from configuration: a non-positive
+    /// value means an infinite timeout (high-effort reasoning models may spend
+    /// a long time before the first token).
+    /// </summary>
+    private static TimeSpan ResolveRequestTimeout(int seconds)
+        => seconds <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(seconds);
 }
 
 internal sealed class OpenAiCompatibleChatProvider : IChatProvider
@@ -99,15 +123,18 @@ internal sealed class OpenAiCompatibleChatProvider : IChatProvider
     private readonly ProviderOptions _provider;
     private readonly ModelOptions _model;
     private readonly IAuthTokenSource _tokenSource;
+    private readonly TimeSpan _requestTimeout;
 
     public OpenAiCompatibleChatProvider(
         ProviderOptions provider,
         ModelOptions model,
-        IAuthTokenSource tokenSource)
+        IAuthTokenSource tokenSource,
+        TimeSpan requestTimeout)
     {
         _provider = provider;
         _model = model;
         _tokenSource = tokenSource;
+        _requestTimeout = requestTimeout;
     }
 
     public string ProviderId => _provider.Id;
@@ -120,12 +147,14 @@ internal sealed class OpenAiCompatibleChatProvider : IChatProvider
     {
         string apiKey = ResolveApiKey();
 
+        HttpClient http = new() { Timeout = _requestTimeout };
         ChatClient client = new(
             model: _model.ProviderModelId,
             credential: new ApiKeyCredential(apiKey),
             options: new OpenAIClientOptions
             {
-                Endpoint = _provider.BaseUrl is null ? null : new Uri(_provider.BaseUrl)
+                Endpoint = _provider.BaseUrl is null ? null : new Uri(_provider.BaseUrl),
+                Transport = new HttpClientPipelineTransport(http),
             });
 
         return client.AsIChatClient();
@@ -147,15 +176,18 @@ internal sealed class AnthropicMessagesChatProvider : IChatProvider
     private readonly ProviderOptions _provider;
     private readonly ModelOptions _model;
     private readonly IAuthTokenSource _tokenSource;
+    private readonly TimeSpan _requestTimeout;
 
     public AnthropicMessagesChatProvider(
         ProviderOptions provider,
         ModelOptions model,
-        IAuthTokenSource tokenSource)
+        IAuthTokenSource tokenSource,
+        TimeSpan requestTimeout)
     {
         _provider = provider;
         _model = model;
         _tokenSource = tokenSource;
+        _requestTimeout = requestTimeout;
     }
 
     public string ProviderId => _provider.Id;
@@ -176,7 +208,7 @@ internal sealed class AnthropicMessagesChatProvider : IChatProvider
             string.Equals(scheme, "oauth", StringComparison.OrdinalIgnoreCase);
 
         return new AnthropicMessagesChatClient(
-            new HttpClient(),
+            new HttpClient { Timeout = _requestTimeout },
             endpoint,
             _model.ProviderModelId,
             _tokenSource,
@@ -190,15 +222,18 @@ internal sealed class OpenAiCodexResponsesChatProvider : IChatProvider
     private readonly ProviderOptions _provider;
     private readonly ModelOptions _model;
     private readonly IAuthTokenSource _tokenSource;
+    private readonly TimeSpan _requestTimeout;
 
     public OpenAiCodexResponsesChatProvider(
         ProviderOptions provider,
         ModelOptions model,
-        IAuthTokenSource tokenSource)
+        IAuthTokenSource tokenSource,
+        TimeSpan requestTimeout)
     {
         _provider = provider;
         _model = model;
         _tokenSource = tokenSource;
+        _requestTimeout = requestTimeout;
     }
 
     public string ProviderId => _provider.Id;
@@ -228,7 +263,7 @@ internal sealed class OpenAiCodexResponsesChatProvider : IChatProvider
         }
 
         return new OpenAiCodexResponsesChatClient(
-            new HttpClient(),
+            new HttpClient { Timeout = _requestTimeout },
             endpoint,
             _model.ProviderModelId,
             _tokenSource,

@@ -38,7 +38,7 @@ public sealed class OpenAiCodexOAuthFlow : IOAuthTokenRefresher
     public const string Scopes = "openid profile email offline_access";
 
     /// <summary>Default Codex backend base URL after login.</summary>
-    public const string DefaultBaseUrl = "https://chatgpt.com/backend-api";
+    public const string DefaultBaseUrl = "https://chatgpt.com/backend-api/codex";
 
     /// <summary>JWT claim namespace that carries chatgpt_account_id.</summary>
     public const string JwtAuthClaimPath = "https://api.openai.com/auth";
