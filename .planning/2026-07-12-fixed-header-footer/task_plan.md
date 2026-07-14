@@ -87,8 +87,21 @@ scroll region.
       Per-turn `UsageFooter` still renders in the scroll stream. The `›` prompt
       stays in the region (Phase 4 moves it into the footer). Tests: 5 new
       formatter tests + width/narrow-layout test; full suite 315/0/0.
-- [ ] Phase 3 — Route all streaming/tool/markdown output through the scroll
+- [x] Phase 3 — Route all streaming/tool/markdown output through the scroll
       region; audit AssistantStreamWriter + ThinkingIndicator cursor math.
+      **DONE 2026-07-13:** audited every raw-VT site in the chat path. The live
+      streaming path is already region-safe — all writes are cursor-relative
+      (`AssistantStreamWriter.Write`, `ThinkingIndicator` uses only `\r` on the
+      current line, `MarkdownConsoleRenderer`/`ToolBatchRenderer` use Spectre),
+      which DECSTBM confines to the region. The ONLY region-unsafe VT
+      (`\x1b[0J` erase-to-end-of-screen, which would wipe the footer, plus a
+      full-`WindowHeight` cursor-up that could escape into the header) lived
+      entirely in `AssistantStreamWriter.TryEraseForReRender` + its row-tracking
+      — dead code with **zero callers** (the erase-and-re-render approach was
+      superseded by buffered markdown rendering). Removed it; `AssistantStreamWriter`
+      is now just the label + cursor-relative `Write`. Re-ran the Phase 0 spike
+      (`ok=true`, header/footer intact after cursor-relative scroll). Build
+      clean; suite 315/0/0.
 - [ ] Phase 4 — Input loops (ReadKeyLine idle + steering poll) repaint footer
       and keep the cursor inside the region; handle resize repaint.
 - [ ] Phase 5 — Robust teardown + fallbacks: restore terminal on exit, abort,
