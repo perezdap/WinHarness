@@ -26,31 +26,47 @@ internal sealed class ScreenRegionController : IDisposable
     /// </summary>
     public const string OptInEnvironmentVariable = "WINHARNESS_FIXED_HEADER";
 
+    private ScreenRegionLayout _layout;
+    private readonly bool _optedIn;
+    private readonly bool _redirected;
+    private string _headerText = string.Empty;
+    private string _footerText = string.Empty;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ScreenRegionController"/>
     /// class. Use <see cref="Create"/> to resolve the layout against the real
     /// console; this constructor is for test seams that already hold a layout.
     /// </summary>
     internal ScreenRegionController(ScreenRegionLayout layout)
+        : this(layout, optedIn: layout.Active, redirected: false)
     {
-        Layout = layout;
+    }
+
+    /// <summary>
+    /// Initializes a new instance with the opt-in/redirected flags retained so
+    /// <see cref="OnResize"/> can re-resolve the layout after the terminal size
+    /// changes.
+    /// </summary>
+    internal ScreenRegionController(ScreenRegionLayout layout, bool optedIn, bool redirected)
+    {
+        _layout = layout;
+        _optedIn = optedIn;
+        _redirected = redirected;
     }
 
     /// <summary>
     /// Gets the resolved layout. When <see cref="ScreenRegionLayout.Active"/>
     /// is <c>false</c>, every operation is a no-op.
     /// </summary>
-    public ScreenRegionLayout Layout { get; }
-
-    private string _headerText = string.Empty;
-    private string _footerText = string.Empty;
+    public ScreenRegionLayout Layout => _layout;
 
     /// <summary>
     /// Gets a value indicating whether the controller has taken over the screen
     /// (region set, fixed rows painted). <c>false</c> when redirected, too short,
-    /// or not opted in.
+    /// or not opted in. Becomes <c>false</c> after <see cref="OnResize"/> if the
+    /// terminal shrinks below the minimum size.
     /// </summary>
-    public bool IsActive => Layout.Active;
+    public bool IsActive => _layout.Active;
 
     /// <summary>
     /// Resolves a controller against the current console. Returns an inactive
@@ -65,7 +81,7 @@ internal sealed class ScreenRegionController : IDisposable
         bool redirected = Console.IsOutputRedirected || Console.IsInputRedirected;
         int height = TryGetWindowDimension(Console.WindowHeight, out int h) ? h : -1;
         int width = TryGetWindowDimension(Console.WindowWidth, out int w) ? w : -1;
-        return new ScreenRegionController(ScreenRegionLayout.Resolve(optedIn, redirected, width, height));
+        return new ScreenRegionController(ScreenRegionLayout.Resolve(optedIn, redirected, width, height), optedIn, redirected);
     }
 
     /// <summary>
@@ -115,7 +131,7 @@ internal sealed class ScreenRegionController : IDisposable
         _footerText = text;
         if (IsActive)
         {
-            WriteFixed(Layout.Height, Truncate(text, Layout.Width));
+            WriteFixed(Layout.FooterStatusRow, Truncate(text, Layout.Width));
         }
     }
 
@@ -131,17 +147,88 @@ internal sealed class ScreenRegionController : IDisposable
         }
 
         WriteFixed(1, Truncate(_headerText, Layout.Width));
-        WriteFixed(Layout.Height, Truncate(_footerText, Layout.Width));
+        WriteFixed(Layout.FooterStatusRow, Truncate(_footerText, Layout.Width));
     }
 
     /// <summary>
     /// Recomputes the region after a terminal resize and repaints the fixed
-    /// rows. Phase 2 stub: resize handling lands in Phase 4.
+    /// rows. When the terminal has shrunk below
+    /// <see cref="ScreenRegionLayout.MinimumHeight"/>/
+    /// <see cref="ScreenRegionLayout.MinimumWidth"/>, the controller deactivates
+    /// (resets the scroll region to the full screen) so the chat falls back to
+    /// the shipped scrolling status-line behavior. Safe to call from the idle and
+    /// steering input loops. No-op when the feature was never opted in.
     /// </summary>
     public void OnResize()
     {
-        // Intentionally a no-op for now; Phase 4 polls Console.WindowHeight from
-        // the input/steering loops and calls this to reset the region.
+        // Never opted in (test seam or env unset) — nothing to track.
+        if (!_optedIn)
+        {
+            return;
+        }
+
+        int height = TryGetWindowDimension(Console.WindowHeight, out int h) ? h : -1;
+        int width = TryGetWindowDimension(Console.WindowWidth, out int w) ? w : -1;
+        ScreenRegionLayout next = ScreenRegionLayout.Resolve(_optedIn, _redirected, width, height);
+        if (next == _layout)
+        {
+            return;
+        }
+
+        if (!next.Active)
+        {
+            // Terminal shrank below the minimum (or went redirected): reset the
+            // scroll region and deactivate so callers fall back to the scrolling
+            // status-line path. Fixed rows already painted are left to scroll
+            // away naturally.
+            Console.Write("\x1b[r");
+            Console.CursorVisible = true;
+            _layout = next;
+            return;
+        }
+
+        // Resize while active: re-establish the region against the new size and
+        // repaint the fixed rows. Conversation content already on screen is not
+        // reflowed (DECSTBM does not track it); acceptable for an opt-in feature.
+        _layout = next;
+        Console.Write("\x1b[2J\x1b[H");
+        SetRegion(next.ScrollTop, next.ScrollBottom);
+        Repaint();
+        Console.Write($"\x1b[{next.ScrollTop};1H");
+    }
+
+    /// <summary>
+    /// Saves the conversation cursor (DECSC), moves to the fixed prompt row
+    /// (the last terminal row), clears it, and writes the <c>›</c> prompt glyph
+    /// so the subsequent key loop can echo typed input on that row without
+    /// scrolling the conversation region. Pair with <see cref="EndPrompt"/>. No-op
+    /// when inactive.
+    /// </summary>
+    public void BeginPrompt()
+    {
+        if (!IsActive)
+        {
+            return;
+        }
+
+        int row = Layout.FooterPromptRow;
+        Console.Write($"\x1b7\x1b[{row};1H\x1b[2K› ");
+    }
+
+    /// <summary>
+    /// Clears the fixed prompt row and restores the conversation cursor saved by
+    /// <see cref="BeginPrompt"/> (DECRC). Safe to call when inactive or when
+    /// <see cref="BeginPrompt"/> was not called. No-op when inactive.
+    /// </summary>
+    public void EndPrompt()
+    {
+        if (!IsActive)
+        {
+            return;
+        }
+
+        int row = Layout.FooterPromptRow;
+        Console.Write($"\x1b[{row};1H\x1b[2K\x1b8");
     }
 
     /// <summary>
@@ -230,6 +317,18 @@ internal readonly record struct ScreenRegionLayout(bool Active, int Width, int H
 
     /// <summary>Smallest terminal width worth enabling the fixed rows for.</summary>
     public const int MinimumWidth = 20;
+
+    /// <summary>
+    /// Gets the fixed row holding the footer status line (one above the prompt
+    /// row). Meaningful only when <see cref="Active"/> is <c>true</c>.
+    /// </summary>
+    public int FooterStatusRow => Height - 1;
+
+    /// <summary>
+    /// Gets the fixed row holding the input prompt (the last terminal row).
+    /// Meaningful only when <see cref="Active"/> is <c>true</c>.
+    /// </summary>
+    public int FooterPromptRow => Height;
 
     /// <summary>
     /// Resolves the layout from the opt-in flag, redirected state, and terminal

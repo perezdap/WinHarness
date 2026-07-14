@@ -102,8 +102,24 @@ scroll region.
       is now just the label + cursor-relative `Write`. Re-ran the Phase 0 spike
       (`ok=true`, header/footer intact after cursor-relative scroll). Build
       clean; suite 315/0/0.
-- [ ] Phase 4 — Input loops (ReadKeyLine idle + steering poll) repaint footer
+- [x] Phase 4 — Input loops (ReadKeyLine idle + steering poll) repaint footer
       and keep the cursor inside the region; handle resize repaint.
+      **DONE 2026-07-13:** footer is now genuinely two rows — status on row
+      `H-1`, prompt on the last row `H` (outside the DECSTBM region). Added
+      `ScreenRegionController.BeginPrompt`/`EndPrompt` (DECSC save + position
+      on row `H` + write `›` … clear row + DECRC restore) and a
+      `submitNewline` parameter on the shared `ReadKeyLine` so the active idle
+      path submits with no newline on the terminal's last row. `ReadIdlePrompt`
+      (active path) calls `BeginPrompt` → `ReadKeyLine(submitNewline:false)` →
+      `EndPrompt`; the inactive path keeps the shipped scrolling status line.
+      `RunTurnWithSteeringAsync` now takes `ScreenRegionController screen` and
+      calls `OnResize()` each steering tick. Implemented `OnResize()`: re-resolve
+      layout from `Console.WindowWidth/Height` (early-return when unchanged),
+      re-establish DECSTBM + repaint on resize-while-active, deactivate (reset
+      region to full screen) on shrink-below-minimum so callers fall back to the
+      scrolling path. Steering input stays inline in the region during a turn.
+      Tests: +4 headless tests; suite 315 → 319, 0 failed. Phase 0 spike re-run
+      `ok=true`.
 - [ ] Phase 5 — Robust teardown + fallbacks: restore terminal on exit, abort,
       exceptions; auto-disable region on unsupported terminals (from Phase 0
       capability probe) and fall back to shipped behavior.

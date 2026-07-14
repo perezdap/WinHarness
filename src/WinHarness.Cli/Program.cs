@@ -1710,6 +1710,7 @@ internal static class ChatRepl
                 session,
                 input,
                 followUps,
+                screen,
                 cancellationToken,
                 verbose).ConfigureAwait(false);
 
@@ -1808,6 +1809,7 @@ internal static class ChatRepl
         ChatSession session,
         string prompt,
         Queue<string> followUps,
+        ScreenRegionController screen,
         CancellationToken cancellationToken,
         bool verbose)
     {
@@ -1830,6 +1832,11 @@ internal static class ChatRepl
         {
             while (!turn.IsCompleted)
             {
+                // Re-establish the scroll region if the terminal was resized
+                // while a turn was running. No-op when the feature is inactive,
+                // and a cheap early-return when the size has not changed.
+                screen.OnResize();
+
                 SteeringInput input = TryReadSteeringInput(pending, out string? line);
                 if (input == SteeringInput.None)
                 {
@@ -1987,17 +1994,34 @@ internal static class ChatRepl
     {
         if (screen.IsActive)
         {
+            // The terminal may have been resized (or shrunk below the minimum,
+            // which deactivates the controller) since the last prompt — re-resolve
+            // so the fixed rows match the current size before repainting.
+            screen.OnResize();
+        }
+
+        if (screen.IsActive)
+        {
             // Fixed rows own the status; refresh them so /model, /effort, /md,
             // and tool-filter changes are reflected without scrolling away.
             screen.SetHeader(ScreenHeaderFormatter.Format(session, options));
             screen.SetFooter(ScreenFooterFormatter.Format(session));
-        }
-        else
-        {
-            // Status line scrolls with history (shipped behavior).
-            AnsiConsole.MarkupLine(StatusLineFormatter.FormatMarkup(session, options));
+
+            // The prompt lives on the fixed bottom row (outside the scroll
+            // region) so typed input never scrolls the conversation. BeginPrompt
+            // saves the conversation cursor (DECSC) and positions on the prompt
+            // row; ReadKeyLine echoes there with no submit newline (a newline
+            // on the terminal's last row is the one cursor move DECSTBM does not
+            // cleanly handle); EndPrompt clears the row and restores the
+            // conversation cursor (DECRC) for the next turn's streaming output.
+            screen.BeginPrompt();
+            string? line = ReadKeyLine(controlCancels: false, submitNewline: false);
+            screen.EndPrompt();
+            return line;
         }
 
+        // Status line scrolls with history (shipped behavior).
+        AnsiConsole.MarkupLine(StatusLineFormatter.FormatMarkup(session, options));
         AnsiConsole.Markup("[bold green]›[/] ");
         if (Console.IsInputRedirected)
         {
@@ -2016,7 +2040,7 @@ internal static class ChatRepl
     /// the buffer, Ctrl+C clears a non-empty buffer or returns null (exits the
     /// REPL) when empty.
     /// </summary>
-    private static string? ReadKeyLine(bool controlCancels)
+    private static string? ReadKeyLine(bool controlCancels, bool submitNewline = true)
     {
         StringBuilder buffer = new();
         bool previousTreatControlC = Console.TreatControlCAsInput;
@@ -2074,7 +2098,11 @@ internal static class ChatRepl
 
                 if (key.Key == ConsoleKey.Enter)
                 {
-                    Console.WriteLine();
+                    if (submitNewline)
+                    {
+                        Console.WriteLine();
+                    }
+
                     return buffer.ToString();
                 }
 

@@ -12,12 +12,20 @@
 
 ## Current status
 
-Phase 3 complete (2026-07-13). Audit found the live streaming path already
-region-safe (all cursor-relative; DECSTBM confines it). The only region-unsafe
-VT (`\x1b[0J` end-of-screen erase + full-height cursor-up) was dead code in
-`AssistantStreamWriter.TryEraseForReRender` (zero callers) — removed. Header/
-footer content + streaming are now both correct under the region. Next:
-Phase 4 (prompt into footer, input-loop repaint, resize).
+Phase 4 complete (2026-07-13). The footer is now genuinely two rows: status on
+row `H-1` and the `›` prompt + typed input on the last row `H` (outside the
+DECSTBM region), so typed input never scrolls the conversation. Added
+`ScreenRegionController.BeginPrompt`/`EndPrompt` (DECSC save → position on
+row `H` → write `›` … clear row → DECRC restore) and a `submitNewline`
+parameter on the shared `ReadKeyLine` (the active idle path passes `false` so no
+newline is written on the terminal's last row). `ReadIdlePrompt` calls `OnResize`
+before repainting; `RunTurnWithSteeringAsync` takes `screen` and calls `OnResize`
+per steering tick. Implemented `OnResize`: re-resolve layout, early-return on
+unchanged size, re-establish region + repaint on resize-while-active, deactivate
+(reset region to full screen) on shrink-below-minimum so callers fall back to
+the shipped scrolling status-line path. Steering input stays inline in the
+region during a turn (deliberately not moved to the footer). Next: Phase 5
+(capability probe replaces env opt-in; harden teardown).
 
 ### Earlier: Phase 2 complete (2026-07-13)
 
@@ -41,6 +49,11 @@ redirected).
 - Phase 3: removed dead region-unsafe `TryEraseForReRender`; build clean; suite
   315/0/0; Phase 0 spike re-run `ok=true` (header/footer survive cursor-relative
   scroll — the same write pattern the streaming path uses).
+- Phase 4: added `BeginPrompt`/`EndPrompt` + `submitNewline` on `ReadKeyLine`;
+  prompt moved into footer row `H`; implemented `OnResize` (re-resolve, re-establish
+  region, deactivate below minimum); `RunTurnWithSteeringAsync` polls `OnResize`
+  per tick. +4 headless tests; build clean (0 warnings); suite 315 → 319 passed,
+  0 failed, 0 skipped. Phase 0 spike re-run `ok=true`.
 
 ## Errors
 

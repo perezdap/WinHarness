@@ -71,6 +71,55 @@ public sealed class ScreenRegionControllerTests
     }
 
     [TestMethod]
+    public void LayoutExposesFooterStatusAndPromptRows()
+    {
+        const int height = 40;
+
+        ScreenRegionLayout layout = ScreenRegionLayout.Resolve(optedIn: true, redirected: false, Width, height);
+
+        Assert.IsTrue(layout.Active);
+        // Two footer rows: status sits one above the prompt, prompt on the last row.
+        Assert.AreEqual(height - 1, layout.FooterStatusRow);
+        Assert.AreEqual(height, layout.FooterPromptRow);
+    }
+
+    [TestMethod]
+    public void LayoutScrollRegionEndsAboveFooterStatusRow()
+    {
+        const int height = 40;
+
+        ScreenRegionLayout layout = ScreenRegionLayout.Resolve(optedIn: true, redirected: false, Width, height);
+
+        // The scrolling region must end before the fixed footer rows so streaming
+        // output never overwrites the status or prompt rows.
+        Assert.AreEqual(layout.FooterStatusRow - 1, layout.ScrollBottom);
+    }
+
+    [TestMethod]
+    public void InactiveLayoutReportsDefaultFooterRows()
+    {
+        ScreenRegionLayout layout = ScreenRegionLayout.Resolve(optedIn: false, redirected: false, Width, height: 40);
+
+        Assert.IsFalse(layout.Active);
+        // Inactive layouts are the default struct; the row properties are not
+        // meaningful there but must not throw.
+        Assert.AreEqual(-1, layout.FooterStatusRow);
+        Assert.AreEqual(0, layout.FooterPromptRow);
+    }
+
+    [TestMethod]
+    public void OptedOutControllerOnResizeIsNoOpAndDoesNotThrow()
+    {
+        // A never-opted-in controller (test seam) must not touch the console on
+        // resize — OnResize guards on the retained opt-in flag.
+        ScreenRegionController controller = new(ScreenRegionLayout.Resolve(optedIn: false, redirected: false, Width, height: 40));
+
+        controller.OnResize();
+
+        Assert.IsFalse(controller.IsActive);
+    }
+
+    [TestMethod]
     public void InactiveControllerIsNoOpAndDoesNotThrow()
     {
         // Redirected/one-shot paths get an inactive controller; calling every
