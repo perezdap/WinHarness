@@ -88,4 +88,77 @@ public sealed class MarkdownConsoleRendererTests
         Assert.IsFalse(plain.Contains('╭') || plain.Contains('╰'),
             "A Spectre table border should not appear for pipe-less prose.");
     }
+
+    [TestMethod]
+    public void Link_WithTitle_DoesNotCrashAndUsesDestination()
+    {
+        // A markdown link with an optional title: [text](url "title"). The
+        // title's quotes must not leak into Spectre's [link=...] markup (which
+        // previously threw "Could not find color or style '"title'").
+        string markdown = "[Search](https://example.com/search \"Search results\")";
+
+        string plain = StripAnsi(RenderToPlain(markdown));
+
+        // Does not crash (the regression) and renders the link label.
+        StringAssert.Contains(plain, "Search");
+        // The title text should not leak into the rendered output.
+        Assert.IsFalse(plain.Contains("Search results", StringComparison.Ordinal),
+            "Link title must not leak into rendered output.");
+    }
+
+    [TestMethod]
+    public void Html_DetailsSummaryBlock_TagsStrippedContentKept()
+    {
+        // A model-emitted collapsible block must not leak <details>/<summary>
+        // as literal text; the inner markdown (list + code fence) stays.
+        string markdown =
+            """
+            <details>
+            <summary><strong>Click to expand</strong></summary>
+
+            - item one
+            - item two
+
+            ```rust
+            fn emoji() -> &'static str { "\u{1F98A}" }
+            ```
+            </details>
+            """;
+
+        string plain = StripAnsi(RenderToPlain(markdown));
+
+        Assert.IsFalse(plain.Contains("<details>", StringComparison.Ordinal), "<details> leaked.");
+        Assert.IsFalse(plain.Contains("</details>", StringComparison.Ordinal), "</details> leaked.");
+        Assert.IsFalse(plain.Contains("<summary>", StringComparison.Ordinal), "<summary> leaked.");
+        Assert.IsFalse(plain.Contains("<strong>", StringComparison.Ordinal), "<strong> leaked.");
+        Assert.IsTrue(plain.Contains("Click to expand", StringComparison.Ordinal), "Summary text dropped.");
+        Assert.IsTrue(plain.Contains("item one", StringComparison.Ordinal) && plain.Contains("item two", StringComparison.Ordinal),
+            "Inner list items dropped.");
+        Assert.IsTrue(plain.Contains("fn emoji", StringComparison.Ordinal), "Inner code fence dropped.");
+    }
+
+    [TestMethod]
+    public void InlineHtml_TagsStrippedFromProse()
+    {
+        // Inline <strong>/<em>/<code> in flowing prose must not leak as literal tags.
+        string markdown = "Use <strong>bold</strong> and <em>italic</em> and <code>code</code> here.";
+
+        string plain = StripAnsi(RenderToPlain(markdown));
+
+        Assert.IsFalse(plain.Contains('<'), $"Raw HTML tag leaked into: {plain}");
+        Assert.IsTrue(plain.Contains("bold") && plain.Contains("italic") && plain.Contains("code"),
+            "Inner text of inline tags was dropped.");
+    }
+
+    [TestMethod]
+    public void Prose_WithLessThan_NotTreatedAsHtml()
+    {
+        // Math/prose with '<' followed by a non-letter must not be stripped.
+        string markdown = "count < 10 and x <= 3";
+
+        string plain = StripAnsi(RenderToPlain(markdown));
+
+        StringAssert.Contains(plain, "count");
+        StringAssert.Contains(plain, "10");
+    }
 }

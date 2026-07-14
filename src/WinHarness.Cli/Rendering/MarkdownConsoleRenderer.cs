@@ -10,6 +10,20 @@ namespace WinHarness.Cli.Rendering;
 /// </summary>
 internal static class MarkdownConsoleRenderer
 {
+    /// <summary>
+    /// HTML block tags whose opening/closing lines are dropped entirely (the
+    /// tag and any attributes are not rendered). Nested inline content on
+    /// subsequent lines is left intact so a <c>&lt;details&gt;&lt;summary&gt;…
+    /// &lt;/summary&gt;…&lt;/details&gt;</c> block still shows its inner
+    /// markdown instead of raw HTML.
+    /// </summary>
+    private static readonly HashSet<string> HtmlBlockTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "details", "summary", "section", "article", "aside", "div", "figure",
+        "figcaption", "blockquote", "table", "thead", "tbody", "tfoot", "tr",
+        "ul", "ol", "li", "p", "br", "hr", "span",
+    };
+
     public static void Write(string markdown)
     {
         bool inFence = false;
@@ -47,6 +61,16 @@ internal static class MarkdownConsoleRenderer
                 continue;
             }
 
+            // HTML block tags (e.g. <details>, <summary>, </details>) render as
+            // nothing — models often wrap collapsible/markup in raw HTML that a
+            // terminal cannot display. Skip the whole line so it does not leak
+            // as literal text. Inline content on other lines is handled by
+            // RenderInline's tag stripping.
+            if (IsHtmlBlockTagLine(trimmedStart))
+            {
+                continue;
+            }
+
             // GFM table: a header row followed by a separator row (| --- | --- |).
             // Detection requires the separator to validate, so prose containing a
             // pipe never accidentally renders as a table.
@@ -74,6 +98,59 @@ internal static class MarkdownConsoleRenderer
         {
             WriteCodeFence(fenceLanguage, fenceLines);
         }
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="trimmedLine"/> consists solely
+    /// of a single HTML tag from <see cref="HtmlBlockTags"/> (optionally
+    /// self-closing and/or with attributes), possibly surrounded by whitespace.
+    /// Matches <c>&lt;details&gt;</c>, <c>&lt;/details&gt;</c>,
+    /// <c>&lt;summary&gt;…&lt;/summary&gt;</c> on one line, and
+    /// <c>&lt;br /&gt;</c>, but not prose containing an inline tag.
+    /// </summary>
+    private static bool IsHtmlBlockTagLine(string trimmedLine)
+    {
+        if (trimmedLine.Length < 3 || trimmedLine[0] != '<')
+        {
+            return false;
+        }
+
+        // Reject lines with content after the closing '>' (e.g. "<li>item") so
+        // inline-wrapped content is not dropped — RenderInline strips the tag.
+        int close = trimmedLine.IndexOf('>');
+        if (close < 0 || close != trimmedLine.Length - 1)
+        {
+            return false;
+        }
+
+        // Inner text between < and > (no angle brackets), after an optional '/'.
+        ReadOnlySpan<char> inner = trimmedLine.AsSpan(1, close - 1);
+        inner = inner.Trim();
+        if (inner.Length == 0)
+        {
+            return false;
+        }
+
+        bool isClosing = inner[0] == '/';
+        if (isClosing)
+        {
+            inner = inner[1..];
+        }
+
+        // Tag name ends at the first whitespace or '/'. Attributes follow.
+        int nameEnd = 0;
+        while (nameEnd < inner.Length && !char.IsWhiteSpace(inner[nameEnd]) && inner[nameEnd] != '/')
+        {
+            nameEnd++;
+        }
+
+        ReadOnlySpan<char> name = inner[..nameEnd];
+        if (name.Length == 0)
+        {
+            return false;
+        }
+
+        return HtmlBlockTags.Contains(name.ToString());
     }
 
     private static void WriteMarkdownLine(string line)
@@ -231,6 +308,20 @@ internal static class MarkdownConsoleRenderer
                     {
                         string label = text[(i + 1)..closeText];
                         string url = text[(closeText + 2)..closeUrl];
+                        // Markdown links may carry an optional title after the
+                        // destination: [text](url "title"). The title (and its
+                        // quotes) must not leak into the Spectre [link=...] markup —
+                        // Spectre would parse "title" as a style name and throw.
+                        // A bare destination cannot contain unencoded whitespace,
+                        // so trim from the first space when a titled suffix is
+                        // present.
+                        url = url.Trim();
+                        int titleSpace = url.IndexOf(' ');
+                        if (titleSpace >= 0)
+                        {
+                            url = url[..titleSpace];
+                        }
+
                         result.Append("[link=").Append(Markup.Escape(url)).Append("][underline blue]")
                             .Append(RenderInline(label)).Append("[/][/]");
                         i = closeUrl + 1;
@@ -239,11 +330,61 @@ internal static class MarkdownConsoleRenderer
                 }
             }
 
+            // Inline HTML: <strong>, </strong>, <em>, <code>, <br>, etc.
+            // Drop the tag entirely so raw HTML never leaks as literal text.
+            // Paired tags rely on surrounding markdown (** for bold, ` for
+            // code) to convey styling; the tag itself is noise in a terminal.
+            if (c == '<')
+            {
+                int closeTag = text.IndexOf('>', i + 1);
+                if (closeTag > i && IsInlineHtmlTag(text.AsSpan(i + 1, closeTag - i - 1)))
+                {
+                    i = closeTag + 1;
+                    continue;
+                }
+            }
+
             result.Append(Markup.Escape(c.ToString()));
             i++;
         }
 
         return result.ToString();
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="tagContent"/> (the text between
+    /// <c>&lt;</c> and <c>&gt;</c>) is a single HTML tag name, optionally closing
+    /// (<c>/name</c>), self-closing (<c>name/</code>), or carrying attributes
+    /// (<c>name attrs</c>). Tag names must be ASCII letters (rejects <c>&lt;=</c>,
+    /// <c>&lt;3</c>, and other less-than prose).
+    /// </summary>
+    private static bool IsInlineHtmlTag(ReadOnlySpan<char> tagContent)
+    {
+        ReadOnlySpan<char> inner = tagContent.Trim();
+        if (inner.Length == 0)
+        {
+            return false;
+        }
+
+        if (inner[0] == '/')
+        {
+            inner = inner[1..];
+        }
+
+        if (inner.Length == 0 || !char.IsAsciiLetter(inner[0]))
+        {
+            return false;
+        }
+
+        // The tag name is a run of ASCII letters; the rest (whitespace +
+        // attributes, or a trailing '/') does not disqualify it.
+        int nameEnd = 0;
+        while (nameEnd < inner.Length && (char.IsAsciiLetter(inner[nameEnd]) || inner[nameEnd] == '-'))
+        {
+            nameEnd++;
+        }
+
+        return nameEnd > 0;
     }
 
     private static bool IsHorizontalRule(string trimmed)

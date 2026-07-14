@@ -1750,7 +1750,17 @@ internal static class ChatRepl
             string? line = ReadKeyLine(
                 controlCancels: false,
                 submitNewline: false,
-                paint: screen.WritePromptInput);
+                paint: screen.WritePromptInput,
+                onSpecialKey: key =>
+                {
+                    if (key.Key == ConsoleKey.PageUp)
+                    {
+                        ConversationScrollback.Open(session, screen);
+                        return true;
+                    }
+
+                    return false;
+                });
             screen.EndPrompt();
             return line;
         }
@@ -1781,7 +1791,8 @@ internal static class ChatRepl
     private static string? ReadKeyLine(
         bool controlCancels,
         bool submitNewline = true,
-        Action<string>? paint = null)
+        Action<string>? paint = null,
+        Func<ConsoleKeyInfo, bool>? onSpecialKey = null)
     {
         StringBuilder buffer = new();
         bool previousTreatControlC = Console.TreatControlCAsInput;
@@ -1799,6 +1810,16 @@ internal static class ChatRepl
                 {
                     // stdin was closed (EOF, e.g. Ctrl+Z then Enter on Windows).
                     return null;
+                }
+
+                if (onSpecialKey is not null && onSpecialKey(key))
+                {
+                    if (paint is not null)
+                    {
+                        paint(buffer.ToString());
+                    }
+
+                    continue;
                 }
 
                 if (IsCtrlC(key))

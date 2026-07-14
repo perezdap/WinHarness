@@ -197,6 +197,25 @@ internal sealed class ScreenRegionController : IDisposable
     }
 
     /// <summary>
+    /// Restores the scroll region and fixed chrome after a full-screen overlay
+    /// (e.g. the conversation scrollback pager) has finished. Resets the DECSTBM
+    /// region to the layout bounds, repaints the header/footer bars, and
+    /// positions the cursor at the top of the scrolling region so the caller can
+    /// write tail content. No-op when inactive.
+    /// </summary>
+    internal void RestoreViewport()
+    {
+        if (!IsActive)
+        {
+            return;
+        }
+
+        SetRegion(Layout.ScrollTop, Layout.ScrollBottom);
+        Repaint();
+        Console.Write($"\x1b[{Layout.ScrollTop};1H");
+    }
+
+    /// <summary>
     /// Recomputes the region after a terminal resize and repaints the fixed
     /// rows. When the terminal has shrunk below
     /// <see cref="ScreenRegionLayout.MinimumHeight"/>/
