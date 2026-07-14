@@ -1,6 +1,6 @@
 # Handoff — true fixed header/footer in `winharness chat`
 
-_Last updated: 2026-07-13. Branch: `main` (clean, all pushed through `a1547c9`)._
+_Last updated: 2026-07-13. Branch: `main` (clean, all pushed through `4f6bb7b`)._
 
 ## What this is
 
@@ -10,7 +10,7 @@ scroll region and preserving native scrollback (no alt-screen). Full plan +
 rationale in `task_plan.md`; investigation notes in `findings.md`; running log
 in `progress.md` (this directory: `.planning/2026-07-12-fixed-header-footer/`).
 
-## Status: Phases 0–5 DONE, pushed to `main`. Next = Phase 6
+## Status: Phases 0–5, 7 DONE, pushed to `main`. Phase 6 (manual matrix) remains
 
 | Phase | State | Commit |
 | ------- | ------- | -------- |
@@ -20,9 +20,13 @@ in `progress.md` (this directory: `.planning/2026-07-12-fixed-header-footer/`).
 | 2 — header/footer content (formatters, width, cursor save/restore) | ✅ | `bb2edd9` |
 | 3 — streaming region-safety audit (removed dead erase path) | ✅ | `294680b` |
 | 4 — prompt-into-footer, input-loop repaint, resize | ✅ | `a1547c9` |
-| 5 — harden teardown + capability probe replaces env opt-in | ✅ | _this commit_ |
-| 6 — manual test matrix (WT / conhost / VS Code / redirected) | ⬜ next | — |
-| 7 — AOT publish + manual verify | ⬜ | — |
+| 5 — harden teardown + capability probe replaces env opt-in | ✅ | `4f6bb7b` |
+| 6 — manual test matrix (WT / conhost / VS Code / redirected) | ⬜ human | — |
+| 7 — AOT publish + manual verify | ✅ | `4f6bb7b` |
+
+Phase 6 is the only remaining item and requires a human at real terminals
+(Windows Terminal / conhost / VS Code / redirected). All headless gates are
+green; see Verification state below.
 
 ## How to try it
 
@@ -92,6 +96,16 @@ No-op when output redirected or terminal < 6 rows / < 20 cols.
   (Windows; 5 Windows-only tests skip on Linux). +4 tests vs Phase 4 (319).
 - Phase 0 spike re-verified `ok=true` after Phase 5 (header/footer intact,
   region confined to rows 3..22 of the 80×24 conhost buffer).
+- **Phase 7 AOT publish** (mirrors `.github/workflows/phase0-aot.yml`):
+  `dotnet publish src/WinHarness.Cli/WinHarness.Cli.csproj -c Release -r win-x64
+  -p:PublishAot=true` → **zero trimming/AOT warnings**; publish dir holds a
+  single native `winharness.exe` (~25 MB) and **no managed DLLs** (true native
+  AOT). Published-binary smoke checks all pass: `--version` (0.3.0),
+  `diagnostics aot` (Native AOT configured), `diagnostics write`, a `tools call`
+  round-trip (`write_file` → `read_file` → on-disk content matches), and
+  `run_command` (`cmd.exe /c echo` stdout captured). The Phase 5
+  `IAnsiConsoleConfigurator` / `ScreenRegionController` changes introduced no
+  AOT/trimming hazards — the probe reuses the existing `LibraryImport` P/Invoke.
 
 ## KNOWN pi-lens noise (NOT real — do not "fix" by changing code)
 

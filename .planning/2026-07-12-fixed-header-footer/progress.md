@@ -27,7 +27,19 @@ prior output encoding + sets an `_entered` flag; `Exit` keys off `_entered`
 resets the region via the parameter-less `ESC [ r` (robust when `Layout.Height`
 is 0 post-shrink), restores cursor visibility + encoding; `Dispose` is
 exception-safe (`IOException`/`PlatformNotSupportedException`) and idempotent.
-Next: Phase 6 (manual test matrix on WT / conhost / VS Code / redirected).
+Next: Phase 7 (AOT publish + verify) done below; Phase 6 (manual matrix on WT /
+conhost / VS Code / redirected) remains for a human at real terminals.
+
+### Earlier: Phase 7 complete (2026-07-13)
+
+AOT publish verified. `dotnet publish src/WinHarness.Cli/WinHarness.Cli.csproj
+-c Release -r win-x64 -p:PublishAot=true` → zero trimming/AOT warnings; publish
+dir holds a single native `winharness.exe` (~25 MB), no managed DLLs (true
+native AOT). Published-binary smoke checks pass: `--version` (0.3.0),
+`diagnostics aot` (Native AOT configured), `diagnostics write`, `tools call`
+round-trip (`write_file` → `read_file` → on-disk content matches), `run_command`
+(`cmd.exe /c echo` stdout captured). The Phase 5 probe reuses the existing
+`LibraryImport` P/Invoke — no AOT/trimming hazards introduced.
 
 ### Earlier: Phase 4 complete (2026-07-13)
 
@@ -73,6 +85,11 @@ redirected).
   parameter-less `ESC [ r` reset, exception-safe `Dispose`); `Create(ansi)` wired
   via DI. +4 headless tests; build clean (0 warnings); suite 319 → 323 passed,
   0 failed, 0 skipped. Phase 0 spike re-run `ok=true`.
+- Phase 7: `dotnet publish ... -r win-x64 -p:PublishAot=true` → zero trimming/AOT
+  warnings; single native `winharness.exe` (~25 MB, no managed DLLs). Published
+  binary verified: `--version`, `diagnostics aot` + `diagnostics write`, `tools
+  call` round-trip (`write_file`/`read_file`), `run_command`. No AOT hazards
+  introduced by the Phase 5 changes.
 
 ## Errors
 

@@ -142,8 +142,23 @@ scroll region.
       319 → 323, 0 failed. Phase 0 spike re-run `ok=true`. Build clean.
 - [ ] Phase 6 — Tests: unit-test region math + formatters (headless); manual
       test matrix on Windows Terminal, conhost, VS Code terminal, redirected.
-- [ ] Phase 7 — Build (Release, warnings-as-errors) + full test suite + publish
+- [ ] Phase 6 — Tests: unit-test region math + formatters (headless); manual
+      test matrix on Windows Terminal, conhost, VS Code terminal, redirected.
+      (Headless unit tests are done — 19 `ScreenRegionControllerTests`. The
+      remaining manual matrix on real terminals needs a human at each target.)
+- [x] Phase 7 — Build (Release, warnings-as-errors) + full test suite + publish
       AOT to PATH for manual verification.
+      **DONE 2026-07-13:** `dotnet build WinHarness.sln -c Release` → 0 errors,
+      0 warnings; `dotnet test` → 323 passed, 0 failed, 0 skipped.
+      `dotnet publish src/WinHarness.Cli/WinHarness.Cli.csproj -c Release -r
+      win-x64 -p:PublishAot=true` → zero trimming/AOT warnings; single native
+      `winharness.exe` (~25 MB), no managed DLLs in the publish dir. Verified the
+      published binary: `--version` (0.3.0), `diagnostics aot` (Native AOT
+      configured), `diagnostics write`, and a `tools call` round-trip
+      (`write_file` → `read_file` → on-disk content matches) + `run_command`
+      (`cmd.exe /c echo` stdout captured). The `ScreenRegionController` /
+      `IAnsiConsoleConfigurator` changes introduced no AOT/trimming hazards —
+      the probe reuses the existing `LibraryImport` P/Invoke.
 
 ## Decisions
 
