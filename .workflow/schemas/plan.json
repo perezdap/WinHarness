@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://perezdap.github.io/PSWayforge/schemas/plan.json",
+  "title": "Plan",
+  "description": "The plan artifact produced by the plan step and required before code changes.",
+  "type": "object",
+  "required": ["summary", "acceptanceCriteria"],
+  "additionalProperties": true,
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "One-line summary of the approach."
+    },
+    "steps": {
+      "type": "array",
+      "description": "Ordered implementation steps.",
+      "items": { "type": "string" }
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "description": "Criteria that must hold for the work to be considered complete.",
+      "items": { "type": "string" }
+    }
+  }
+}
+

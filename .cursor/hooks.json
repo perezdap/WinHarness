@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "beforeShellExecution": {
+      "command": "pwsh -NoProfile -File .workflow/hooks/gate.ps1 -Stage pre-tool -AsHook cursor",
+      "timeout": 60,
+      "failClosed": true
+    },
+    "preToolUse": {
+      "command": "pwsh -NoProfile -File .workflow/hooks/gate.ps1 -Stage pre-tool -AsHook cursor",
+      "timeout": 60,
+      "failClosed": true
+    }
+  },
+  "version": 1
+}

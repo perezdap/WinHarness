@@ -1,0 +1,3 @@
+#!/bin/sh
+root=$(git rev-parse --show-toplevel)
+exec pwsh -NoProfile -File "$root/.workflow/hooks/gate.ps1" -Stage pre-push -AsHook git

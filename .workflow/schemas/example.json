@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://perezdap.github.io/PSWayforge/schemas/example.json",
+  "title": "Example Artifact",
+  "description": "A minimal example artifact schema used by the default workflow.",
+  "type": "object",
+  "required": ["summary"],
+  "additionalProperties": true,
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "A concise summary of the artifact."
+    },
+    "goal": {
+      "type": "string",
+      "description": "The goal this artifact addresses."
+    },
+    "steps": {
+      "type": "array",
+      "description": "Ordered list of steps or tasks.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "description": "Criteria that must be met for the artifact to be considered complete.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata about the artifact.",
+      "properties": {
+        "createdBy": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
+

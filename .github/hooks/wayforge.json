@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "pwsh -NoProfile -File .workflow/hooks/gate.ps1 -Stage pre-tool -AsHook copilot",
+        "cwd": ".",
+        "timeoutSec": 60
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+apiVersion: wayforge/v2
+name: default
+description: A minimal agent workflow - scout, plan, build - with a plan gate and a dotenv guardrail.
+
+# File-glob sets referenced by gate `when:` predicates. The `code` scope is
+# intentionally anchored to source directories so Wayforge's own machinery
+# (.workflow/, .claude/, .agents/, ...) is not policed. Add your project's
+# source locations here.
+scopes:
+  code:
+    - "src/**"
+    - "lib/**"
+    - "app/**"
+    - "public/**"
+    - "private/**"
+    - "tests/**"
+  docs:
+    - "docs/**"
+    - "**/*.md"
+
+# Narrative process (guidance) - rendered into AGENTS.md.
+steps:
+  - id: scout
+    name: Scout Context
+    description: Read AGENTS.md, skills, and existing code to understand the task.
+  - id: plan
+    name: Plan
+    description: Produce a plan artifact that defines the approach and acceptance criteria.
+    outputs:
+      - artifact: plan.json
+        schema: plan
+  - id: build
+    name: Build
+    description: Implement the plan and keep artifacts valid against their schemas.
+
+# Enforced invariants (enforcement) - projected into harness hooks, git hooks, and CI.
+gates:
+  - id: plan-before-build
+    description: Code changes require an approved valid plan artifact
+    on:
+      - pre-tool
+      - pre-commit
+    when: changes_touch(code)
+    severity: block
+    check:
+      requires_artifact: plan.json
+      schema: plan
+
+  - id: no-edit-dotenv
+    description: Never edit or commit dotenv files
+    on:
+      - pre-tool
+      - pre-commit
+      - ci
+    when: always
+    severity: block
+    check:
+      forbid:
+        tool:
+          - edit
+          - write
+        path:
+          - "**/.env"
+          - "**/.env.*"
+
