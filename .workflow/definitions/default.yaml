@@ -2,18 +2,49 @@ apiVersion: wayforge/v2
 name: default
 description: A minimal agent workflow - scout, plan, build - with a plan gate and a dotenv guardrail.
 
-# File-glob sets referenced by gate `when:` predicates. The `code` scope is
-# intentionally anchored to source directories so Wayforge's own machinery
-# (.workflow/, .claude/, .agents/, ...) is not policed. Add your project's
-# source locations here.
+# File-glob sets referenced by gate `when:` predicates. The `code` scope matches
+# source files by extension across any layout, and EXCLUDES (via `!`) Wayforge's
+# own generated tree so scaffolding never demands a plan. Trim or extend the
+# language list to match your project.
 scopes:
   code:
-    - "src/**"
-    - "lib/**"
-    - "app/**"
-    - "public/**"
-    - "private/**"
-    - "tests/**"
+    - "**/*.ps1"
+    - "**/*.psm1"
+    - "**/*.cs"
+    - "**/*.fs"
+    - "**/*.go"
+    - "**/*.rs"
+    - "**/*.java"
+    - "**/*.kt"
+    - "**/*.py"
+    - "**/*.rb"
+    - "**/*.php"
+    - "**/*.ts"
+    - "**/*.tsx"
+    - "**/*.js"
+    - "**/*.jsx"
+    - "**/*.vue"
+    - "**/*.svelte"
+    - "**/*.c"
+    - "**/*.cc"
+    - "**/*.cpp"
+    - "**/*.h"
+    - "**/*.hpp"
+    - "**/*.m"
+    - "**/*.swift"
+    - "**/*.scala"
+    - "**/*.sql"
+    # Exclude Wayforge's own machinery (it emits .ps1/.js/.ts files) so the
+    # scaffold itself never triggers the plan gate.
+    - "!.workflow/**"
+    - "!.claude/**"
+    - "!.codex/**"
+    - "!.grok/**"
+    - "!.cursor/**"
+    - "!.opencode/**"
+    - "!.pi/**"
+    - "!.agents/**"
+    - "!.github/hooks/**"
   docs:
     - "docs/**"
     - "**/*.md"

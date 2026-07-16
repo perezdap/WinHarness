@@ -16,17 +16,7 @@ scope = "project"
 
 [[permission.rules]]
 decision = "deny"
-pattern = "Write(**/.env)"
-scope = "project"
-
-[[permission.rules]]
-decision = "deny"
 pattern = "Edit(**/.env.*)"
-scope = "project"
-
-[[permission.rules]]
-decision = "deny"
-pattern = "Write(**/.env.*)"
 scope = "project"
 
 

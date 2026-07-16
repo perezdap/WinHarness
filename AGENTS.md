@@ -48,3 +48,18 @@ and a handful of Windows-only runtime paths require Windows.
 - `winharness chat` requires a configured + reachable model provider
   (e.g. a local Ollama at `http://localhost:11434/v1`); it is not needed for a
   basic smoke test.
+
+<!-- wayforge:workflow:start -->
+## Workflow
+
+The steps below are enforced by PSWayforge gates. This section is generated from `.workflow/definitions/`; edits between the markers are overwritten.
+
+### Workflow: default
+
+A minimal agent workflow - scout, plan, build - with a plan gate and a dotenv guardrail.
+
+1. **Scout Context** (`scout`) — Read AGENTS.md, skills, and existing code to understand the task.
+2. **Plan** (`plan`) — Produce a plan artifact that defines the approach and acceptance criteria.
+3. **Build** (`build`) — Implement the plan and keep artifacts valid against their schemas.
+<!-- wayforge:workflow:end -->
+

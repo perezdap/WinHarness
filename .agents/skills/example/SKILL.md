@@ -1,3 +1,8 @@
+---
+name: example
+description: Orient an agent in this project by reading AGENTS.md and listing the available skills and workflows. Use at the start of a new session or task, when confirming project conventions, or after a long pause or context compaction.
+---
+
 # Skill: example
 
 ## Purpose

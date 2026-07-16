@@ -1,14 +1,16 @@
 {
   "hooks": {
-    "PreToolUse": {
-      "matcher": "Bash|Edit|Write",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "pwsh -NoProfile -File .workflow/hooks/gate.ps1 -Stage pre-tool -AsHook codex",
-          "timeout": 60
-        }
-      ]
-    }
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File .workflow/hooks/gate.ps1 -Stage pre-tool -AsHook codex",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
   }
 }
