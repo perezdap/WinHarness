@@ -13,6 +13,11 @@ namespace WinHarness.Cli.Rendering;
 /// </summary>
 internal sealed class ToolBatchRenderer
 {
+    private const string PendingIcon = "[dim]⠋[/]";
+    private const string SuccessIcon = "[green]✓[/]";
+    private const string FailedIcon = "[red]✗[/]";
+    private const string MixedIcon = "[yellow]~[/]";
+
     private readonly bool _verbose;
     private readonly IAnsiConsole _console;
     private int _active;
@@ -106,10 +111,15 @@ internal sealed class ToolBatchRenderer
 
     /// <summary>
     /// Writes one summary line for the in-flight batch and clears counters.
-    /// No-op when no batch is pending. Called between assistant text
-    /// segments or at the end of a turn.
+    /// No-op when no batch is pending.
     /// </summary>
-    public void Settle()
+    /// <param name="terminal">
+    /// <c>true</c> when the turn has ended or failed, so unfinished tools can no
+    /// longer receive completion events and are reported as <em>interrupted</em>.
+    /// <c>false</c> for an interim flush between assistant-text segments, where
+    /// unfinished tools are still executing and are reported as <em>running</em>.
+    /// </param>
+    public void Settle(bool terminal = false)
     {
         if (!HasPendingBatch)
         {
@@ -118,7 +128,13 @@ internal sealed class ToolBatchRenderer
 
         int calls = _calls + _active;
         int ok = _ok;
-        int failed = _failed + _active;
+        int failed = _failed;
+        // Tools still executing when the batch settles are never folded into the
+        // failed count — conflating not-yet-finished with failed is user-visible
+        // misinformation, and they have contributed no duration yet. On an interim
+        // flush they are still live ("running"); at terminal settlement they can
+        // no longer complete, so they are "interrupted".
+        int unfinished = _active;
         TimeSpan duration = _duration;
         _active = 0;
         _calls = 0;
@@ -131,8 +147,12 @@ internal sealed class ToolBatchRenderer
             ? "[bold]tool run[/]"
             : $"[bold]{calls} tool runs[/]";
 
+        string unfinishedText = unfinished > 0
+            ? $" · {unfinished} {(terminal ? "interrupted" : "running")}"
+            : string.Empty;
+
         _console.MarkupLine(
-            $"{IconFor(ok, failed)} {header} [dim]· {ok} ok · {failed} failed · {durationText}[/]");
+            $"{IconFor(ok, failed, unfinished)} {header} [dim]· {ok} ok · {failed} failed{unfinishedText} · {durationText}[/]");
     }
 
     /// <summary>
@@ -146,12 +166,12 @@ internal sealed class ToolBatchRenderer
         switch (info.Phase)
         {
             case ToolActivityPhase.Started:
-                _console.MarkupLine($"[dim]⠋[/] [bold]{label}[/]");
+                _console.MarkupLine($"{PendingIcon} [bold]{label}[/]");
                 break;
 
             case ToolActivityPhase.Completed:
             {
-                string icon = info.Succeeded == false ? "[red]✗[/]" : "[green]✓[/]";
+                string icon = info.Succeeded == false ? FailedIcon : SuccessIcon;
                 string duration = FormatDuration(info.Duration);
                 _console.MarkupLine($"{icon} [bold]{label}[/] [dim]({duration})[/]");
                 break;
@@ -163,25 +183,25 @@ internal sealed class ToolBatchRenderer
                 string exc = info.ExceptionTypeName is null
                     ? ""
                     : $" [red]{Markup.Escape(info.ExceptionTypeName)}[/]";
-                _console.MarkupLine($"[red]✗[/] [bold]{label}[/] [dim]({duration})[/]{exc}");
+                _console.MarkupLine($"{FailedIcon} [bold]{label}[/] [dim]({duration})[/]{exc}");
                 break;
             }
         }
     }
 
-    private static string IconFor(int ok, int failed)
+    private static string IconFor(int ok, int failed, int running)
     {
-        if (failed == 0)
+        if (failed == 0 && running == 0)
         {
-            return "[green]✓[/]";
+            return SuccessIcon;
         }
 
-        if (ok == 0)
+        if (failed > 0 && ok == 0 && running == 0)
         {
-            return "[red]✗[/]";
+            return FailedIcon;
         }
 
-        return "[yellow]~[/]";
+        return MixedIcon;
     }
 
     private static string FormatDuration(TimeSpan? duration)

@@ -297,6 +297,8 @@ WinHarness reference: call winharness_docs before guessing paths or searching th
                 messageUsage));
     }
 
+    // Materializes the ValueTask so the streaming loop can race provider output
+    // against tool-activity notifications with Task.WhenAny.
     private static async Task<bool> MoveNextAsync(IAsyncEnumerator<ChatResponseUpdate> updates)
     {
         return await updates.MoveNextAsync().ConfigureAwait(false);

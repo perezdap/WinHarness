@@ -59,11 +59,11 @@ public sealed class ToolBatchRendererTests
 
         renderer.Settle();
 
-        StringAssert.Contains(PlainText(output), "2 tool runs · 1 ok · 1 failed");
+        StringAssert.Contains(PlainText(output), "2 tool runs · 1 ok · 0 failed · 1 running");
     }
 
     [TestMethod]
-    public void SettlementMarksUnfinishedToolAsFailed()
+    public void InterimSettlementMarksUnfinishedToolAsRunning()
     {
         using StringWriter output = new();
         ToolBatchRenderer renderer = new(verbose: false, console: CreateConsole(output));
@@ -72,8 +72,22 @@ public sealed class ToolBatchRendererTests
         renderer.Settle();
 
         string rendered = PlainText(output);
-        StringAssert.Contains(rendered, "tool run · 0 ok · 1 failed");
-        Assert.IsFalse(rendered.Contains("0 ok · 0 failed", StringComparison.Ordinal));
+        StringAssert.Contains(rendered, "tool run · 0 ok · 0 failed · 1 running");
+        Assert.IsFalse(rendered.Contains("0 ok · 1 failed", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void TerminalSettlementMarksUnfinishedToolAsInterrupted()
+    {
+        using StringWriter output = new();
+        ToolBatchRenderer renderer = new(verbose: false, console: CreateConsole(output));
+        renderer.OnEvent(new ToolActivityInfo("run_command", ToolActivityPhase.Started));
+
+        renderer.Settle(terminal: true);
+
+        string rendered = PlainText(output);
+        StringAssert.Contains(rendered, "tool run · 0 ok · 0 failed · 1 interrupted");
+        Assert.IsFalse(rendered.Contains("0 ok · 1 failed", StringComparison.Ordinal));
     }
 
     private static IAnsiConsole CreateConsole(TextWriter output)

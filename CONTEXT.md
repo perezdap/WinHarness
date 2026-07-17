@@ -49,6 +49,26 @@ _Avoid_: Engine, deployment.
 A provider-independent capability the model can invoke (built-in file/command tools or MCP stdio tools), exposed through one tool interface.
 _Avoid_: Function (reserved for the provider-transport AIFunction), plugin, command.
 
+**Tool round-trip**:
+One model-requested Tool invocation and its result within a Turn. The model may perform several tool round-trips before producing final assistant text.
+_Avoid_: Function call (provider transport detail), command (only one kind of Tool).
+
+**Tool batch**:
+A group of adjacent tool-activity events rendered together by the interactive chat UI. A batch is presentation-only; it does not change Turn artifacts or provider-visible tool round-trips.
+_Avoid_: Turn, transaction.
+
+**Tool run**:
+The terminal UI's count label for one observed Tool execution inside a compact Tool batch. Prefer tool round-trip when discussing runtime/domain behavior, and tool run only for user-facing compact-renderer copy. An unfinished tool run is reported as `running` during an interim flush and `interrupted` when the Turn has ended.
+_Avoid_: Tool call (ambiguous with provider transport and message schema).
+
+**Display label**:
+A short, safe-to-print Tool invocation label for terminal output. It may include structured file paths, but must not include arbitrary command/search text or secrets, and is not part of the JSON event stream.
+_Avoid_: Arguments, payload.
+
+**Verbose tool rendering**:
+Interactive chat mode that prints one persistent line per tool-activity event instead of compact Tool batch summaries. Enabled by `winharness chat --verbose` for debugging output flow.
+_Avoid_: Debug mode (broader meaning).
+
 **Tool filter**:
 An optional per-run gating policy over Tools by raw name: allowlist, denylist, or disable-all. Applied when building the model-facing tool list for a Turn; does not affect `tools call` or discovery.
 _Avoid_: Permissions, sandbox (different concerns).
