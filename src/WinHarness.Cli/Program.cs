@@ -495,39 +495,12 @@ app.Add("providers list", () =>
 app.Add("providers use", async (string providerId, CancellationToken cancellationToken) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
-    ProviderOptions? targetProvider = options.Providers.FirstOrDefault(provider =>
-        string.Equals(provider.Id, providerId, StringComparison.OrdinalIgnoreCase));
-    if (targetProvider is null)
-    {
-        throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
-    }
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
 
-    // Ensure the current default model is valid under the new provider.
-    // If it isn't, pick the first available model from the target provider
-    // or clear the default model so the CLI doesn't fail validation on next start.
-    string? resolvedModel = options.DefaultModel;
-    if (options.DefaultModel.Length > 0)
-    {
-        bool modelExists = targetProvider.Models.Any(model =>
-            string.Equals(model.Id, options.DefaultModel, StringComparison.OrdinalIgnoreCase));
-        if (!modelExists)
-        {
-            resolvedModel = targetProvider.Models.Count > 0
-                ? targetProvider.Models[0].Id
-                : string.Empty;
-        }
-    }
+    string resolvedModel = await configurator.SetDefaultProviderAsync(providerId, cancellationToken).ConfigureAwait(false);
 
     if (resolvedModel != options.DefaultModel)
     {
-        await ConfigFileUpdater.SetRootStringPropertiesAsync(
-            new Dictionary<string, string>
-            {
-                ["defaultProvider"] = providerId,
-                ["defaultModel"] = resolvedModel
-            },
-            cancellationToken).ConfigureAwait(false);
-
         if (resolvedModel.Length > 0)
         {
             Console.WriteLine($"Default provider set to {providerId}, model set to {resolvedModel}.");
@@ -539,7 +512,6 @@ app.Add("providers use", async (string providerId, CancellationToken cancellatio
     }
     else
     {
-        await ConfigFileUpdater.SetRootStringPropertyAsync("defaultProvider", providerId, cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"Default provider set to {providerId}.");
     }
 });
@@ -599,47 +571,17 @@ app.Add("models list", (string? providerId = null, string? filter = null) =>
 
 app.Add("models use", async (string modelId, string? providerId = null, CancellationToken cancellationToken = default) =>
 {
-    WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
 
     // When --provider-id is given, switch both provider and model atomically.
     if (providerId is not null)
     {
-        ProviderOptions? targetProvider = options.Providers.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
-        if (targetProvider is null)
-        {
-            throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
-        }
-
-        if (!targetProvider.Models.Any(model => string.Equals(model.Id, modelId, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{providerId}'.");
-        }
-
-        await ConfigFileUpdater.SetRootStringPropertiesAsync(
-            new Dictionary<string, string>
-            {
-                ["defaultProvider"] = providerId,
-                ["defaultModel"] = modelId
-            },
-            cancellationToken).ConfigureAwait(false);
+        await configurator.SetDefaultsAsync(providerId, modelId, cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"Default provider set to {providerId}, model set to {modelId}.");
         return;
     }
 
-    ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
-        string.Equals(candidate.Id, options.DefaultProvider, StringComparison.OrdinalIgnoreCase));
-    if (provider is null)
-    {
-        throw new InvalidOperationException("Configure a default provider before selecting a model.");
-    }
-
-    if (!provider.Models.Any(model => string.Equals(model.Id, modelId, StringComparison.OrdinalIgnoreCase)))
-    {
-        throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{provider.Id}'.");
-    }
-
-    await ConfigFileUpdater.SetRootStringPropertyAsync("defaultModel", modelId, cancellationToken).ConfigureAwait(false);
+    await configurator.SetDefaultModelAsync(modelId, cancellationToken).ConfigureAwait(false);
     Console.WriteLine($"Default model set to {modelId}.");
 });
 
