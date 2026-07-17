@@ -108,10 +108,7 @@ internal static class SlashCommandAdvanced
 
         ISessionManager imported = await context.SessionFactory
             .CreateAsync(session.WorkspaceRoot, context.CancellationToken).ConfigureAwait(false);
-        List<ConversationMessage> messages = entries
-            .OfType<MessageSessionEntry>()
-            .Select(static entry => entry.Message)
-            .ToList();
+        List<ConversationMessage> messages = ActiveBranch.FromEntries(entries).FlattenMessages();
         if (messages.Count > 0)
         {
             await imported.AppendMessagesAsync(messages, context.CancellationToken).ConfigureAwait(false);

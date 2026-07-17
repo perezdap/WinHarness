@@ -241,6 +241,44 @@ public sealed class ProviderConfigurator
     }
 
     /// <summary>
+    /// Sets the default provider. The default model is repaired when it does not
+    /// belong to the new provider (see <see cref="RepairDefaultModel"/>). Returns
+    /// the resulting default model id so callers can report whether it changed.
+    /// </summary>
+    public async ValueTask<string> SetDefaultProviderAsync(string providerId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
+
+        WinHarnessOptions options = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
+        ProviderOptions provider = FindProviderOrThrow(options, providerId);
+
+        options.DefaultProvider = provider.Id;
+        options.DefaultModel = RepairDefaultModel(options, provider.Id, options.DefaultModel);
+
+        await _store.SaveAsync(options, cancellationToken).ConfigureAwait(false);
+        return options.DefaultModel;
+    }
+
+    /// <summary>
+    /// Sets the default model. The model must belong to the current default
+    /// provider.
+    /// </summary>
+    public async ValueTask SetDefaultModelAsync(string modelId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+
+        WinHarnessOptions options = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
+        ProviderOptions provider = options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, options.DefaultProvider, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException("Configure a default provider before selecting a model.");
+
+        ModelOptions model = FindModelOrThrow(provider, modelId);
+        options.DefaultModel = model.Id;
+
+        await _store.SaveAsync(options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Sets the default provider and (optionally) the default model.
     /// </summary>
     public async ValueTask SetDefaultsAsync(
@@ -249,21 +287,43 @@ public sealed class ProviderConfigurator
         CancellationToken cancellationToken)
     {
         WinHarnessOptions options = await _store.LoadAsync(cancellationToken).ConfigureAwait(false);
-        ProviderOptions provider = options.Providers.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+        ProviderOptions provider = FindProviderOrThrow(options, providerId);
 
         options.DefaultProvider = provider.Id;
 
         if (modelId is not null)
         {
-            ModelOptions model = provider.Models.FirstOrDefault(candidate =>
-                string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{provider.Id}'.");
+            ModelOptions model = FindModelOrThrow(provider, modelId);
             options.DefaultModel = model.Id;
         }
 
         await _store.SaveAsync(options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Resolves the default model after a provider switch: keeps
+    /// <paramref name="currentModelId"/> when it belongs to
+    /// <paramref name="providerId"/>, otherwise falls back to the provider's
+    /// first model (or empty when it has none). An empty current model is left
+    /// alone so an unset default stays unset.
+    /// </summary>
+    public static string RepairDefaultModel(WinHarnessOptions options, string providerId, string currentModelId)
+    {
+        ProviderOptions provider = FindProviderOrThrow(options, providerId);
+
+        if (currentModelId.Length == 0)
+        {
+            return currentModelId;
+        }
+
+        bool modelExists = provider.Models.Any(model =>
+            string.Equals(model.Id, currentModelId, StringComparison.OrdinalIgnoreCase));
+        if (modelExists)
+        {
+            return currentModelId;
+        }
+
+        return provider.Models.Count > 0 ? provider.Models[0].Id : string.Empty;
     }
 
     /// <summary>
@@ -272,5 +332,19 @@ public sealed class ProviderConfigurator
     public static string BuildCredentialName(string providerId)
     {
         return "WinHarness:" + providerId;
+    }
+
+    private static ProviderOptions FindProviderOrThrow(WinHarnessOptions options, string providerId)
+    {
+        return options.Providers.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
+    }
+
+    private static ModelOptions FindModelOrThrow(ProviderOptions provider, string modelId)
+    {
+        return provider.Models.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, modelId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{provider.Id}'.");
     }
 }

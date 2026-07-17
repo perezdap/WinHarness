@@ -157,61 +157,66 @@ internal sealed class RpcHost
         ConversationState runConversation,
         CancellationToken turnToken)
     {
-        bool failed = false;
+        AgentRunRequest request = new(
+            session.ProviderId,
+            session.ModelId,
+            runConversation,
+            session.WorkspaceRoot,
+            session.ProjectContext,
+            session.ReasoningEffort,
+            session.ToolFilter,
+            session.Steering);
+
+        // Presentation adapter: wraps each event as an RpcEvent at the point
+        // the pump reads it. Artifact appends and the failure flag are the
+        // pump's.
+        ValueTask Present(AgentEvent agentEvent)
+        {
+            switch (agentEvent.Kind)
+            {
+                case AgentEventKind.AssistantDelta:
+                    EmitEvent(requestId, JsonChatEvent.AssistantDelta(agentEvent.Message));
+                    break;
+                case AgentEventKind.ToolActivity when agentEvent.ToolActivity is { } info:
+                    EmitEvent(requestId, JsonChatEvent.Tool(info));
+                    break;
+                case AgentEventKind.Failed:
+                    EmitEvent(requestId, JsonChatEvent.FromError(agentEvent.Message));
+                    break;
+                case AgentEventKind.Completed when agentEvent.TurnArtifacts is { } artifacts:
+                    ConversationMessage? assistant = artifacts.Messages
+                        .LastOrDefault(static message => message.Role == ConversationRole.Assistant);
+                    EmitEvent(requestId, JsonChatEvent.AssistantMessage(assistant?.Text ?? string.Empty));
+                    if (assistant?.Usage is { } usage)
+                    {
+                        EmitEvent(requestId, JsonChatEvent.Usage(usage.InputTokens, usage.OutputTokens));
+                    }
+
+                    break;
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        TurnOutcome outcome;
         try
         {
-            await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                               new AgentRunRequest(
-                                   session.ProviderId,
-                                   session.ModelId,
-                                   runConversation,
-                                   session.WorkspaceRoot,
-                                   session.ProjectContext,
-                                   session.ReasoningEffort,
-                                   session.ToolFilter,
-                                   session.Steering),
-                               turnToken).ConfigureAwait(false))
-            {
-                switch (agentEvent.Kind)
-                {
-                    case AgentEventKind.AssistantDelta:
-                        EmitEvent(requestId, JsonChatEvent.AssistantDelta(agentEvent.Message));
-                        break;
-                    case AgentEventKind.ToolActivity when agentEvent.ToolActivity is { } info:
-                        EmitEvent(requestId, JsonChatEvent.Tool(info));
-                        break;
-                    case AgentEventKind.Failed:
-                        failed = true;
-                        EmitEvent(requestId, JsonChatEvent.FromError(agentEvent.Message));
-                        break;
-                    case AgentEventKind.Completed when agentEvent.TurnArtifacts is { } artifacts:
-                        await session.AppendTurnAsync(artifacts, turnToken).ConfigureAwait(false);
-                        ConversationMessage? assistant = artifacts.Messages
-                            .LastOrDefault(static message => message.Role == ConversationRole.Assistant);
-                        EmitEvent(requestId, JsonChatEvent.AssistantMessage(assistant?.Text ?? string.Empty));
-                        if (assistant?.Usage is { } usage)
-                        {
-                            EmitEvent(requestId, JsonChatEvent.Usage(usage.InputTokens, usage.OutputTokens));
-                        }
-
-                        break;
-                    default:
-                        break;
-                }
-            }
+            outcome = await new TurnPump(session)
+                .RunAsync(request, runtime, Present, turnToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            failed = true;
             EmitEvent(requestId, JsonChatEvent.FromError("Turn aborted."));
+            return;
         }
         catch (Exception ex)
         {
-            failed = true;
             EmitEvent(requestId, JsonChatEvent.FromError(ex.Message));
+            return;
         }
 
-        if (!failed)
+        if (outcome.FailureMessage is null)
         {
             EmitEvent(requestId, JsonChatEvent.TurnEnd());
         }

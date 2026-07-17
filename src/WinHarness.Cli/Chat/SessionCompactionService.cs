@@ -43,8 +43,8 @@ internal sealed class SessionCompactionService
             return CompactionResult.Failed("/compact requires a persisted session.");
         }
 
-        IReadOnlyList<SessionEntry> branch = session.GetActiveBranch();
-        List<MessageSessionEntry> messageEntries = branch.OfType<MessageSessionEntry>().ToList();
+        ActiveBranch branch = ActiveBranch.Load(session);
+        List<MessageSessionEntry> messageEntries = branch.Entries.OfType<MessageSessionEntry>().ToList();
         if (messageEntries.Count < CompactionKeepMessageEntries)
         {
             return CompactionResult.Failed(
@@ -52,7 +52,7 @@ internal sealed class SessionCompactionService
         }
 
         ConversationState before = session.BuildConversation(skillSystemPrompt);
-        int charsBefore = CountConversationChars(before);
+        long charsBefore = ActiveBranch.SumMessageTextChars(before);
 
         string summary = await RunSummarizationAsync(
             session,
@@ -64,13 +64,16 @@ internal sealed class SessionCompactionService
             cancellationToken).ConfigureAwait(false);
 
         string firstKeptEntryId = messageEntries[^CompactionKeepMessageEntries].Id;
-        long? tokensBefore = FindLastUsageTokens(branch);
+        long? tokensBefore = branch
+            .LastOfType<MessageSessionEntry>(static entry =>
+                entry.Message.Role == ConversationRole.Assistant && entry.Message.Usage?.TotalTokens is not null)
+            ?.Message.Usage?.TotalTokens;
 
         await session.AppendCompactionAsync(summary, firstKeptEntryId, tokensBefore, cancellationToken)
             .ConfigureAwait(false);
 
         ConversationState after = session.BuildConversation(skillSystemPrompt);
-        int charsAfter = CountConversationChars(after);
+        long charsAfter = ActiveBranch.SumMessageTextChars(after);
 
         return CompactionResult.Completed(charsBefore, charsAfter);
     }
@@ -125,42 +128,13 @@ internal sealed class SessionCompactionService
 
         return summary;
     }
-
-    private static int CountConversationChars(ConversationState conversation)
-    {
-        int total = 0;
-        foreach (ConversationMessage message in conversation.Messages)
-        {
-            total += message.Text.Length;
-        }
-
-        return total;
-    }
-
-    private static long? FindLastUsageTokens(IReadOnlyList<SessionEntry> branch)
-    {
-        for (int index = branch.Count - 1; index >= 0; index--)
-        {
-            if (branch[index] is not MessageSessionEntry { Message.Role: ConversationRole.Assistant } messageEntry)
-            {
-                continue;
-            }
-
-            if (messageEntry.Message.Usage?.TotalTokens is long tokens)
-            {
-                return tokens;
-            }
-        }
-
-        return null;
-    }
 }
 
-internal sealed record CompactionResult(bool Succeeded, string? Message, int CharsBefore = 0, int CharsAfter = 0)
+internal sealed record CompactionResult(bool Succeeded, string? Message, long CharsBefore = 0, long CharsAfter = 0)
 {
     public static CompactionResult Failed(string message) => new(false, message);
 
-    public static CompactionResult Completed(int charsBefore, int charsAfter) =>
+    public static CompactionResult Completed(long charsBefore, long charsAfter) =>
         new(
             true,
             $"Compaction complete. Active context reduced from ~{charsBefore:N0} to ~{charsAfter:N0} characters.",

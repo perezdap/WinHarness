@@ -109,13 +109,8 @@ internal static class AutoCompactionService
     /// </summary>
     public static long EstimateConversationTokens(ChatSession session)
     {
-        long chars = 0;
-        foreach (Conversation.ConversationMessage message in session.SessionManager
-                     .BuildConversation(session.SelectedSkill?.SystemPrompt).Messages)
-        {
-            chars += message.Text.Length;
-        }
-
+        long chars = ActiveBranch.SumMessageTextChars(
+            session.SessionManager.BuildConversation(session.SelectedSkill?.SystemPrompt));
         return chars / CharsPerToken;
     }
 

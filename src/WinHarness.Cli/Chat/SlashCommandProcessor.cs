@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using Spectre.Console;
 using WinHarness.Configuration;
+using WinHarness.Infrastructure.Configuration;
 using WinHarness.Sessions;
 
 namespace WinHarness.Cli.Chat;
@@ -860,10 +861,7 @@ internal static class SlashCommandProcessor
         }
 
         session.ProviderId = provider.Id;
-        if (!provider.Models.Any(model => string.Equals(model.Id, session.ModelId, StringComparison.OrdinalIgnoreCase)))
-        {
-            session.ModelId = provider.Models.Count > 0 ? provider.Models[0].Id : string.Empty;
-        }
+        session.ModelId = ProviderConfigurator.RepairDefaultModel(options, provider.Id, session.ModelId);
 
         await AppendModelChangeIfPersistedAsync(session, context).ConfigureAwait(false);
         return SlashCommandResult.Handled([$"Provider {session.ProviderId}, model {session.ModelId}."]);

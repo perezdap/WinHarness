@@ -214,15 +214,8 @@ internal static class ChatSessionBootstrap
 
     internal static (string? ProviderId, string? ModelId) TryRestoreModelChange(ISessionManager sessionManager)
     {
-        for (int index = sessionManager.GetActiveBranch().Count - 1; index >= 0; index--)
-        {
-            if (sessionManager.GetActiveBranch()[index] is ModelChangeSessionEntry modelChange)
-            {
-                return (modelChange.ProviderId, modelChange.ModelId);
-            }
-        }
-
-        return (null, null);
+        ModelChangeSessionEntry? modelChange = ActiveBranch.Load(sessionManager).LastOfType<ModelChangeSessionEntry>();
+        return modelChange is null ? (null, null) : (modelChange.ProviderId, modelChange.ModelId);
     }
 }
 

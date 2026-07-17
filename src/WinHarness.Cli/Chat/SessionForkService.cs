@@ -31,10 +31,7 @@ internal sealed class SessionForkService
 
         ISessionManager forked = await _factory.CreateAsync(cwd, cancellationToken).ConfigureAwait(false);
 
-        List<ConversationMessage> messages = source.GetActiveBranch()
-            .OfType<MessageSessionEntry>()
-            .Select(static entry => entry.Message)
-            .ToList();
+        List<ConversationMessage> messages = ActiveBranch.Load(source).FlattenMessages();
 
         if (messages.Count > 0)
         {

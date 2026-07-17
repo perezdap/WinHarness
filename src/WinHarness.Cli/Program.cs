@@ -495,39 +495,12 @@ app.Add("providers list", () =>
 app.Add("providers use", async (string providerId, CancellationToken cancellationToken) =>
 {
     WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
-    ProviderOptions? targetProvider = options.Providers.FirstOrDefault(provider =>
-        string.Equals(provider.Id, providerId, StringComparison.OrdinalIgnoreCase));
-    if (targetProvider is null)
-    {
-        throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
-    }
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
 
-    // Ensure the current default model is valid under the new provider.
-    // If it isn't, pick the first available model from the target provider
-    // or clear the default model so the CLI doesn't fail validation on next start.
-    string? resolvedModel = options.DefaultModel;
-    if (options.DefaultModel.Length > 0)
-    {
-        bool modelExists = targetProvider.Models.Any(model =>
-            string.Equals(model.Id, options.DefaultModel, StringComparison.OrdinalIgnoreCase));
-        if (!modelExists)
-        {
-            resolvedModel = targetProvider.Models.Count > 0
-                ? targetProvider.Models[0].Id
-                : string.Empty;
-        }
-    }
+    string resolvedModel = await configurator.SetDefaultProviderAsync(providerId, cancellationToken).ConfigureAwait(false);
 
     if (resolvedModel != options.DefaultModel)
     {
-        await ConfigFileUpdater.SetRootStringPropertiesAsync(
-            new Dictionary<string, string>
-            {
-                ["defaultProvider"] = providerId,
-                ["defaultModel"] = resolvedModel
-            },
-            cancellationToken).ConfigureAwait(false);
-
         if (resolvedModel.Length > 0)
         {
             Console.WriteLine($"Default provider set to {providerId}, model set to {resolvedModel}.");
@@ -539,7 +512,6 @@ app.Add("providers use", async (string providerId, CancellationToken cancellatio
     }
     else
     {
-        await ConfigFileUpdater.SetRootStringPropertyAsync("defaultProvider", providerId, cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"Default provider set to {providerId}.");
     }
 });
@@ -599,47 +571,17 @@ app.Add("models list", (string? providerId = null, string? filter = null) =>
 
 app.Add("models use", async (string modelId, string? providerId = null, CancellationToken cancellationToken = default) =>
 {
-    WinHarnessOptions options = host.Services.GetRequiredService<WinHarnessOptions>();
+    ProviderConfigurator configurator = host.Services.GetRequiredService<ProviderConfigurator>();
 
     // When --provider-id is given, switch both provider and model atomically.
     if (providerId is not null)
     {
-        ProviderOptions? targetProvider = options.Providers.FirstOrDefault(candidate =>
-            string.Equals(candidate.Id, providerId, StringComparison.OrdinalIgnoreCase));
-        if (targetProvider is null)
-        {
-            throw new InvalidOperationException($"Provider '{providerId}' is not configured.");
-        }
-
-        if (!targetProvider.Models.Any(model => string.Equals(model.Id, modelId, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{providerId}'.");
-        }
-
-        await ConfigFileUpdater.SetRootStringPropertiesAsync(
-            new Dictionary<string, string>
-            {
-                ["defaultProvider"] = providerId,
-                ["defaultModel"] = modelId
-            },
-            cancellationToken).ConfigureAwait(false);
+        await configurator.SetDefaultsAsync(providerId, modelId, cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"Default provider set to {providerId}, model set to {modelId}.");
         return;
     }
 
-    ProviderOptions? provider = options.Providers.FirstOrDefault(candidate =>
-        string.Equals(candidate.Id, options.DefaultProvider, StringComparison.OrdinalIgnoreCase));
-    if (provider is null)
-    {
-        throw new InvalidOperationException("Configure a default provider before selecting a model.");
-    }
-
-    if (!provider.Models.Any(model => string.Equals(model.Id, modelId, StringComparison.OrdinalIgnoreCase)))
-    {
-        throw new InvalidOperationException($"Model '{modelId}' is not configured for provider '{provider.Id}'.");
-    }
-
-    await ConfigFileUpdater.SetRootStringPropertyAsync("defaultModel", modelId, cancellationToken).ConfigureAwait(false);
+    await configurator.SetDefaultModelAsync(modelId, cancellationToken).ConfigureAwait(false);
     Console.WriteLine($"Default model set to {modelId}.");
 });
 
@@ -972,24 +914,24 @@ internal static class ChatRepl
 
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
         Conversation runConversation = session.CreateRunConversation(prompt);
+        AgentRunRequest request = new(
+            session.ProviderId,
+            session.ModelId,
+            runConversation,
+            session.WorkspaceRoot,
+            session.ProjectContext,
+            session.ReasoningEffort,
+            session.ToolFilter);
 
         static void Emit(JsonChatEvent chatEvent) =>
             Console.Out.WriteLine(JsonSerializer.Serialize(chatEvent, JsonChatEventContext.Default.JsonChatEvent));
 
         Emit(JsonChatEvent.TurnStart(session.ProviderId, session.ModelId));
-        bool failed = false;
         StringBuilder assistantText = new();
 
-        await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                           new AgentRunRequest(
-                               session.ProviderId,
-                               session.ModelId,
-                               runConversation,
-                               session.WorkspaceRoot,
-                               session.ProjectContext,
-                               session.ReasoningEffort,
-                               session.ToolFilter),
-                           cancellationToken).ConfigureAwait(false))
+        // Presentation adapter: serializes each event at the point the pump
+        // reads it. Artifact appends and the failure flag are the pump's.
+        ValueTask Present(AgentEvent agentEvent)
         {
             switch (agentEvent.Kind)
             {
@@ -1003,31 +945,29 @@ internal static class ChatRepl
                     break;
 
                 case AgentEventKind.Failed:
-                    failed = true;
                     Emit(JsonChatEvent.FromError(agentEvent.Message));
                     break;
 
-                case AgentEventKind.Completed:
-                    if (agentEvent.TurnArtifacts is { } artifacts)
+                case AgentEventKind.Completed when agentEvent.TurnArtifacts is { } artifacts:
+                    ConversationMessage? assistant = artifacts.Messages
+                        .LastOrDefault(static message => message.Role == ConversationRole.Assistant);
+                    Emit(JsonChatEvent.AssistantMessage(assistant?.Text ?? assistantText.ToString()));
+                    if (assistant?.Usage is { } usage)
                     {
-                        await session.AppendTurnAsync(artifacts, cancellationToken).ConfigureAwait(false);
-                        ConversationMessage? assistant = artifacts.Messages
-                            .LastOrDefault(static message => message.Role == ConversationRole.Assistant);
-                        Emit(JsonChatEvent.AssistantMessage(assistant?.Text ?? assistantText.ToString()));
-                        if (assistant?.Usage is { } usage)
-                        {
-                            Emit(JsonChatEvent.Usage(usage.InputTokens, usage.OutputTokens));
-                        }
+                        Emit(JsonChatEvent.Usage(usage.InputTokens, usage.OutputTokens));
                     }
 
                     break;
-
-                default:
-                    break;
             }
+
+            return ValueTask.CompletedTask;
         }
 
-        if (!failed)
+        TurnOutcome outcome = await new TurnPump(session)
+            .RunAsync(request, runtime, Present, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (outcome.FailureMessage is null)
         {
             Emit(JsonChatEvent.TurnEnd());
         }
@@ -1574,10 +1514,7 @@ internal static class ChatRepl
                     await turnCts.CancelAsync().ConfigureAwait(false);
 
                     // Restore unsent steering messages as follow-up input.
-                    foreach (string queued in session.Steering.DrainAll())
-                    {
-                        followUps.Enqueue(queued);
-                    }
+                    TurnPump.PromoteUnconsumedSteering(session.Steering, followUps);
 
                     pending.Clear();
                     break;
@@ -1598,10 +1535,7 @@ internal static class ChatRepl
                     await turnCts.CancelAsync().ConfigureAwait(false);
 
                     // Restore unsent steering messages as follow-up input.
-                    foreach (string queued in session.Steering.DrainAll())
-                    {
-                        followUps.Enqueue(queued);
-                    }
+                    TurnPump.PromoteUnconsumedSteering(session.Steering, followUps);
 
                     pending.Clear();
                     break;
@@ -1643,10 +1577,7 @@ internal static class ChatRepl
         // lost — promote it to follow-up so it still runs.
         if (!aborted)
         {
-            foreach (string queued in session.Steering.DrainAll())
-            {
-                followUps.Enqueue(queued);
-            }
+            TurnPump.PromoteUnconsumedSteering(session.Steering, followUps);
         }
 
         await AwaitTurnAsync(turn, cancellationToken).ConfigureAwait(false);
@@ -2288,6 +2219,15 @@ internal static class ChatRepl
     {
         IAgentRuntime runtime = services.GetRequiredService<IAgentRuntime>();
         Conversation runConversation = session.CreateRunConversation(prompt);
+        AgentRunRequest request = new(
+            session.ProviderId,
+            session.ModelId,
+            runConversation,
+            session.WorkspaceRoot,
+            session.ProjectContext,
+            session.ReasoningEffort,
+            session.ToolFilter,
+            session.Steering);
 
         bool interactive = !Console.IsOutputRedirected;
 
@@ -2310,12 +2250,10 @@ internal static class ChatRepl
         bool rawLabelWritten = false;
         bool plainLabelWritten = false;
 
-        // Tracks whether the turn produced any assistant text or ended in a failure,
-        // so an empty provider completion (stream closed with no content) can be
-        // surfaced to the user instead of silently returning to the prompt.
+        // Tracks whether the turn produced any assistant text, so an empty
+        // provider completion (stream closed with no content and no failure)
+        // can be surfaced to the user instead of silently returning to the prompt.
         bool producedAssistantText = false;
-        bool turnFailed = false;
-        string? failureMessage = null;
 
         // Ends the current assistant text segment. In markdown mode the spinner is
         // stopped and the buffered segment is rendered as formatted markdown; in raw
@@ -2348,134 +2286,119 @@ internal static class ChatRepl
             writer = new AssistantStreamWriter();
         }
 
+        // Presentation adapter: renders each event at the point the pump reads
+        // it. Artifact appends, the failure message, and usage are the pump's.
+        async ValueTask Present(AgentEvent agentEvent)
+        {
+            switch (agentEvent.Kind)
+            {
+                case AgentEventKind.ToolActivity:
+                    if (interactive)
+                    {
+                        await FinalizeSegmentAsync().ConfigureAwait(false);
+
+                        if (agentEvent.ToolActivity is { } info)
+                        {
+                            if (verbose)
+                            {
+                                await thinking.StopAsync().ConfigureAwait(false);
+                            }
+
+                            toolBatch.OnEvent(info);
+                            if (!verbose)
+                            {
+                                thinking.SetLabel(toolBatch.LiveLabel);
+                            }
+                        }
+                        else
+                        {
+                            await thinking.StopAsync().ConfigureAwait(false);
+                            AnsiConsole.MarkupLine("[dim]" + Markup.Escape(agentEvent.Message) + "[/]");
+                            thinking.SetLabel("thinking");
+                        }
+
+                        thinking.Start();
+                    }
+
+                    break;
+
+                case AgentEventKind.Failed:
+                    if (interactive)
+                    {
+                        await FinalizeSegmentAsync().ConfigureAwait(false);
+                        await thinking.StopAsync().ConfigureAwait(false);
+                        toolBatch.Settle();
+                    }
+
+                    AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
+                    break;
+
+                case AgentEventKind.AssistantDelta:
+                    if (interactive && toolBatch.HasPendingBatch)
+                    {
+                        await thinking.StopAsync().ConfigureAwait(false);
+                        toolBatch.Settle();
+                        thinking.SetLabel("thinking");
+                        thinking.Start();
+                    }
+
+                    assistantBuffer.Append(agentEvent.Message);
+                    if (!string.IsNullOrEmpty(agentEvent.Message))
+                    {
+                        producedAssistantText = true;
+                    }
+
+                    if (interactive)
+                    {
+                        segmentActive = true;
+                        segmentBuffer.Append(agentEvent.Message);
+
+                        if (!session.RenderMarkdown)
+                        {
+                            // Raw streaming: drop the spinner on first token, then
+                            // emit tokens as they arrive.
+                            if (!rawLabelWritten)
+                            {
+                                await thinking.StopAsync().ConfigureAwait(false);
+                                rawLabelWritten = true;
+                            }
+
+                            writer.Write(agentEvent.Message);
+                        }
+                    }
+                    else if (!session.RenderMarkdown)
+                    {
+                        if (!plainLabelWritten)
+                        {
+                            AnsiConsole.Markup("[bold blue]•[/] ");
+                            plainLabelWritten = true;
+                        }
+
+                        Console.Write(agentEvent.Message);
+                    }
+
+                    break;
+            }
+        }
+
         if (interactive)
         {
             thinking.Start();
         }
 
+        TurnOutcome outcome;
         try
         {
-            await foreach (AgentEvent agentEvent in runtime.RunAsync(
-                               new AgentRunRequest(
-                                   session.ProviderId,
-                                   session.ModelId,
-                                   runConversation,
-                                   session.WorkspaceRoot,
-                                   session.ProjectContext,
-                                   session.ReasoningEffort,
-                                   session.ToolFilter,
-                                   session.Steering),
-                               cancellationToken).ConfigureAwait(false))
-            {
-                switch (agentEvent.Kind)
-                {
-                    case AgentEventKind.ToolActivity:
-                        if (interactive)
-                        {
-                            await FinalizeSegmentAsync().ConfigureAwait(false);
-
-                            if (agentEvent.ToolActivity is { } info)
-                            {
-                                if (verbose)
-                                {
-                                    await thinking.StopAsync().ConfigureAwait(false);
-                                }
-
-                                toolBatch.OnEvent(info);
-                                if (!verbose)
-                                {
-                                    thinking.SetLabel(toolBatch.LiveLabel);
-                                }
-                            }
-                            else
-                            {
-                                await thinking.StopAsync().ConfigureAwait(false);
-                                AnsiConsole.MarkupLine("[dim]" + Markup.Escape(agentEvent.Message) + "[/]");
-                                thinking.SetLabel("thinking");
-                            }
-
-                            thinking.Start();
-                        }
-
-                        break;
-
-                    case AgentEventKind.Failed:
-                        turnFailed = true;
-                        failureMessage = agentEvent.Message;
-                        if (interactive)
-                        {
-                            await FinalizeSegmentAsync().ConfigureAwait(false);
-                            await thinking.StopAsync().ConfigureAwait(false);
-                            toolBatch.Settle();
-                        }
-
-                        AnsiConsole.MarkupLine("[red]" + Markup.Escape(agentEvent.Message) + "[/]");
-                        break;
-
-                    case AgentEventKind.Completed:
-                        if (agentEvent.TurnArtifacts is not null)
-                        {
-                            await session.AppendTurnAsync(agentEvent.TurnArtifacts, cancellationToken)
-                                .ConfigureAwait(false);
-                        }
-
-                        break;
-
-                    case AgentEventKind.AssistantDelta:
-                        if (interactive && toolBatch.HasPendingBatch)
-                        {
-                            await thinking.StopAsync().ConfigureAwait(false);
-                            toolBatch.Settle();
-                            thinking.SetLabel("thinking");
-                            thinking.Start();
-                        }
-
-                        assistantBuffer.Append(agentEvent.Message);
-                        if (!string.IsNullOrEmpty(agentEvent.Message))
-                        {
-                            producedAssistantText = true;
-                        }
-
-                        if (interactive)
-                        {
-                            segmentActive = true;
-                            segmentBuffer.Append(agentEvent.Message);
-
-                            if (!session.RenderMarkdown)
-                            {
-                                // Raw streaming: drop the spinner on first token, then
-                                // emit tokens as they arrive.
-                                if (!rawLabelWritten)
-                                {
-                                    await thinking.StopAsync().ConfigureAwait(false);
-                                    rawLabelWritten = true;
-                                }
-
-                                writer.Write(agentEvent.Message);
-                            }
-                        }
-                        else if (!session.RenderMarkdown)
-                        {
-                            if (!plainLabelWritten)
-                            {
-                                AnsiConsole.Markup("[bold blue]•[/] ");
-                                plainLabelWritten = true;
-                            }
-
-                            Console.Write(agentEvent.Message);
-                        }
-
-                        break;
-
-                    default:
-                        break;
-                }
-            }
+            outcome = await new TurnPump(session)
+                .RunAsync(request, runtime, Present, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
             await thinking.StopAsync().ConfigureAwait(false);
         }
+
+        bool turnFailed = outcome.FailureMessage is not null;
 
         if (interactive)
         {
@@ -2490,7 +2413,7 @@ internal static class ChatRepl
                 AnsiConsole.MarkupLine("[yellow]The model returned an empty response. Try resending, or switch models with /model.[/]");
             }
 
-            return failureMessage;
+            return outcome.FailureMessage;
         }
 
         if (session.RenderMarkdown)
@@ -2512,6 +2435,6 @@ internal static class ChatRepl
             Console.Error.WriteLine("The model returned an empty response.");
         }
 
-        return failureMessage;
+        return outcome.FailureMessage;
     }
 }

@@ -74,7 +74,7 @@ internal static class SessionTreeChoices
 
         onBranch(selected.Id);
 
-        int messageCount = sessionManager.GetActiveBranch().Count(static entry => entry is MessageSessionEntry);
+        int messageCount = ActiveBranch.Load(sessionManager).CountMessageEntries();
         return
         [
             $"Branched to entry {selected.Id}.",
