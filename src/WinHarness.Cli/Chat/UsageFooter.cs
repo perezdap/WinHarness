@@ -44,38 +44,17 @@ internal static class UsageFooter
     /// <summary>
     /// Sums assistant-message usage over the active branch.
     /// </summary>
-    public static (long InputTokens, long OutputTokens) SumSessionUsage(ChatSession session)
-    {
-        long input = 0;
-        long output = 0;
-        foreach (SessionEntry entry in session.SessionManager.GetActiveBranch())
-        {
-            if (entry is MessageSessionEntry { Message: { Role: ConversationRole.Assistant, Usage: { } usage } })
-            {
-                input += usage.InputTokens ?? 0;
-                output += usage.OutputTokens ?? 0;
-            }
-        }
-
-        return (input, output);
-    }
+    public static (long InputTokens, long OutputTokens) SumSessionUsage(ChatSession session) =>
+        ActiveBranch.Load(session.SessionManager).SumAssistantUsage();
 
     /// <summary>
     /// Finds the most recent assistant usage on the active branch.
     /// </summary>
-    public static MessageUsage? FindLastTurnUsage(ChatSession session)
-    {
-        IReadOnlyList<SessionEntry> branch = session.SessionManager.GetActiveBranch();
-        for (int index = branch.Count - 1; index >= 0; index--)
-        {
-            if (branch[index] is MessageSessionEntry { Message: { Role: ConversationRole.Assistant, Usage: { } usage } })
-            {
-                return usage;
-            }
-        }
-
-        return null;
-    }
+    public static MessageUsage? FindLastTurnUsage(ChatSession session) =>
+        ActiveBranch.Load(session.SessionManager)
+            .LastOfType<MessageSessionEntry>(static entry =>
+                entry.Message is { Role: ConversationRole.Assistant, Usage: not null })
+            ?.Message.Usage;
 
     /// <summary>
     /// Renders token counts compactly: 950 → "950", 30_400 → "30.4k", 1_000_000 → "1.0m".

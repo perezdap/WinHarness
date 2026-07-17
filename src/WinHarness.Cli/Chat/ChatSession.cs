@@ -79,7 +79,7 @@ internal sealed class ChatSession
     public bool IsEphemeral => !SessionManager.IsPersisted;
 
     public int CountActiveBranchMessages() =>
-        SessionManager.GetActiveBranch().Count(static entry => entry is MessageSessionEntry);
+        ActiveBranch.Load(SessionManager).CountMessageEntries();
 
     public void ReplaceSessionManager(ISessionManager sessionManager)
     {
